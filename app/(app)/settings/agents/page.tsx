@@ -19,8 +19,8 @@ import { materializeApprovedPairings } from "@/lib/agents/pairing";
 import { isAgentPlatformEnabled } from "@/lib/feature-flags";
 import { CreateAgentForm } from "./create-agent-form";
 import { AgentControls } from "./agent-controls";
-import { FirstAgentEmptyState } from "@/components/first-agent-empty-state";
 import { ManageAgentsList, type ManageAgentItem } from "./manage-agents-list";
+import { FirstAgentEmptyState } from "@/components/first-agent-empty-state";
 import {
   agentsLink,
   agentsMutedClass,
@@ -112,7 +112,7 @@ export default async function AgentsSettingsPage() {
               },
             },
             claims: {
-              where: { releasedAt: null, status: "active" },
+              where: { status: "active" },
               orderBy: { claimedAt: "desc" },
               take: 1,
               select: {
@@ -202,12 +202,6 @@ export default async function AgentsSettingsPage() {
         issueNumber: activeClaim.bug.number,
         issueTitle: activeClaim.bug.title,
       };
-    } else if (lastUsedMs >= recentCutoff) {
-      gardenState = "idle";
-      gardenActivity = "Ready for dispatch";
-    } else {
-      gardenState = "idle";
-      gardenActivity = "Resting in garden";
     }
 
     return {
@@ -221,21 +215,21 @@ export default async function AgentsSettingsPage() {
       revokedAt: agent.revokedAt ? agent.revokedAt.toISOString() : null,
       personal: Boolean(agent.defaultProjectId),
       currentProjectId: agent.apiKeys.find((key) => key.project)?.project?.id ?? null,
-      recent: lastUsedMs >= recentCutoff,
+      recent: lastUsedMs > recentCutoff,
       gardenState,
       gardenActivity,
       activeTask,
-      apiKeys: agent.apiKeys.map((key) => ({
-        id: key.id,
-        prefix: key.prefix,
-        apiKey: revealAgentKey(key.sealedKey),
-        projectId: key.project?.id ?? null,
-        projectName: key.project?.name ?? null,
-        lastUsedAt: key.lastUsedAt ? key.lastUsedAt.toISOString() : null,
+      apiKeys: agent.apiKeys.map((k) => ({
+        id: k.id,
+        prefix: k.prefix,
+        apiKey: revealAgentKey(k.sealedKey),
+        projectId: k.project?.id ?? null,
+        projectName: k.project?.name ?? null,
+        lastUsedAt: k.lastUsedAt ? k.lastUsedAt.toISOString() : null,
       })),
-      areaPreferences: agent.areaPreferences.map((preference) => ({
-        projectId: preference.projectArea.projectId,
-        projectAreaId: preference.projectAreaId,
+      areaPreferences: agent.areaPreferences.map((p) => ({
+        projectId: p.projectArea.projectId,
+        projectAreaId: p.projectAreaId,
       })),
     };
   });

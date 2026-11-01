@@ -17,6 +17,8 @@ export type HeaderNavItem = {
 
 /** #444: pick another tenant, create one, or accept an invite. */
 export const SWITCH_TENANT_LINK: HeaderNavItem = { href: "/tenants", label: "Switch workspace" };
+/** #441, #445: Canonical entity alias. */
+export const SWITCH_ORGANISATION_LINK: HeaderNavItem = { href: "/tenants", label: "Switch organisation" };
 
 /**
  * The Agents dropdown in the top bar. Both destinations are real pages: the

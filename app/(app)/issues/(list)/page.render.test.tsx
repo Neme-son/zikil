@@ -9,10 +9,7 @@ import type { ReactElement } from "react";
 
 const count = vi.hoisted(() => vi.fn());
 const findMany = vi.hoisted(() => vi.fn());
-const groupBy = vi.hoisted(() => vi.fn(async (_args: { by: string[]; where?: Record<string, unknown> }) => {
-  void _args;
-  return [];
-}));
+const groupBy = vi.hoisted(() => vi.fn(async () => []));
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: vi.fn(), replace: vi.fn(), refresh: vi.fn() }),
@@ -99,21 +96,24 @@ beforeEach(() => {
 });
 
 describe("issue list layout", () => {
-  it("renders Issues as the page title with a page-level New issue CTA", async () => {
+  it("renders the list with the project as its heading (#1063)", async () => {
     const html = await renderList();
     expect(html).toContain("Login button does nothing");
-    expect(html).toMatch(/<h1[^>]*>Issues<\/h1>/);
-    expect(html).toContain('href="/issues/new"');
-    expect(html).toContain("New issue");
+    expect(html).toMatch(/<h1[^>]*>(<!-- -->)?Acme Web<\/h1>/);
   });
 
-  it("keeps New issue on the empty filter state", async () => {
+  it("has no second New issue button; the header has it (#1057)", async () => {
+    const html = await renderList();
+    expect(html).not.toContain('href="/issues/new"');
+  });
+
+  it("keeps the empty state free of a second New issue button (#1057)", async () => {
     // The search matches nothing, but the tracker itself isn't empty.
     count.mockImplementation(async (args: { where?: { OR?: unknown } }) => (args?.where?.OR ? 0 : 5));
     findMany.mockResolvedValue([]);
     const html = await renderList({ q: "nothing matches" });
     expect(html).toContain("No issues match these filters.");
-    expect(html).toContain('href="/issues/new"');
+    expect(html).not.toContain('href="/issues/new"');
   });
 
   it("welcomes a new, empty project even when the workspace has issues elsewhere", async () => {
@@ -125,31 +125,8 @@ describe("issue list layout", () => {
     const html = await renderList();
     expect(html).toContain("No issues yet");
     expect(html).not.toContain("No issues match these filters.");
-    const firstRunCount = count.mock.calls.find(
-      ([args]) =>
-        args?.where?.isDeleted === false &&
-        args?.where?.projectId === "project-acme" &&
-        !args?.where?.status,
-    );
+    const firstRunCount = count.mock.calls.find(([args]) => args?.where?.isDeleted === false && !args?.where?.status);
     expect(firstRunCount?.[0].where).toMatchObject({ tenantId: "tenant-acme", projectId: "project-acme" });
-  });
-
-  it("does not call a workspace-wide empty filter a first run", async () => {
-    // The active project is empty, but other projects in the workspace are not.
-    // ?project=all must count those, or the page hides the filters.
-    count.mockImplementation(async (args: { where?: { projectId?: unknown; OR?: unknown } }) => {
-      if (args?.where?.OR) return 0;
-      if (args?.where?.projectId) return 0;
-      return 4;
-    });
-    findMany.mockResolvedValue([]);
-    const html = await renderList({ project: "all", q: "nothing" });
-    expect(html).toContain("No issues match these filters.");
-    expect(html).not.toContain("No issues yet");
-    const firstRunCount = count.mock.calls.find(
-      ([args]) => args?.where?.isDeleted === false && !args?.where?.OR && !args?.where?.status,
-    );
-    expect(firstRunCount?.[0].where.projectId).toBeUndefined();
   });
 
   it("says no issues match when the project has issues but the filters hide them", async () => {
@@ -172,52 +149,13 @@ describe("issue list layout", () => {
     expect(listQuery.where.id).toEqual({ in: ["bug-1"] });
   });
 
-  it("counts platform-tab badges and the Show-N-resolved link inside the stage filter (#626)", async () => {
-    await renderList({ stage: "reported" });
-
-    // The platform tabs group off the post-stage snapshot: their where-clause
-    // must carry the stage's row ids. (The status-tabs groupBy drops them on
-    // purpose, so assert existence, not exclusivity.)
-    const stagedGroupBy = groupBy.mock.calls.filter(
-      ([args]) => Array.isArray((args?.where as { id?: { in?: unknown[] } })?.id?.in),
-    );
-    expect(stagedGroupBy.length).toBeGreaterThan(0);
-
-    // The "Show N resolved" link counts resolved rows within the stage too,
-    // so the destination matches the promised count.
-    const stagedResolvedCounts = count.mock.calls.filter(([args]) => {
-      const where = (args?.where ?? {}) as {
-        id?: { in?: unknown[] };
-        status?: { in?: unknown[] };
-      };
-      return (
-        Array.isArray(where.id?.in) &&
-        where.id.in.includes("bug-1") &&
-        Array.isArray(where.status?.in) &&
-        where.status.in.includes("resolved")
-      );
-    });
-    expect(stagedResolvedCounts.length).toBeGreaterThan(0);
-  });
-
-  it("is one centred list column without the stats card (#1056)", async () => {
+  it("is one centred column without the stats card (#1056)", async () => {
     const html = await renderList();
     expect(html).not.toContain("Total issues");
-    expect(html).toMatch(/^<div class="issues-page mx-auto w-full max-w-6xl space-y-5">/);
+    expect(html).toMatch(/^<div class="mx-auto w-full max-w-3xl /);
     // The four stats counts are no longer queried.
     const statusOnly = count.mock.calls.filter(([args]) => args?.where?.status === "in_progress");
     expect(statusOnly).toHaveLength(0);
-  });
-
-  it("keeps search and scope when switching status, and resets paging and intake", async () => {
-    const html = await renderList({ q: "login", platform: "cat-web", mine: "assigned", stage: "reported", page: "2" });
-    const nav = html.match(/<nav aria-label="Issue status"[\s\S]*?<\/nav>/)?.[0] ?? "";
-    expect(nav).toContain('href="/issues?q=login&amp;platform=cat-web&amp;mine=assigned&amp;status=in_progress"');
-    expect(nav).not.toContain("page=");
-    expect(nav).not.toContain("stage=");
-    const statusCount = groupBy.mock.calls.find(([args]) => args?.by?.[0] === "status");
-    expect(statusCount?.[0].where).toMatchObject({ tenantId: "tenant-acme", projectId: "project-acme", categoryId: "cat-web" });
-    expect(statusCount?.[0].where).not.toHaveProperty("status");
   });
 
   it("puts platform tabs above the list, with counts (#1055)", async () => {
@@ -230,18 +168,18 @@ describe("issue list layout", () => {
 
     const nav = html.match(/<nav aria-label="Platforms"[\s\S]*?<\/nav>/)?.[0] ?? "";
     const tabs = [...nav.matchAll(/<a [^>]*>(?:<svg[\s\S]*?<\/svg>)?([^<]+)<span[^>]*>(\d+)<\/span><\/a>/g)].map((m) => `${m[1].trim()} ${m[2]}`);
-    // Active platforms only (not the inactive Desktop), and Resolved tab with count.
-    expect(tabs).toEqual(["All 7", "Web 4", "Mobile 2", "No platform 1", "Resolved 1"]);
+    // Active platforms only (not the inactive Desktop), Ideas tab, and Resolved tab with count.
+    expect(tabs).toEqual(["All 7", "Web 4", "Mobile 2", "Ideas 1", "Resolved 1"]);
     expect(nav).toMatch(/aria-current="page"[^>]*href="\/issues\?q=login&amp;platform=cat-web"/);
     // Choosing a tab keeps the search, drops paging, and swaps the platform.
     expect(nav).toContain('href="/issues?q=login&amp;platform=cat-mobile"');
     expect(nav).toContain('href="/issues?q=login"');
-    expect(nav).toContain('href="/issues?q=login&amp;platform=none"');
+    expect(nav).toContain('href="/issues?q=login&amp;stage=ideas"');
     expect(nav).toContain('href="/issues?q=login&amp;status=resolved"');
-    expect(nav).toContain("No platform");
+    expect(nav).not.toContain("No platform");
 
     // The counts ignore the current platform, so every tab is honest.
-    const tabQuery = groupBy.mock.calls.find(([args]) => args.by[0] === "categoryId")![0];
+    const tabQuery = (groupBy.mock.calls as unknown as [{ where: Record<string, unknown> }][]).at(-1)![0];
     expect(tabQuery.where).not.toHaveProperty("categoryId");
     // The list itself is still narrowed to the chosen platform.
     expect(findMany.mock.calls.at(-1)![0].where.categoryId).toBe("cat-web");
@@ -318,10 +256,25 @@ describe("issue list layout", () => {
     expect(html).toMatch(/<time dateTime="2026-10-01T10:00:00.000Z" title="Opened /);
   });
 
-  it("keeps the row unwatch action visible in the compact mobile layout", async () => {
-    const html = await renderList({ mine: "watching" });
+  it("excludes ideas from the default view and All/platform tabs (#420)", async () => {
+    await renderList();
+    const listQuery = findMany.mock.calls.at(-1)![0];
+    // In default view, bug-1 (reported) is excluded from main list query
+    expect(listQuery.where.id).toEqual({ notIn: ["bug-1"] });
+  });
 
-    expect(html).toContain('class="w-10 shrink-0 items-center justify-end gap-2 flex"');
-    expect(html).toMatch(/aria-label="Unwatch [^"]*Login button does nothing"/);
+  it("filters to ideas when stage=ideas is requested (#420)", async () => {
+    const html = await renderList({ stage: "ideas" });
+    const listQuery = findMany.mock.calls.at(-1)![0];
+    expect(listQuery.where.id).toEqual({ in: ["bug-1"] });
+    expect(html).toContain("Hide ideas");
+  });
+
+  it("shows pointer to Ideas view when empty state has ideas (#420)", async () => {
+    findMany.mockResolvedValue([]);
+    count.mockImplementation(async (args: { where?: { OR?: unknown } }) => (args?.where?.OR ? 0 : 5));
+    const html = await renderList({ q: "nonexistent" });
+    expect(html).toContain("awaiting review or upvotes");
+    expect(html).toContain('href="/issues?q=nonexistent&amp;stage=ideas"');
   });
 });

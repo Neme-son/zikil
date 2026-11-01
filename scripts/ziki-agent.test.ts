@@ -90,7 +90,7 @@ const pairingStart = {
   user_code: "ABCD-1234",
   device_code: "dvc_secret",
   verification_uri: `${BASE}/settings/agents/pair`,
-  verification_uri_complete: `${BASE}/settings/agents/pair?user_code=ABCD-1234`,
+  verification_uri_complete: `${BASE}/settings/agents/pair?code=ABCD-1234`,
   expires_at: "2026-10-20T12:10:00.000Z",
   interval: 5,
 };

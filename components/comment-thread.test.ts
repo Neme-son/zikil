@@ -91,26 +91,6 @@ describe("CommentThread read-only mode (#122)", () => {
     expect(html).toContain(">Reply<");
   });
 
-  it.each([0, 85, 100])("renders self-reported confidence %s for agent comments and reviews", (confidence) => {
-    for (const type of ["comment", "review"] as const) {
-      const html = renderToStaticMarkup(createElement(CommentThread, {
-        bugId: "b1", issueUrl: "https://issues.example/bugs/b1", reporterId: "u2", users: [],
-        comments: [{ ...comments[0], agentId: "agent1", agent: { name: "Reviewer" }, type,
-          metadata: { confidence, confidenceReason: "Source inspected; not reproduced." } }],
-      }));
-      expect(html).toContain(`Self-reported confidence: ${confidence}%`);
-      expect(html).toContain("Source inspected; not reproduced.");
-    }
-  });
-
-  it.each([undefined, { confidence: 101 }, { confidence: "80" }, { confidence: -1 }])("hides missing or invalid legacy confidence", (metadata) => {
-    const html = renderToStaticMarkup(createElement(CommentThread, {
-      bugId: "b1", issueUrl: "https://issues.example/bugs/b1", reporterId: "u2", users: [],
-      comments: [{ ...comments[0], agentId: "agent1", metadata }],
-    }));
-    expect(html).not.toContain("Self-reported confidence:");
-  });
-
   it("renders structured comment badges like bid and delivery (#747)", () => {
     const comments: CommentNode[] = [
       {
@@ -162,41 +142,32 @@ describe("CommentThread read-only mode (#122)", () => {
   });
 });
 
-describe("CommentThread Admin label (#489)", () => {
-  const comment = (id: string, authorId: string, role: "user" | "admin"): CommentNode => ({
-    id,
-    authorId,
-    parentId: null,
-    body: `Comment ${id}`,
-    createdAt: new Date("2026-10-21T12:00:00Z"),
-    editedAt: null,
-    deletedAt: null,
-    depth: 0,
-    author: { name: `Person ${authorId}`, role },
-    parent: null,
-    children: [],
-  });
 
-  const render = (organizationRoles?: Record<string, "owner" | "admin" | "member">) =>
-    renderToStaticMarkup(
-      createElement(CommentThread, {
-        bugId: "b1",
-        issueUrl: "https://issues.example/bugs/b1",
-        reporterId: "r1",
-        comments: [comment("c1", "u1", "admin"), comment("c2", "u2", "user")],
-        users: [],
-        organizationRoles,
-      }),
-    );
+describe("CommentThread event labels (#455)", () => {
+  const base: CommentNode = {
+    id: "event", authorId: "u1", parentId: null, body: "Event details",
+    createdAt: new Date("2026-10-22T00:00:00Z"), depth: 0,
+    author: { name: "Alice", role: "user" }, parent: null, children: [],
+  };
 
-  it("labels only authors who are admins of this organization", () => {
-    const html = render({ u1: "member", u2: "admin" });
-    expect(html.match(/aria-label="Administrator"/g)).toHaveLength(1);
-    const second = html.slice(html.indexOf('id="comment-c2"'));
-    expect(second).toContain('aria-label="Administrator"');
-  });
-
-  it("does not label an account-wide admin when no organization role is known", () => {
-    expect(render()).not.toContain('aria-label="Administrator"');
+  it.each([
+    { type: "comment" as const, agentId: null, label: "User comment" },
+    { type: "comment" as const, agentId: "agent", label: "Agent comment" },
+    { type: "bid" as const, agentId: "agent", label: "Bid" },
+    { type: "review" as const, agentId: "agent", label: "Review completed" },
+    { type: "delivery" as const, agentId: "agent", label: "Solution submitted" },
+    { type: "request_to_merge" as const, agentId: "agent", label: "Request to Merge" },
+  ])("labels $label with a decorative icon and preserves details", ({ type, agentId, label }) => {
+    const html = renderToStaticMarkup(createElement(CommentThread, {
+      bugId: "b1", issueUrl: "https://ziki.dev/issues/b1", reporterId: "u1",
+      comments: [{ ...base, type, agentId, metadata: { eta: "2 hours", verdict: "accept", prUrl: "https://github.com/example/repo/pull/1" } }],
+      users: [], readOnly: true,
+    }));
+    expect(html).toContain(label);
+    expect(html).toContain('aria-hidden="true"');
+    expect(html).toContain("Event details");
+    if (type === "bid") expect(html).toContain("2 hours");
+    if (type === "review") expect(html).toContain("accept");
+    if (type === "delivery") expect(html).toContain('href="https://github.com/example/repo/pull/1"');
   });
 });

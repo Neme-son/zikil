@@ -1,88 +1,38 @@
-import "./settings-design.css";
 import { ThemeSettings } from "@/components/theme-settings";
 import { parseTheme } from "@/lib/theme";
 import Link from "next/link";
 import { requireUser } from "@/lib/auth-helpers";
 import { prisma } from "@/lib/prisma";
+import { currentTenantIdFor } from "@/lib/tenant-context";
 import { NotificationSettings } from "@/components/notification-settings";
+import { DisplayNameForm } from "@/components/display-name-form";
 import { WalletAddressForm } from "@/components/wallet-address-form";
 import { KeyboardShortcutSettings } from "@/components/keyboard-shortcut-settings";
 import { isAgentPlatformEnabled } from "@/lib/feature-flags";
+import { ChangePasswordForm } from "@/components/change-password-form";
 import { AccountDataSettings } from "@/components/account-data-settings";
-import { DisplayNameForm } from "@/components/display-name-form";
 
 /* Distinct browser-tab title; the root layout appends "· Ziki". */
 export const metadata = { title: "Settings" };
 
-const SECTIONS = [
-  {
-    id: "account",
-    label: "Account",
-    hint: "Profile, wallet, security",
-    icon: "M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2M12 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8z",
-  },
-  {
-    id: "prefs",
-    label: "Preferences",
-    hint: "Theme, emails, shortcuts",
-    icon: "M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6",
-  },
-  {
-    id: "agents",
-    label: "Agents & API",
-    hint: "Agents, team, integrations",
-    icon: "M4 8h16v12H4zM12 4v4M9 14h.01M15 14h.01",
-  },
-  {
-    id: "data",
-    label: "Data & privacy",
-    hint: "Export or delete account",
-    icon: "M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z",
-  },
-] as const;
+type SearchParams = Promise<{
+  tab?: string | string[];
+}>;
 
-type SectionId = (typeof SECTIONS)[number]["id"];
+const one = (v: string | string[] | undefined) => (Array.isArray(v) ? v[0] : v);
 
-function parseSection(value: string | string[] | undefined): SectionId {
-  const raw = Array.isArray(value) ? value[0] : value;
-  if (raw === "prefs" || raw === "agents" || raw === "data" || raw === "account") return raw;
-  return "account";
-}
-
-const card =
-  "rounded-[20px] border border-zk-border bg-zk-surface p-6 flex flex-col gap-4";
-
-function LinkRow({ href, label, external }: { href: string; label: string; external?: boolean }) {
-  const className =
-    "mt-1 flex min-h-10 items-center justify-between rounded-[10px] bg-zk-chip px-2.5 text-sm font-semibold text-zk-text transition hover:bg-zk-tint";
-  if (external) {
-    return (
-      <a href={href} target="_blank" rel="noopener noreferrer" className={className}>
-        {label}
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" className="text-zk-muted">
-          <path d="M7 17 17 7M8 7h9v9" />
-        </svg>
-      </a>
-    );
-  }
-  return (
-    <Link href={href} className={className}>
-      {label}
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" className="text-zk-muted">
-        <path d="M5 12h14M12 5l7 7-7 7" />
-      </svg>
-    </Link>
-  );
-}
-
-/** The settings index: themed appearance, sign-in security, and links into the nested settings surfaces. */
 export default async function SettingsPage(props: {
-  searchParams?: Promise<{ section?: string | string[] }>;
-}) {
+  searchParams?: SearchParams;
+}): Promise<React.JSX.Element>;
+export default async function SettingsPage(): Promise<React.JSX.Element>;
+export default async function SettingsPage({
+  searchParams,
+}: {
+  searchParams?: SearchParams;
+} = {}): Promise<React.JSX.Element> {
   const user = await requireUser();
-  const params = props.searchParams ? await props.searchParams : {};
-  const section = parseSection(params.section);
-  const agentsEnabled = isAgentPlatformEnabled();
+  const params = searchParams ? await searchParams : {};
+  const activeTab = (one(params.tab) ?? "all").toLowerCase();
 
   let settings: {
     name?: string | null;
@@ -94,6 +44,7 @@ export default async function SettingsPage(props: {
     notifyAssignments?: boolean;
     notifyStatusChanges?: boolean;
     keyboardShortcuts?: boolean;
+    passwordHash?: string | null;
   } | null = null;
 
   try {
@@ -109,6 +60,7 @@ export default async function SettingsPage(props: {
         notifyAssignments: true,
         notifyStatusChanges: true,
         keyboardShortcuts: true,
+        passwordHash: true,
       },
     });
   } catch (error) {
@@ -130,216 +82,368 @@ export default async function SettingsPage(props: {
     }
   }
 
-  const displayName = settings?.name ?? user.name ?? "";
+  let tenant: { id: string; name: string; slug: string; description?: string | null } | null = null;
+  let tenantId: string | null = null;
+  try {
+    if (prisma?.membership && prisma?.tenant) {
+      tenantId = await currentTenantIdFor(user.id);
+      if (tenantId) {
+        tenant = await prisma.tenant.findUnique({
+          where: { id: tenantId },
+          select: { id: true, name: true, slug: true, description: true },
+        });
+      }
+    }
+  } catch (tenantError) {
+    console.error("[settings] tenant query failed:", tenantError);
+  }
+
+  const showPersonal = activeTab === "all" || activeTab === "personal" || activeTab === "account";
+  const showOrg = activeTab === "all" || activeTab === "organization" || activeTab === "org";
+
+  const scopeTitle =
+    activeTab === "personal" || activeTab === "account"
+      ? "Personal Account Settings"
+      : activeTab === "organization" || activeTab === "org"
+        ? `Organization Settings · ${tenant?.name ?? "Workspace"}`
+        : "Settings";
 
   return (
-    <div className="settings-page settings-design mx-auto flex w-full max-w-5xl flex-col gap-6 pb-10">
-      <div className="flex flex-col gap-2.5">
-        <Link
-          href="/issues"
-          className="inline-flex min-h-8 items-center gap-1.5 self-start text-sm font-semibold text-zk-accent hover:underline"
-        >
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-            <path d="M19 12H5M12 19l-7-7 7-7" />
-          </svg>
-          Back to issues
-        </Link>
-        <h1 className="m-0 text-[28px] font-extrabold tracking-[-0.02em] text-zk-text">Settings</h1>
-        <p className="m-0 text-sm text-zk-muted">Manage your profile, preferences, agents and data.</p>
-      </div>
-
-      <div className="settings-layout">
-        <nav
-          aria-label="Settings sections"
-          className="settings-navigation"
-        >
-          {SECTIONS.map((item) => {
-            const on = section === item.id;
-            return (
-              <Link
-                key={item.id}
-                href={`/settings?section=${item.id}`}
-                aria-current={on ? "page" : undefined}
-                className={`flex w-full items-center gap-3 rounded-[14px] px-3 py-2.5 text-left text-zk-text transition ${
-                  on ? "bg-zk-tint" : "bg-transparent hover:bg-zk-chip"
-                }`}
-              >
-                <span
-                  className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl ${
-                    on ? "bg-electric-blue-strong text-white" : "bg-zk-chip text-zk-text2"
-                  }`}
-                >
-                  <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                    <path d={item.icon} />
-                  </svg>
-                </span>
-                <span className="flex min-w-0 flex-col gap-0.5">
-                  <span className="text-sm font-bold">{item.label}</span>
-                  <span className="text-xs font-medium text-zk-muted">{item.hint}</span>
-                </span>
-              </Link>
-            );
-          })}
+    <div className="mx-auto max-w-3xl space-y-6">
+      {/* Scope Breadcrumbs and Header */}
+      <div className="space-y-2">
+        <nav aria-label="Breadcrumb" className="flex items-center gap-1.5 text-sm text-slate-500">
+          <Link href="/issues" className="text-teal-700 hover:underline">
+            ← Back to issues
+          </Link>
+          <span className="text-slate-300">/</span>
+          <Link href="/settings" className="text-slate-600 hover:underline">
+            Settings
+          </Link>
+          {activeTab === "personal" || activeTab === "account" ? (
+            <>
+              <span className="text-slate-300">/</span>
+              <span className="font-medium text-slate-900">Personal Account</span>
+            </>
+          ) : activeTab === "organization" || activeTab === "org" ? (
+            <>
+              <span className="text-slate-300">/</span>
+              <span className="font-medium text-slate-900">Organization ({tenant?.name ?? "Workspace"})</span>
+            </>
+          ) : null}
         </nav>
 
-        <div className="settings-content flex min-w-0 flex-col gap-5">
-          {section === "account" ? (
-            <div className="flex flex-col gap-4">
-              <section className={card}>
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <div className="flex flex-col gap-1">
-                    <h2 className="m-0 text-lg font-bold text-zk-text">Profile</h2>
-                    <span className="text-[13px] text-zk-muted">How you appear to everyone in the workspace.</span>
-                  </div>
-                  <Link
-                    href={`/users/${user.id}`}
-                    className="inline-flex h-[38px] items-center gap-1.5 rounded-full border border-zk-border px-3.5 text-[13px] font-bold text-zk-text hover:bg-zk-chip"
-                  >
-                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                      <path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z" />
-                      <circle cx="12" cy="12" r="3" />
-                    </svg>
-                    See how others see you
-                  </Link>
-                </div>
-                <DisplayNameForm initialName={displayName} />
-                <p className="text-sm">
-                  <Link href="/settings/profile" className="font-semibold text-zk-accent hover:underline">
-                    Open profile page
-                  </Link>
-                </p>
-              </section>
-
-              <section className={card}>
-                <WalletAddressForm initialAddress={settings?.walletAddress ?? ""} />
-              </section>
-
-              <section className={`${card} flex-row flex-wrap items-center justify-between gap-4`}>
-                <div className="flex items-center gap-3.5">
-                  <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-[14px] bg-zk-tint text-zk-accent">
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                      <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
-                    </svg>
-                  </span>
-                  <div className="flex flex-col gap-1">
-                    <h2 className="m-0 text-lg font-bold text-zk-text">Two-factor sign-in</h2>
-                    <span className="text-[13px] text-zk-muted">
-                      Protect your account with a second step at sign-in.
-                    </span>
-                  </div>
-                </div>
-                <Link
-                  href="/settings/security"
-                  className="inline-flex h-[42px] items-center rounded-full bg-electric-blue-strong px-[18px] text-sm font-bold text-white hover:brightness-105"
-                >
-                  Set up
-                </Link>
-              </section>
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+          <div>
+            <h1 className="text-2xl font-semibold text-slate-900">{scopeTitle}</h1>
+            <p className="mt-0.5 text-sm text-slate-600">
+              Manage personal identity and preferences, or configure shared organization assets and team agents.
+            </p>
+          </div>
+          {tenant && (
+            <div className="flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs text-slate-600 shadow-sm">
+              <span className="h-2 w-2 rounded-full bg-teal-500" />
+              <span>Active Org:</span>
+              <span className="font-semibold text-slate-900">{tenant.name}</span>
             </div>
-          ) : null}
-
-          {section === "prefs" ? (
-            <div className="flex flex-col gap-4">
-              <section className={card}>
-                <div className="flex flex-col gap-1">
-                  <h2 className="m-0 text-lg font-bold text-zk-text">Appearance</h2>
-                  <span className="text-[13px] text-zk-muted">
-                    Saved to your account, so it follows you to every device.
-                  </span>
-                </div>
-                <ThemeSettings initialTheme={parseTheme(settings?.theme)} />
-              </section>
-
-              <section className={card}>
-                <div className="flex flex-col gap-1">
-                  <h2 className="m-0 text-lg font-bold text-zk-text">Email notifications</h2>
-                  <span className="text-[13px] text-zk-muted">
-                    Sent to <strong className="font-bold text-zk-text">{settings?.email ?? user.email}</strong>.
-                    You&apos;re never emailed about your own changes.
-                  </span>
-                </div>
-                <NotificationSettings
-                  initialEnabled={settings?.emailNotifications ?? true}
-                  initialPrefs={{
-                    notifyMentions: settings?.notifyMentions ?? true,
-                    notifyAssignments: settings?.notifyAssignments ?? true,
-                    notifyStatusChanges: settings?.notifyStatusChanges ?? true,
-                  }}
-                />
-              </section>
-
-              <section className={card}>
-                <KeyboardShortcutSettings initialEnabled={settings?.keyboardShortcuts ?? true} />
-              </section>
-            </div>
-          ) : null}
-
-          {section === "agents" ? (
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-[repeat(auto-fit,minmax(280px,1fr))]">
-              {agentsEnabled ? (
-                <section className={`${card} gap-3.5`}>
-                  <div className="flex items-center gap-3">
-                    <span className="flex h-[42px] w-[42px] shrink-0 items-center justify-center rounded-[14px] bg-zk-tint text-zk-accent">
-                      <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                        <path d="M4 8h16v12H4zM12 4v4M9 14h.01M15 14h.01" />
-                      </svg>
-                    </span>
-                    <h2 className="m-0 text-[17px] font-bold text-zk-text">Agents</h2>
-                  </div>
-                  <p className="m-0 text-[13px] leading-relaxed text-zk-muted">
-                    Register the AI agents that work issues for you, and see your team&apos;s.
-                  </p>
-                  <div className="flex flex-col gap-0.5">
-                    <LinkRow href="/settings/agents/connect" label="Connect your agent" />
-                    <LinkRow href="/settings/agents/pair" label="Approve a pairing code" />
-                    <LinkRow href="/settings/agents" label="Manage agents" />
-                    <LinkRow href="/settings/agents" label="Create agent" />
-                    <LinkRow href="/settings/webhooks" label="Webhooks" />
-                    <LinkRow href="/settings/audit" label="Agent audit log" />
-                  </div>
-                </section>
-              ) : null}
-
-              <section className={`${card} gap-3.5`}>
-                <div className="flex items-center gap-3">
-                  <span className="flex h-[42px] w-[42px] shrink-0 items-center justify-center rounded-[14px] bg-zk-tint text-zk-accent">
-                    <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                      <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM22 21v-2a4 4 0 0 0-3-3.9M16 3.1a4 4 0 0 1 0 7.8" />
-                    </svg>
-                  </span>
-                  <h2 className="m-0 text-[17px] font-bold text-zk-text">Team</h2>
-                </div>
-                <p className="m-0 text-[13px] leading-relaxed text-zk-muted">
-                  Workspace members and their active agents.
-                </p>
-                <div className="flex flex-col gap-0.5">
-                  <LinkRow href="/settings/team" label="View team" />
-                </div>
-              </section>
-
-              <section className={`${card} gap-3.5`}>
-                <div className="flex items-center gap-3">
-                  <span className="flex h-[42px] w-[42px] shrink-0 items-center justify-center rounded-[14px] bg-zk-tint text-zk-accent">
-                    <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                      <path d="m16 18 6-6-6-6M8 6l-6 6 6 6" />
-                    </svg>
-                  </span>
-                  <h2 className="m-0 text-[17px] font-bold text-zk-text">API &amp; integrations</h2>
-                </div>
-                <p className="m-0 text-[13px] leading-relaxed text-zk-muted">
-                  Developer documentation, cURL references and machine-readable specs for AI agents and automated tools.
-                </p>
-                <div className="flex flex-col gap-0.5">
-                  <LinkRow href="/docs" label="API documentation" />
-                  <LinkRow href="/llms.txt" label="AI specs (/llms.txt)" external />
-                </div>
-              </section>
-            </div>
-          ) : null}
-
-          {section === "data" ? <AccountDataSettings /> : null}
+          )}
         </div>
       </div>
+
+      {/* Scope Navigation Tabs */}
+      <nav aria-label="Settings section tabs" className="flex items-center gap-2 border-b border-slate-200 pb-3">
+        <Link
+          href="/settings"
+          className={`rounded-lg px-3 py-1.5 text-sm font-medium transition ${
+            activeTab === "all"
+              ? "bg-slate-900 text-white"
+              : "text-slate-600 hover:bg-slate-100 hover:text-slate-900"
+          }`}
+        >
+          All Settings
+        </Link>
+        <Link
+          href="/settings?tab=personal"
+          className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium transition ${
+            activeTab === "personal" || activeTab === "account"
+              ? "bg-teal-700 text-white"
+              : "text-slate-600 hover:bg-slate-100 hover:text-slate-900"
+          }`}
+        >
+          <span>👤</span>
+          <span>Personal Account</span>
+        </Link>
+        <Link
+          href="/settings?tab=organization"
+          className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium transition ${
+            activeTab === "organization" || activeTab === "org"
+              ? "bg-purple-700 text-white"
+              : "text-slate-600 hover:bg-slate-100 hover:text-slate-900"
+          }`}
+        >
+          <span>🏢</span>
+          <span>Organization &amp; Workspace</span>
+        </Link>
+      </nav>
+
+      {/* 1. PERSONAL / ACCOUNT SETTINGS */}
+      {showPersonal && (
+        <section className="space-y-4" aria-labelledby="personal-settings-heading">
+          <div className="rounded-xl border border-teal-200 bg-teal-50/60 p-4">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <span className="text-base">👤</span>
+                <h2 id="personal-settings-heading" className="text-sm font-bold uppercase tracking-wide text-teal-900">
+                  Personal Account Settings
+                </h2>
+              </div>
+              <span className="rounded-full bg-teal-100 px-2 py-0.5 text-xs font-semibold text-teal-800">
+                Personal Scope
+              </span>
+            </div>
+            <p className="mt-1 text-xs text-teal-800">
+              Changes in this section apply exclusively to your individual profile, private authentication, and personal notification preferences.
+            </p>
+          </div>
+
+          <section className="rounded-xl border border-slate-200 bg-white p-4 sm:p-6">
+            <div className="flex items-center justify-between">
+              <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-500">
+                Profile
+              </h3>
+              <span className="text-[11px] font-medium text-slate-600">Personal</span>
+            </div>
+            <DisplayNameForm initialName={settings?.name ?? user.name ?? ""} />
+            <p className="mt-3 text-sm">
+              <Link href={`/users/${user.id}`} className="text-teal-700 hover:underline">
+                See how your profile looks to others
+              </Link>
+            </p>
+          </section>
+
+          {settings?.passwordHash ? (
+            <section className="rounded-xl border border-slate-200 bg-white p-4 sm:p-6">
+              <div className="flex items-center justify-between">
+                <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-500">
+                  Password
+                </h3>
+                <span className="text-[11px] font-medium text-slate-600">Personal</span>
+              </div>
+              <p className="mt-2 text-sm text-slate-600">Changing your password signs out all active sessions.</p>
+              <ChangePasswordForm />
+            </section>
+          ) : null}
+
+          <section className="rounded-xl border border-slate-200 bg-white p-4 sm:p-6">
+            <div className="flex items-center justify-between">
+              <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-500">
+                Wallet
+              </h3>
+              <span className="text-[11px] font-medium text-slate-600">Personal</span>
+            </div>
+            <WalletAddressForm initialAddress={settings?.walletAddress ?? ""} />
+          </section>
+
+          <section className="rounded-xl border border-slate-200 bg-white p-4 sm:p-6">
+            <div className="flex items-center justify-between">
+              <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-500">
+                Security &amp; 2FA
+              </h3>
+              <span className="text-[11px] font-medium text-slate-600">Personal</span>
+            </div>
+            <p className="mt-2 text-sm text-slate-600">
+              Protect your personal account with a second step at sign-in.
+            </p>
+            <p className="mt-3 text-sm">
+              <Link href="/settings/security" className="font-medium text-teal-700 hover:underline">
+                Two-factor sign-in →
+              </Link>
+            </p>
+          </section>
+
+          <section className="rounded-xl border border-slate-200 bg-white p-4 sm:p-6">
+            <div className="flex items-center justify-between">
+              <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-500">
+                Appearance
+              </h3>
+              <span className="text-[11px] font-medium text-slate-600">Personal</span>
+            </div>
+            <ThemeSettings initialTheme={parseTheme(settings?.theme)} />
+          </section>
+
+          <section className="rounded-xl border border-slate-200 bg-white p-4 sm:p-6">
+            <div className="flex items-center justify-between">
+              <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-500">
+                Email notifications
+              </h3>
+              <span className="text-[11px] font-medium text-slate-600">Personal</span>
+            </div>
+            <p className="mt-2 text-sm text-slate-600">
+              Sent to <span className="font-medium text-slate-800">{settings?.email}</span>.
+              You&apos;re never emailed about your own changes.
+            </p>
+            <NotificationSettings
+              initialEnabled={settings?.emailNotifications ?? true}
+              initialPrefs={{
+                notifyMentions: settings?.notifyMentions ?? true,
+                notifyAssignments: settings?.notifyAssignments ?? true,
+                notifyStatusChanges: settings?.notifyStatusChanges ?? true,
+              }}
+            />
+          </section>
+
+          <section className="rounded-xl border border-slate-200 bg-white p-4 sm:p-6">
+            <div className="flex items-center justify-between">
+              <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-500">
+                Keyboard shortcuts
+              </h3>
+              <span className="text-[11px] font-medium text-slate-600">Personal</span>
+            </div>
+            <KeyboardShortcutSettings initialEnabled={settings?.keyboardShortcuts ?? true} />
+          </section>
+
+          <section className="rounded-xl border border-slate-200 bg-white p-4 sm:p-6">
+            <div className="flex items-center justify-between">
+              <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-500">
+                Account data &amp; deletion
+              </h3>
+              <span className="text-[11px] font-medium text-slate-600">Personal</span>
+            </div>
+            <AccountDataSettings />
+          </section>
+        </section>
+      )}
+
+      {/* 2. ORGANISATION / WORKSPACE SETTINGS */}
+      {showOrg && (
+        <section className="space-y-4 pt-2" aria-labelledby="org-settings-heading">
+          <div className="rounded-xl border border-purple-200 bg-purple-50/60 p-4">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <span className="text-base">🏢</span>
+                <h2 id="org-settings-heading" className="text-sm font-bold uppercase tracking-wide text-purple-900">
+                  Organisation &amp; Workspace Settings
+                </h2>
+              </div>
+              <span className="rounded-full bg-purple-100 px-2 py-0.5 text-xs font-semibold text-purple-800">
+                Organization Scope: {tenant?.name ?? "Shared Workspace"}
+              </span>
+            </div>
+            <p className="mt-1 text-xs text-purple-800">
+              Settings here impact all members, automated agents, platforms, and integrations in this organization.
+            </p>
+          </div>
+
+          {/* Active Organization Card */}
+          <section className="rounded-xl border border-slate-200 bg-white p-4 sm:p-6">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-500">
+                  Active Organization
+                </h3>
+                <p className="mt-1 text-lg font-bold text-slate-900">{tenant?.name ?? "Ziki Workspace"}</p>
+                {tenant?.slug && (
+                  <p className="text-xs text-slate-500">Slug: @{tenant.slug}</p>
+                )}
+                {tenant?.description && (
+                  <p className="mt-2 text-sm text-slate-600">{tenant.description}</p>
+                )}
+              </div>
+              <Link
+                href="/tenants"
+                className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
+              >
+                Switch Organization ↗
+              </Link>
+            </div>
+          </section>
+
+          {isAgentPlatformEnabled() ? (
+            <section className="rounded-xl border border-slate-200 bg-white p-4 sm:p-6">
+              <div className="flex items-center justify-between">
+                <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-500">
+                  Workspace Agents
+                </h3>
+                <span className="rounded bg-purple-100 px-2 py-0.5 text-[10px] font-semibold text-purple-700">
+                  Org Scope
+                </span>
+              </div>
+              <p className="mt-2 text-sm text-slate-600">
+                Register AI agents that work issues for this organization, pair autonomous workers, and inspect team audit logs.
+              </p>
+              <div className="mt-3 flex flex-wrap gap-4 text-sm">
+                <Link href="/settings/agents/connect" className="font-medium text-teal-700 hover:underline">
+                  Connect your agent
+                </Link>
+                <Link href="/settings/agents" className="font-medium text-teal-700 hover:underline">
+                  Manage agents
+                </Link>
+                <Link href="/settings/webhooks" className="font-medium text-teal-700 hover:underline">
+                  Webhooks
+                </Link>
+                <Link href="/settings/agents/pair" className="font-medium text-teal-700 hover:underline">
+                  Pair an agent
+                </Link>
+                <Link href="/settings/audit" className="font-medium text-teal-700 hover:underline">
+                  Agent audit log
+                </Link>
+                <Link href="/docs" className="font-medium text-teal-700 hover:underline">
+                  API Docs &amp; /llms.txt
+                </Link>
+              </div>
+            </section>
+          ) : null}
+
+          <section className="rounded-xl border border-slate-200 bg-white p-4 sm:p-6">
+            <div className="flex items-center justify-between">
+              <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-500">
+                Members &amp; Administration
+              </h3>
+              <span className="rounded bg-purple-100 px-2 py-0.5 text-[10px] font-semibold text-purple-700">
+                Org Scope
+              </span>
+            </div>
+            <p className="mt-2 text-sm text-slate-600">
+              Manage member roles, invites, and administrative privileges for this organization.
+            </p>
+            <div className="mt-3 flex flex-wrap gap-4 text-sm">
+              <Link href="/team" className="font-medium text-teal-700 hover:underline">
+                Team Directory
+              </Link>
+              <Link href="/admin" className="font-medium text-teal-700 hover:underline">
+                Admin Console
+              </Link>
+            </div>
+          </section>
+
+          <section className="rounded-xl border border-slate-200 bg-white p-4 sm:p-6">
+            <div className="flex items-center justify-between">
+              <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-500">
+                API &amp; Integrations
+              </h3>
+              <span className="rounded bg-purple-100 px-2 py-0.5 text-[10px] font-semibold text-purple-700">
+                Org Scope
+              </span>
+            </div>
+            <p className="mt-2 text-sm text-slate-600">
+              Developer documentation, cURL references, and machine-readable specifications for AI agents and automated tools.
+            </p>
+            <div className="mt-3 flex flex-wrap gap-4 text-sm">
+              <Link href="/docs" className="font-medium text-teal-700 hover:underline">
+                API Documentation
+              </Link>
+              <a
+                href="/llms.txt"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="font-medium text-teal-700 hover:underline"
+              >
+                AI Specs (/llms.txt) ↗
+              </a>
+            </div>
+          </section>
+        </section>
+      )}
     </div>
   );
 }

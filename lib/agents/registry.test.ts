@@ -169,7 +169,7 @@ describe("setAgentBurst (#440)", () => {
   });
 
   it("stores an optional expiry and audits it (#596)", async () => {
-    const until = new Date("2026-10-26T18:00:00.000Z");
+    const until = new Date(Date.now() + 24 * 60 * 60 * 1000);
     db.agent.findUnique.mockResolvedValue(agentRow);
     db.membership.findUnique.mockResolvedValue({ role: "admin" });
     db.agent.findUniqueOrThrow.mockResolvedValue({ burst: false, burstUntil: null });
@@ -185,7 +185,7 @@ describe("setAgentBurst (#440)", () => {
   });
 
   it("clears the expiry when high-volume is turned off", async () => {
-    const until = new Date("2026-10-26T18:00:00.000Z");
+    const until = new Date(Date.now() + 24 * 60 * 60 * 1000);
     db.agent.findUnique.mockResolvedValue(agentRow);
     db.membership.findUnique.mockResolvedValue({ role: "admin" });
     db.agent.findUniqueOrThrow.mockResolvedValue({ burst: true, burstUntil: until });
@@ -200,7 +200,7 @@ describe("setAgentBurst (#440)", () => {
   });
 
   it("does not audit an unchanged grant", async () => {
-    const until = new Date("2026-10-26T18:00:00.000Z");
+    const until = new Date(Date.now() + 24 * 60 * 60 * 1000);
     db.agent.findUnique.mockResolvedValue(agentRow);
     db.membership.findUnique.mockResolvedValue({ role: "admin" });
     db.agent.findUniqueOrThrow.mockResolvedValue({ burst: true, burstUntil: until });

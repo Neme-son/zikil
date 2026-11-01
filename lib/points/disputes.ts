@@ -1,13 +1,13 @@
 import type { Prisma, PrismaClient, DisputeStatus, Severity } from "@prisma/client";
 import { z } from "zod";
 import { award, type PointAward } from "./award";
-import { getProjectRewardConfig } from "./platform-rewards";
+import { pointSourceKey, type PointRole } from "./rules";
 import {
   calculateReporterPoints,
   calculateSolverPoints,
+  getProjectRewardConfig,
   type ProjectRewardConfig,
 } from "./project-rewards";
-import { pointSourceKey, pointsNumber, type PointAmount, type PointRole } from "./rules";
 
 /**
  * Dispute logic (#436). A member says an award is missing or wrong; a
@@ -17,6 +17,9 @@ import { pointSourceKey, pointsNumber, type PointAmount, type PointRole } from "
  * A grant reuses the canonical `pointSourceKey`, so granting twice adds one
  * row. A correction never edits a row: it marks `correctedAt` and writes a
  * new entry with negative points.
+ *
+ * Granted awards follow the project's reward configuration, like live awards
+ * do (#600); a project with the defaults configured pays the same as before.
  */
 
 type Db = PrismaClient | Prisma.TransactionClient;
@@ -63,6 +66,7 @@ export type DisputableBug = {
   reporterId: string;
   assigneeId: string | null;
   severity: Severity;
+  /** Optional; present only to resolve the project's reward configuration (#600). */
   projectId?: string | null;
 };
 
@@ -156,6 +160,31 @@ export async function openDispute(
 }
 
 /**
+ * The reward configuration for `bug`'s project, or null when it can't be
+ * read (missing projectId, or a test fake without the `project` model —
+ * those callers keep historical default amounts).
+ */
+export async function rewardConfigForBug(
+  db: Db,
+  bug: { id: string; projectId?: string | null },
+): Promise<ProjectRewardConfig | null> {
+  let projectId = bug.projectId ?? null;
+  const shape = db as {
+    bug?: { findUnique?: unknown };
+    project?: { findUnique?: unknown };
+  };
+  if (!projectId && typeof shape.bug?.findUnique === "function") {
+    const row = await (db as PrismaClient).bug.findUnique({
+      where: { id: bug.id },
+      select: { projectId: true },
+    });
+    projectId = row?.projectId ?? null;
+  }
+  if (!projectId || typeof shape.project?.findUnique !== "function") return null;
+  return getProjectRewardConfig(db, projectId);
+}
+
+/**
  * Grants the missing solver or reporter award once. The canonical sourceKey
  * means a second grant adds no rows, so points never double (#436).
  */
@@ -163,7 +192,9 @@ export async function grantMissingAward(
   db: Db,
   args: {
     dispute: DisputeRow;
-    bug: Pick<DisputableBug, "id" | "tenantId" | "reporterId" | "assigneeId" | "severity" | "projectId">;
+    bug: Pick<DisputableBug, "id" | "tenantId" | "reporterId" | "assigneeId" | "severity"> & {
+      projectId?: string | null;
+    };
     role: DisputeRole;
     resolvedById: string;
   },
@@ -174,7 +205,7 @@ export async function grantMissingAward(
     return { ok: false, error: NOT_IN_WORKSPACE };
   }
 
-  const rewardConfig = await getProjectRewardConfig(db, bug.projectId);
+  const rewardConfig = await rewardConfigForBug(db, bug);
   const entry = missingAwardEntry(bug, role, rewardConfig);
   if (!entry) return { ok: false, error: NOBODY_TO_AWARD };
 
@@ -202,7 +233,7 @@ export async function correctEntry(
       userId: string;
       bugId: string | null;
       role: PointRole;
-      points: PointAmount;
+      points: number;
       correctedAt?: Date | null;
     };
     resolvedById: string;
@@ -240,7 +271,7 @@ export async function correctEntry(
     userId: entry.userId,
     bugId: entry.bugId,
     role: entry.role,
-    points: -pointsNumber(entry.points),
+    points: -entry.points,
     sourceKey: correctionSourceKey(entry.id),
   });
   await db.pointDispute.update({
@@ -327,7 +358,7 @@ function toView(row: DisputeRowWithRelations): DisputeView {
     openerId: row.user.id,
     openerName: row.user.name,
     entry: row.pointEntry
-      ? { id: row.pointEntry.id, points: pointsNumber(row.pointEntry.points), role: row.pointEntry.role }
+      ? { id: row.pointEntry.id, points: row.pointEntry.points, role: row.pointEntry.role }
       : null,
   };
 }
@@ -383,7 +414,7 @@ export async function entriesForMember(
   });
   return rows.map((row) => ({
     id: row.id,
-    points: pointsNumber(row.points),
+    points: row.points,
     role: row.role,
     correctedAt: row.correctedAt,
     createdAt: row.createdAt,
@@ -443,17 +474,26 @@ export async function creditMissingAwards(
       id: true,
       number: true,
       tenantId: true,
+      projectId: true,
       reporterId: true,
       assigneeId: true,
       severity: true,
       status: true,
       isDeleted: true,
       duplicateOfId: true,
-      projectId: true,
     },
   })) as CreditBug[];
   const byNumber = new Map(bugs.map((bug) => [bug.number, bug]));
-  const rewardByProject = new Map<string | null, ProjectRewardConfig>();
+  // One config read per project: granted points honor the project's reward
+  // configuration, like live awards do (#600).
+  const rewardConfigs = new Map<string, ProjectRewardConfig | null>();
+  const rewardConfigFor = async (bug: CreditBug): Promise<ProjectRewardConfig | null> => {
+    if (!bug.projectId) return null;
+    if (!rewardConfigs.has(bug.projectId)) {
+      rewardConfigs.set(bug.projectId, await rewardConfigForBug(db, bug));
+    }
+    return rewardConfigs.get(bug.projectId) ?? null;
+  };
 
   for (const number of numbers) {
     const bug = byNumber.get(number);
@@ -479,13 +519,7 @@ export async function creditMissingAwards(
       continue;
     }
 
-    const projectKey = bug.projectId ?? null;
-    let rewardConfig = rewardByProject.get(projectKey);
-    if (!rewardConfig) {
-      rewardConfig = await getProjectRewardConfig(db, projectKey);
-      rewardByProject.set(projectKey, rewardConfig);
-    }
-    const entry = missingAwardEntry(bug, args.role, rewardConfig);
+    const entry = missingAwardEntry(bug, args.role, await rewardConfigFor(bug));
     if (!entry) {
       skipped.push({ number, reason: "no assignee" });
       continue;

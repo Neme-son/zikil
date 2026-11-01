@@ -83,6 +83,7 @@ describe("parseIssueStageView", () => {
     expect(parseIssueStageView("reported")).toBe("reported");
     expect(parseIssueStageView("confirmed")).toBe("confirmed");
     expect(parseIssueStageView("ready")).toBe("ready");
+    expect(parseIssueStageView("ideas")).toBe("ideas");
     expect(parseIssueStageView(undefined)).toBeNull();
   });
 });

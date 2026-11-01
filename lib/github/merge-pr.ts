@@ -7,6 +7,7 @@ import { publish } from "@/lib/agent-api/events";
 import { notifyMergeFailed } from "@/lib/agent-notifications";
 import { checkApprovalOpen } from "@/lib/approvals";
 import { workflowFor } from "@/lib/workflow";
+import { getProjectRepositories, clientForRepository, findMatchingRepository } from "@/lib/github/project-repos";
 
 /**
  * Merging the linked pull request after the tracker accepts a fix (#452).
@@ -327,7 +328,12 @@ const mergeBugSelect = {
   projectId: true,
   pullRequestUrl: true,
   assigneeId: true,
-  project: { select: { repoUrl: true, githubInstallationId: true } },
+  project: {
+    select: {
+      repoUrl: true,
+      githubInstallationId: true,
+    },
+  },
   claims: {
     where: { status: "active", releasedAt: null },
     select: { beneficiaryUserId: true },
@@ -472,15 +478,17 @@ export async function mergeAcceptedFix(
     );
   }
 
-  // Gate 2: the issue links a pull request that belongs to the project's repo.
+  // Gate 2: the issue links a pull request that belongs to one of the
+  // project's repositories (#675).
   const ref = parsePullRequestUrl(bug.pullRequestUrl);
   if (!ref) return fail(409, "no_pull_request", "No pull request is linked to this issue.");
-  const repo = parseGitHubRepoUrl(bug.project?.repoUrl);
-  if (!repo || !sameRepo(ref, repo)) {
+  const repos = await getProjectRepositories(bug.projectId, bug.project, db);
+  const match = findMatchingRepository(ref, repos);
+  if (!match) {
     return fail(422, "repo_mismatch", "That pull request is not in this project's repository.");
   }
 
-  const client = deps.client ?? clientForInstallation(bug.project?.githubInstallationId, deps.env);
+  const client = deps.client ?? clientForRepository(match, bug.project?.githubInstallationId, deps.env);
   let prFiles = deps.files ?? [];
   if (!prFiles.length && client?.getPullRequestFiles) {
     try {

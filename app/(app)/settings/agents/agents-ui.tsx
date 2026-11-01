@@ -1,46 +1,46 @@
 import type { AgentLevel } from "@prisma/client";
 import type { ReactNode } from "react";
 
-/** Shared presentational classes for the agents redesign (lane-local; shell is frozen). */
+/** Shared presentational classes for the agents view. */
 export const agentsSurface =
-  "rounded-[20px] border border-zk-border bg-zk-surface";
+  "rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900";
 
 export const agentsLink =
-  "font-semibold text-zk-accent hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-electric-blue focus-visible:ring-offset-2";
+  "font-medium text-teal-700 dark:text-teal-400 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-600 focus-visible:ring-offset-2";
 
 export const agentsPrimaryBtn =
-  "inline-flex min-h-11 items-center justify-center rounded-full bg-electric-blue-strong px-5 text-sm font-bold text-white shadow-[0_8px_20px_rgba(46,111,239,0.30)] transition hover:bg-[#2552af] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-electric-blue focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 disabled:shadow-none";
+  "inline-flex min-h-10 items-center justify-center rounded-lg bg-teal-700 px-4 text-sm font-semibold text-white shadow-sm transition hover:bg-teal-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-600 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50";
 
 export const agentsSecondaryBtn =
-  "inline-flex min-h-11 items-center justify-center rounded-full border border-zk-border bg-zk-surface px-5 text-sm font-bold text-zk-text transition hover:bg-zk-chip focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-electric-blue focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50";
+  "inline-flex min-h-10 items-center justify-center rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-4 text-sm font-semibold text-slate-800 dark:text-slate-200 transition hover:bg-slate-50 dark:hover:bg-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-600 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50";
 
 export const agentsDangerBtn =
-  "inline-flex min-h-11 items-center justify-center rounded-full border border-zk-bad-bd bg-zk-bad-soft px-5 text-sm font-bold text-zk-bad-fg transition hover:bg-zk-bad-bg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zk-bad-fg focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50";
+  "inline-flex min-h-10 items-center justify-center rounded-lg border border-red-200 dark:border-red-900 bg-red-50 dark:bg-red-950/40 px-4 text-sm font-semibold text-red-700 dark:text-red-400 transition hover:bg-red-100 dark:hover:bg-red-900/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-600 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50";
 
 export const agentsInputClass =
-  "w-full rounded-xl border border-zk-border bg-zk-surface px-3.5 py-2.5 text-sm text-zk-text shadow-none placeholder:text-zk-muted focus:border-electric-blue focus:outline-none focus:ring-2 focus:ring-electric-blue/20";
+  "w-full rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3.5 py-2 text-sm text-slate-900 dark:text-slate-100 shadow-none placeholder:text-slate-400 focus:border-teal-600 focus:outline-none focus:ring-2 focus:ring-teal-600/20";
 
-export const agentsLabelClass = "block text-sm font-semibold text-zk-text";
+export const agentsLabelClass = "block text-sm font-semibold text-slate-900 dark:text-slate-100";
 
-export const agentsMutedClass = "text-sm text-zk-muted";
+export const agentsMutedClass = "text-sm text-slate-600 dark:text-slate-300";
 
 export const agentsChipClass =
-  "inline-flex items-center rounded-full bg-zk-chip px-2.5 py-0.5 text-xs font-bold text-zk-text2";
+  "inline-flex items-center rounded-full bg-slate-100 dark:bg-slate-800 px-2.5 py-0.5 text-xs font-medium text-slate-700 dark:text-slate-300";
 
 const LEVEL_BADGE: Record<AgentLevel, string> = {
-  observer: "bg-zk-chip text-zk-text2",
-  contributor: "bg-zk-ok-bg text-zk-ok-fg",
-  triager: "bg-zk-warn-bg text-zk-warn-fg",
-  reviewer: "bg-zk-info-bg text-zk-info-fg",
-  dispatcher: "bg-[#FDECEF] text-[#B4233F] dark:bg-[#3A1424] dark:text-[#F9A8C0]",
-  merger: "bg-[#FDECEF] text-[#B4233F] dark:bg-[#3A1424] dark:text-[#F9A8C0]",
+  observer: "bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300",
+  contributor: "bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800",
+  triager: "bg-amber-50 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800",
+  reviewer: "bg-sky-50 dark:bg-sky-950/60 text-sky-700 dark:text-sky-300 border border-sky-200 dark:border-sky-800",
+  dispatcher: "bg-purple-50 dark:bg-purple-950/60 text-purple-700 dark:text-purple-300 border border-purple-200 dark:border-purple-800",
+  merger: "bg-rose-50 dark:bg-rose-950/60 text-rose-700 dark:text-rose-300 border border-rose-200 dark:border-rose-800",
 };
 
 export function levelBadgeClass(level: AgentLevel): string {
   return `inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-bold ${LEVEL_BADGE[level]}`;
 }
 
-const AVATAR_COLORS = ["bg-electric-blue-strong", "bg-blue-slate", "bg-[#0F8A6A]", "bg-[#7C3AED]"];
+const AVATAR_COLORS = ["bg-teal-600", "bg-sky-600", "bg-emerald-600", "bg-indigo-600"];
 
 export function agentAvatarColor(seed: string): string {
   let hash = 0;

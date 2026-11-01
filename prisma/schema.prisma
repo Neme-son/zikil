@@ -658,8 +658,32 @@ model Project {
   approvalRules        ApprovalRule[]
   goals                Goal[]
   workflow             ProjectWorkflow?
+  repositories         ProjectRepository[]
 
   @@unique([tenantId, slug])
+}
+
+/// An additional GitHub repository a project is connected to (#675).
+/// A project can have many repositories; pull requests from any of them
+/// can be linked, accepted, auto-merged and resolved. The main repoUrl
+/// still works on its own for single-repository projects.
+model ProjectRepository {
+  id               String   @id @default(cuid())
+  projectId        String
+  project          Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  /// Short display label, e.g. "Web", "API", "Mobile", "Desktop".
+  label            String
+  /// The GitHub repository URL.
+  repoUrl          String
+  /// The branch fixes go into, e.g. "main", "master".
+  branch           String   @default("main")
+  /// Optional GitHub App installation for repositories in another organization.
+  /// Falls back to the project's githubInstallationId when not set.
+  githubInstallationId String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@unique([projectId, repoUrl])
 }
 
 /// The per-project workflow dials (#595). One row per project; a missing row

@@ -3,10 +3,10 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { authorizationToken, hashSecret } from "@/lib/agents/keys";
 import { AgentLevelError } from "@/lib/agents/levels";
+import { AgentScopeError } from "@/lib/agents/permissions";
 import { AgentPlatformDisabledError, agentPlatformDisabledResponse } from "@/lib/agents/platform-gate";
 import { isAgentPlatformEnabled } from "@/lib/feature-flags";
 import { logger } from "@/lib/logger";
-import type { AppRole } from "@/lib/roles";
 
 export { AgentPlatformDisabledError, agentPlatformDisabledResponse };
 
@@ -24,11 +24,8 @@ export type AgentContext = {
   ownerId: string;
   tenantId: string;
   level: AgentLevel;
-  /**
-   * The owner's site-wide role, read from the agent's owner row. Routes that
-   * mirror the web app's admin gate need it (#512).
-   */
-  ownerRole?: AppRole | null;
+  /** Granular permission scopes (#462). */
+  scopes?: readonly string[];
   /** For the rate budget (#440). */
   burst: boolean;
   /** When the higher budget lapses; null means no expiry (#596). */
@@ -117,7 +114,7 @@ export async function requireAgent(request: HeaderSource): Promise<AgentContext>
           burst: true,
           burstUntil: true,
           revokedAt: true,
-          owner: { select: { role: true, memberships: { select: { tenantId: true } } } },
+          owner: { select: { memberships: { select: { tenantId: true } } } },
         },
       },
     },
@@ -153,7 +150,6 @@ export async function requireAgent(request: HeaderSource): Promise<AgentContext>
     ownerId: agent.ownerUserId,
     tenantId: agent.tenantId,
     level: agent.level,
-    ownerRole: agent.owner.role ?? null,
     burst: agent.burst,
     burstUntil: agent.burstUntil ?? null,
     keyId: key.id,
@@ -163,8 +159,8 @@ export async function requireAgent(request: HeaderSource): Promise<AgentContext>
 }
 
 /**
- * The response for a failed `requireAgent()` or `requireLevel()`: 401 for a
- * missing or bad key, 403 for too low a level. Anything else is rethrown.
+ * The response for a failed `requireAgent()`, `requireLevel()`, or `requireScope()`:
+ * 401 for a missing or bad key, 403 for too low a level or missing scope. Anything else is rethrown.
  */
 export function agentErrorResponse(error: unknown): NextResponse {
   if (error instanceof AgentPlatformDisabledError) return agentPlatformDisabledResponse();
@@ -180,6 +176,12 @@ export function agentErrorResponse(error: unknown): NextResponse {
   if (error instanceof AgentLevelError) {
     return NextResponse.json(
       { error: "insufficient_level", message: error.message, required: error.required },
+      { status: 403 },
+    );
+  }
+  if (error instanceof AgentScopeError) {
+    return NextResponse.json(
+      { error: error.code, message: error.message, requiredScope: error.requiredScope },
       { status: 403 },
     );
   }

@@ -8,6 +8,7 @@ const db = vi.hoisted(() => ({
   webhookSubscription: { findMany: vi.fn() },
   webhookDelivery: { createMany: vi.fn() },
   projectWorkflow: { findUnique: vi.fn() },
+  projectRepository: { findMany: vi.fn().mockResolvedValue([]) },
   $transaction: vi.fn(),
 }));
 vi.mock("@/lib/prisma", () => ({ prisma: db }));

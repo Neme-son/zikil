@@ -1,6 +1,4 @@
 import Link from "next/link";
-import "./issues.css";
-import { Avatar } from "@/components/avatar";
 import { Suspense } from "react";
 import type { Prisma, Severity } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
@@ -11,16 +9,20 @@ import { requireUser } from "@/lib/auth-helpers";
 import type { AppRole } from "@/lib/roles";
 import { IssueFilters } from "@/components/issue-filters";
 import {
+  IssueRowMeta,
+  MetaSeparator,
   RowAge,
   RowAssignee,
-  statusPillClass,
+  type RowPill,
 } from "@/components/issue-row-meta";
 import { VoteButton } from "@/components/vote-button";
 import {
   severityLabels,
+  statusClass,
   statusLabels,
 } from "@/lib/labels";
 import { severities } from "@/lib/validations/issue";
+import { getIssueTypeBadgeClass } from "@/lib/issue-type-styles";
 import { boundSearchTerm, escapeSearchQuery, toSingleQueryParam } from "@/lib/search";
 import {
   hasMatch,
@@ -74,7 +76,6 @@ import { cookies } from "next/headers";
 import { GettingStarted } from "@/components/getting-started";
 import { GETTING_STARTED_COOKIE, gettingStartedFor, parseDismissed, type GettingStartedStep } from "@/lib/onboarding";
 import {
-  PLATFORM_NONE,
   PLATFORM_PARAM,
   parsePlatformFilter,
   platformChoices,
@@ -84,9 +85,8 @@ import { PlatformTabs, type PlatformTab } from "@/components/platform-tabs";
 import { LoadError } from "@/components/load-error";
 import { logLoadFailure } from "@/lib/load-error";
 import { AREA_PARAM, parseProjectAreaFilter, projectAreaFilterWhere } from "@/lib/project-area-filter";
-import { intakeDetail, issueStageLabels, openIssueStages, parseIssueStageView, type IssueStage } from "@/lib/issue-stage";
+import { intakeDetail, intakeLabel, openIssueStages, parseIssueStageView, type IssueStage } from "@/lib/issue-stage";
 import { issuePath } from "@/lib/issue-ref";
-import { PROJECT_ALL_PARAM, showsAllProjects } from "@/lib/issue-list-filters";
 
 /* Distinct browser-tab title; the root layout appends "· Ziki". */
 export const metadata = { title: "Issues" };
@@ -184,8 +184,6 @@ export default async function BugsPage({
   const deletedParam = toSingleQueryParam(params.deleted);
   const mineFilter = parseMineFilter(params.mine);
   const isDeletedView = canDelete && deletedParam === "true";
-  // Workspace-wide view (dashboard links). Absent → unchanged project scope.
-  const allProjects = showsAllProjects(params[PROJECT_ALL_PARAM]);
 
   const currentSort = parseBugSort(sortParam, defaultSortFor(mineFilter));
   const isWatchingView = mineFilter === "watching" && !!userId;
@@ -193,7 +191,7 @@ export default async function BugsPage({
   const showDuplicates = parseShowDuplicates(params[DUPLICATES_PARAM]);
   const where: Prisma.BugWhereInput = {
     ...bugInTenant(tenantId),
-    ...(projectId && !allProjects ? { projectId } : {}),
+    ...(projectId ? { projectId } : {}),
     isDeleted: isDeletedView,
     ...mineFilterWhere(mineFilter, userId),
     ...duplicatesWhere(showDuplicates),
@@ -280,6 +278,11 @@ export default async function BugsPage({
     if (asNumber !== null) where.OR.push({ number: asNumber });
   }
 
+  // #1055: every tab counts what the other filters match, whatever platform
+  // is picked, so switching tabs never surprises.
+  const { categoryId: _platformClause, ...platformTabWhere } = where;
+  void _platformClause;
+
   let totalCount = 0;
   try {
     totalCount = await prisma.bug.count({ where });
@@ -308,30 +311,54 @@ export default async function BugsPage({
 
   const stageView = isDeletedView ? null : parseIssueStageView(toSingleQueryParam(params.stage));
   let stages = new Map<string, IssueStage>();
+  let allIdeaIds: string[] = [];
+  let reportedCount = 0;
+  let confirmedCount = 0;
+  let readyCount = 0;
+
   if (!isDeletedView) {
     try {
-      stages = await openIssueStages(prisma, where);
+      const { categoryId: _c, status: _s, ...allOpenWhere } = where;
+      void _c;
+      void _s;
+      stages = await openIssueStages(prisma, allOpenWhere);
     } catch (error) {
       console.error("[bugs] issue stage lookup failed", error);
     }
-    if (stageView) {
+
+    reportedCount = [...stages.values()].filter((stage) => stage === "reported").length;
+    confirmedCount = [...stages.values()].filter((stage) => stage === "confirmed").length;
+    readyCount = [...stages.values()].filter((stage) => stage === "ready").length;
+    allIdeaIds = [...stages.entries()]
+      .filter(([, stage]) => stage === "reported" || stage === "confirmed")
+      .map(([id]) => id);
+
+    const hasSearchQuery = Boolean(qParam?.trim());
+
+    if (stageView === "ideas") {
+      where.id = { in: allIdeaIds };
+      totalCount = allIdeaIds.length;
+    } else if (stageView === "reported" || stageView === "confirmed" || stageView === "ready") {
       const ids = [...stages.entries()].filter(([, stage]) => stage === stageView).map(([id]) => id);
       where.id = { in: ids };
-      try {
-        totalCount = await prisma.bug.count({ where });
-      } catch (error) {
-        console.error("[bugs] stage count failed", error);
-        totalCount = 0;
+      totalCount = ids.length;
+    } else if (!hasSearchQuery) {
+      // #420: Ideas leave the main issues list and live only in the Ideas view.
+      if (allIdeaIds.length > 0) {
+        if (where.id && typeof where.id === "object" && "in" in where.id && Array.isArray((where.id as { in: string[] }).in)) {
+          (where.id as { in: string[] }).in = (where.id as { in: string[] }).in.filter((id) => !allIdeaIds.includes(id));
+          totalCount = (where.id as { in: string[] }).in.length;
+        } else {
+          where.id = { notIn: allIdeaIds };
+          try {
+            totalCount = await prisma.bug.count({ where });
+          } catch {
+            totalCount = Math.max(0, totalCount - allIdeaIds.length);
+          }
+        }
       }
     }
   }
-  // #1055: every tab counts what the other filters match, whatever platform
-  // is picked, so switching tabs never surprises. The snapshot is taken after
-  // the stage clause is applied (#626): a ?stage= page must count the same
-  // rows its result list shows — tabs, badges and the "Show N resolved" link
-  // all follow the stage filter, not the pre-stage row set.
-  const { categoryId: _platformClause, ...platformTabWhere } = where;
-  void _platformClause;
 
   const isResolvedView = statusParam === "resolved";
 
@@ -343,6 +370,11 @@ export default async function BugsPage({
       const liveTabWhere: Prisma.BugWhereInput = {
         ...baseTabWhere,
         status: defaultStatusWhere(false),
+        ...(stageView === "ideas"
+          ? { id: { in: allIdeaIds } }
+          : allIdeaIds.length > 0
+            ? { id: { notIn: allIdeaIds } }
+            : {}),
       };
 
       const [grouped, resolvedCount] = await Promise.all([
@@ -373,9 +405,19 @@ export default async function BugsPage({
             count: counts.get(platform.id) ?? 0,
           })),
           {
-            id: PLATFORM_NONE,
-            name: "No platform",
-            count: counts.get(null) ?? 0,
+            id: "ideas",
+            name: "Ideas",
+            count: allIdeaIds.length,
+            icon: (
+              <svg
+                className="h-4 w-4 shrink-0 text-amber-500"
+                viewBox="0 0 20 20"
+                fill="currentColor"
+                aria-hidden="true"
+              >
+                <path d="M10 2a6 6 0 00-6 6c0 1.887.87 3.57 2.235 4.674a1 1 0 01.365.772V15a1 1 0 001 1h4a1 1 0 001-1v-1.554a1 1 0 01.365-.772A6.002 6.002 0 0016 8a6 6 0 00-6-6zm-1 16a1 1 0 001 1h0a1 1 0 001-1v-1H9v1z" />
+              </svg>
+            ),
           },
           {
             id: "resolved",
@@ -383,7 +425,7 @@ export default async function BugsPage({
             count: resolvedCount,
             icon: (
               <svg
-                className="h-4 w-4 shrink-0 text-zk-ok-fg"
+                className="h-4 w-4 shrink-0 text-emerald-600"
                 viewBox="0 0 20 20"
                 fill="currentColor"
                 aria-hidden="true"
@@ -407,18 +449,32 @@ export default async function BugsPage({
     for (const [key, value] of Object.entries(params)) {
       if (key === "page" || key === PLATFORM_PARAM) continue;
       if (key === "status" && toSingleQueryParam(value) === "resolved") continue;
+      if (key === "stage" && toSingleQueryParam(value) === "ideas") continue;
       if (key === SHOW_RESOLVED_PARAM) continue;
       const single = toSingleQueryParam(value);
       if (single) next.set(key, single);
     }
     if (id === "resolved") {
       next.set("status", "resolved");
+    } else if (id === "ideas") {
+      next.set("stage", "ideas");
     } else if (id) {
       next.set(PLATFORM_PARAM, id);
     }
     const qs = next.toString();
     return qs ? `/issues?${qs}` : "/issues";
   };
+
+  const ideasHref = (() => {
+    const next = new URLSearchParams();
+    for (const [key, value] of Object.entries(params)) {
+      const single = toSingleQueryParam(value);
+      if (single && key !== "stage" && key !== "page") next.set(key, single);
+    }
+    if (stageView !== "ideas") next.set("stage", "ideas");
+    const qs = next.toString();
+    return qs ? `/issues?${qs}` : "/issues";
+  })();
 
   // How many resolved/closed issues the default view hides (#1058).
   let hiddenResolved = 0;
@@ -559,17 +615,13 @@ export default async function BugsPage({
   // (#292): filter advice on an empty tracker sends people looking for a
   // filter that is not there. The extra count only runs when the page is
   // already empty, so a populated list pays nothing for it. It counts the
-  // same scope the list shows, including ?project=all, so an empty filter
-  // across a busy workspace is "no issues match", not "no issues yet".
+  // project the list shows, so a new project in a busy workspace is "no
+  // issues yet" too, not "no issues match".
   let isFirstRun = false;
   if (totalCount === 0 && !isDeletedView) {
     try {
       isFirstRun = (await prisma.bug.count({
-        where: {
-          ...bugInTenant(tenantId),
-          ...(projectId && !allProjects ? { projectId } : {}),
-          isDeleted: false,
-        },
+        where: { ...bugInTenant(tenantId), ...(projectId ? { projectId } : {}), isDeleted: false },
       })) === 0;
     } catch {
       isFirstRun = false;
@@ -614,362 +666,427 @@ export default async function BugsPage({
     }),
   ).toString();
 
-  const reportedCount = [...stages.values()].filter((stage) => stage === "reported").length;
-  const confirmedCount = [...stages.values()].filter((stage) => stage === "confirmed").length;
-  const readyCount = [...stages.values()].filter((stage) => stage === "ready").length;
-
-  const scopeName = activeProject?.name ?? "this workspace";
-  // Count the same tenant/project and search scope without the selected status.
-  const { status: _selectedStatus, id: _stageIds, ...statusTabWhere } = where;
-  void _selectedStatus;
-  void _stageIds;
-  const statusCounts = isDeletedView || !tenantId ? [] : await loadOrEmpty("status tabs", () => prisma.bug.groupBy({
-    by: ["status"], where: statusTabWhere, _count: { _all: true },
-  }), []);
-  const statusHref = (status: string | null) => {
-    const next = new URLSearchParams(selectionKey);
-    next.delete("page");
-    next.delete("stage");
-    next.delete(SHOW_RESOLVED_PARAM);
-    if (status) next.set("status", status);
-    else next.delete("status");
-    return `/issues${next.size ? `?${next}` : ""}`;
+  const stageClass: Record<IssueStage, string> = {
+    reported: "bg-slate-100 text-slate-700",
+    confirmed: "bg-amber-50 text-amber-900",
+    ready: "bg-emerald-50 text-emerald-800",
   };
-  const emptyPlatform =
-    Boolean(selectedPlatform) &&
-    !isWatchingView &&
-    !qParam &&
-    !statusParam &&
-    !severityParam &&
-    !tagsParam &&
-    !selectedMilestone &&
-    !selectedArea &&
-    !stageView;
 
+  const severityDotColors: Record<string, string> = {
+    critical: "bg-red-500",
+    high: "bg-orange-500",
+    medium: "bg-amber-500",
+    low: "bg-emerald-500",
+  };
+
+  // #1056: one centred column, a simple list going down; no stats card.
   const page = (
-    <div className="issues-page mx-auto w-full max-w-6xl space-y-5">
+    <div className="mx-auto w-full max-w-3xl space-y-6">
       {gettingStarted ? <GettingStarted {...gettingStarted} /> : null}
       {activeProject?.goal ? (
-        <section aria-labelledby="project-goal-heading" className="rounded-[20px] border border-zk-border bg-zk-surface px-5 py-4">
+        <section aria-labelledby="project-goal-heading" className="rounded-xl border border-slate-200 bg-white px-4 py-3">
           <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
-            <h2 id="project-goal-heading" className="text-sm font-bold text-zk-text">{activeProject.name} goal</h2>
+            <h2 id="project-goal-heading" className="text-sm font-semibold text-slate-900">{activeProject.name} goal</h2>
             {membershipRole && isOrganizationAdmin(membershipRole, effectiveRole) ? (
-              <Link href={`/projects/${encodeURIComponent(activeProject.slug)}/settings`} className="text-xs font-bold text-zk-accent underline">Edit project settings</Link>
+              <Link href={`/projects/${encodeURIComponent(activeProject.slug)}/settings`} className="text-xs font-medium text-teal-800 underline">Edit project settings</Link>
             ) : null}
           </div>
-          <RichText content={activeProject.goal} className="mt-1 text-sm text-zk-text2" />
+          <RichText content={activeProject.goal} className="mt-1 text-sm" />
         </section>
       ) : null}
-      <div className="issues-heading flex flex-wrap items-start justify-between gap-4">
-        <div className="flex min-w-0 flex-col gap-1.5">
-          <div className="flex flex-wrap items-center gap-2">
-            <h1 className="text-[28px] font-extrabold tracking-[-0.02em] text-zk-text">
-              {isDeletedView ? "Deleted Issues" : "Issues"}
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <div className="flex items-center gap-2">
+            <h1
+              className={
+                isDeletedView
+                  ? "text-xl sm:text-2xl font-bold tracking-tight text-slate-900"
+                  : "text-2xl sm:text-3xl font-bold tracking-tight text-slate-900"
+              }
+            >
+              {/* #1063: the project is the heading; "Ziki" is in the header. */}
+              {isDeletedView ? "Deleted Issues" : (activeProject?.name ?? "Issues")}
             </h1>
             {isDeletedView ? (
-              <span className="rounded-full bg-zk-bad-bg px-2.5 py-0.5 text-xs font-bold text-zk-bad-fg">Admin view</span>
-            ) : null}
-            {allProjects && !isDeletedView ? (
-              <span className="rounded-full border border-zk-border bg-zk-tint px-2.5 py-0.5 text-xs font-bold text-zk-accent">All projects</span>
+              <span className="rounded-full bg-red-100 px-2.5 py-0.5 text-xs font-semibold text-red-800">
+                Admin view
+              </span>
             ) : null}
           </div>
           {isDeletedView ? null : (
-            <p className="text-sm text-zk-muted">
-              {allProjects
-                ? "Every issue in this workspace, across all projects."
-                : `Every bug and security report for ${scopeName}, ranked by what the community votes up.`}
+            <p className="mt-1 max-w-xl text-sm font-normal text-slate-600">
+              A report stays an idea until reviewers accept it and three people upvote it. Then it is an issue and can be passed on.
             </p>
           )}
         </div>
-        <Suspense fallback={<div className="h-11 w-36 rounded-full bg-zk-chip" />}>
-          <IssueFilters compact tagTypes={tagTypes} platforms={platforms} milestones={milestones} areas={areas} shortcutsEnabled={shortcutsEnabled}
-            stageCounts={isDeletedView ? undefined : { reported: reportedCount, confirmed: confirmedCount, ready: readyCount }} />
-        </Suspense>
-        <div className="issues-actions flex flex-wrap items-center gap-2 print:hidden">
+        <div className="flex flex-wrap items-center gap-2 print:hidden">
           {canDelete ? (
             <Link
               href={isDeletedView ? "/issues" : "/issues?deleted=true"}
-              className={`inline-flex h-[42px] items-center justify-center rounded-full px-4 text-sm font-bold border transition ${
+              className={`inline-flex h-9 items-center justify-center rounded-full px-3.5 text-sm font-medium border transition ${
                 isDeletedView
-                  ? "border-zk-border bg-zk-surface text-zk-text hover:bg-zk-chip"
-                  : "border-zk-bad-bd bg-zk-bad-soft text-zk-bad-fg hover:bg-zk-bad-bg"
+                  ? "border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
+                  : "border-red-200 bg-red-50 text-red-700 hover:bg-red-100"
               }`}
             >
               {isDeletedView ? "← View active issues" : "View deleted issues"}
             </Link>
           ) : null}
           {finishedWatched > 0 ? <UnwatchFinishedButton count={finishedWatched} /> : null}
-          {!isDeletedView ? (
-            <Link
-              href="/issues/new"
-              className="issues-new inline-flex h-[42px] items-center gap-2 rounded-full border border-zk-border bg-zk-surface px-5 text-sm font-semibold text-zk-text hover:bg-zk-chip"
-            >
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>
-              New issue
-            </Link>
-          ) : null}
+          {/* #1057: "New issue" lives in the header on every page; no second one here. */}
         </div>
       </div>
 
+      {/* #1054: no sidebar. Reported / Confirmed are a Stage filter now. */}
       <div className="space-y-4">
-        {!isDeletedView ? (
-          <nav aria-label="Issue status" className="issues-status-nav">
-            <ul>
-              {[{ value: null, label: "All issues" }, { value: "open", label: "Open" }, { value: "in_progress", label: "In progress" }, { value: "resolved", label: "Resolved" }, { value: "closed", label: "Closed" }].map(({ value, label }) => (
-                <li key={value ?? "all"}>
-                  <Link href={statusHref(value)} aria-current={(value === (statusParam ?? null)) ? "page" : undefined}>
-                    <span className={`issues-status-dot issues-status-${value ?? "all"}`} aria-hidden="true" />
-                    {label}<span className="issues-status-count">{value ? statusCounts.find((row) => row.status === value)?._count._all ?? 0 : statusCounts.filter((row) => showResolved || row.status === "open" || row.status === "in_progress").reduce((sum, row) => sum + row._count._all, 0)}</span>
-                  </Link>
-                </li>
-              ))}
-            </ul>
-          </nav>
-        ) : null}
         {isFirstRun ? null : (
-          <div className="flex flex-wrap items-center gap-2.5">
-            <PlatformTabs
-              tabs={platformTabs}
-              current={isResolvedView ? "resolved" : selectedPlatform}
-              hrefFor={platformHref}
+          <PlatformTabs
+            tabs={platformTabs}
+            current={isResolvedView ? "resolved" : stageView === "ideas" ? "ideas" : selectedPlatform}
+            hrefFor={platformHref}
+          />
+        )}
+        {isFirstRun ? null : (
+          <Suspense
+            fallback={<div className="h-12 animate-pulse rounded-lg bg-slate-100" />}
+          >
+            <IssueFilters
+              tagTypes={tagTypes}
+              platforms={platforms}
+              milestones={milestones}
+              areas={areas}
+              shortcutsEnabled={shortcutsEnabled}
+              stageCounts={isDeletedView ? undefined : { reported: reportedCount, confirmed: confirmedCount, ready: readyCount }}
             />
-          </div>
+          </Suspense>
         )}
 
-        {milestoneSummary ? (
-          <section aria-label={`Milestone ${milestoneSummary.title}`} className="rounded-[20px] border border-zk-border bg-zk-surface p-5">
-            <div className="flex flex-wrap items-center gap-2">
-              <h2 className="text-base font-bold text-zk-text">{milestoneSummary.title}</h2>
-              <MilestoneDue due={dueDateValue(milestoneSummary.dueDate) || null} isClosed={milestoneSummary.isClosed} />
-              <Link href="/milestones" className="ml-auto text-sm font-bold text-zk-accent hover:underline">All milestones</Link>
-            </div>
-            {milestoneSummary.description ? <p className="mt-1 text-sm text-zk-muted">{milestoneSummary.description}</p> : null}
-            <div className="mt-3 max-w-md">
-              <MilestoneProgressBar progress={milestoneSummary.progress} label={milestoneSummary.title} />
-            </div>
-          </section>
-        ) : null}
-
-        {isFirstRun ? (
-          <FirstRunWelcome isAdmin={canDelete} hasTenant={Boolean(tenantId)} />
-        ) : bugs.length === 0 ? (
-          <div className="rounded-[20px] border border-zk-border bg-zk-surface px-4 py-12 text-center">
-            <p className="font-bold text-zk-text">
-              {isWatchingView && !qParam && !statusParam && !severityParam && !tagsParam && !selectedPlatform && !selectedMilestone
-                ? "You're not watching any issues."
-                : emptyPlatform
-                  ? "No issues on this platform"
-                  : "No issues match these filters."}
+          <div className="flex items-center justify-between text-xs text-slate-500">
+            {/* #690: announce the result count so screen readers hear
+                "N results" after a search lands. */}
+            <p role="status" aria-live="polite">
+              {resultCountText(totalCount, statusWhere !== undefined ? statusParam ?? null : null)} · sorted by{" "}
+              {bugSortDescriptions[currentSort]}
+              {allIdeaIds.length > 0 && !isDeletedView ? (
+                <>
+                  {" · "}
+                  <Link href={ideasHref} className="font-medium text-amber-700 hover:underline print:hidden">
+                    {stageView === "ideas" ? "Hide ideas" : `Show ${allIdeaIds.length} idea${allIdeaIds.length === 1 ? "" : "s"}`}
+                  </Link>
+                </>
+              ) : null}
+              {hiddenResolved > 0 || (showResolved && statusWhere === undefined && !isDeletedView) ? (
+                <>
+                  {" · "}
+                  <Link href={resolvedHref} className="font-medium text-blue-600 hover:underline print:hidden">
+                    {showResolved ? "Hide resolved" : `Show ${hiddenResolved} resolved`}
+                  </Link>
+                </>
+              ) : null}
+              {hiddenDuplicates > 0 || showDuplicates ? (
+                <>
+                  {" · "}
+                  <Link href={duplicatesHref} className="font-medium text-blue-600 hover:underline print:hidden">
+                    {showDuplicates
+                      ? "Hide duplicates"
+                      : `Show ${hiddenDuplicates} duplicate${hiddenDuplicates === 1 ? "" : "s"}`}
+                  </Link>
+                </>
+              ) : null}
             </p>
-            <p className="mt-1.5 text-sm text-zk-muted">
-              {isWatchingView
-                ? "You watch issues you report, are assigned to or comment on, and any you choose to watch from the issue page."
-                : emptyPlatform
-                  ? "Issues tagged for this platform will show up here."
-                  : "Try clearing filters, or report it with New issue."}
-            </p>
-            <div className="mt-4 flex flex-wrap items-center justify-center gap-3">
-              <Link href="/issues" className="text-sm font-bold text-zk-accent hover:underline">Clear filters</Link>
-            </div>
           </div>
-        ) : (
-          <section className="issues-results flex flex-col gap-3.5">
-            <div className="issues-results-summary flex flex-wrap items-baseline justify-between gap-2.5">
-              <div className="flex flex-wrap items-baseline gap-2.5">
-                <h2 className="text-lg font-bold text-zk-text">All issues</h2>
-                <p role="status" aria-live="polite" className="text-[13px] text-zk-muted">
-                  {resultCountText(totalCount, statusWhere !== undefined ? statusParam ?? null : null)} · sorted by{" "}
-                  {bugSortDescriptions[currentSort]}
-                  {hiddenResolved > 0 || (showResolved && statusWhere === undefined && !isDeletedView) ? (
-                    <>
-                      {" · "}
-                      <Link href={resolvedHref} className="font-bold text-zk-accent hover:underline print:hidden">
-                        {showResolved ? "Hide resolved" : `Show ${hiddenResolved} resolved`}
-                      </Link>
-                    </>
-                  ) : null}
-                  {hiddenDuplicates > 0 || showDuplicates ? (
-                    <>
-                      {" · "}
-                      <Link href={duplicatesHref} className="font-bold text-zk-accent hover:underline print:hidden">
-                        {showDuplicates ? "Hide duplicates" : `Show ${hiddenDuplicates} duplicate${hiddenDuplicates === 1 ? "" : "s"}`}
-                      </Link>
-                    </>
-                  ) : null}
+
+          {milestoneSummary ? (
+            <section
+              aria-label={`Milestone ${milestoneSummary.title}`}
+              className="rounded-xl border border-slate-200 bg-white p-4 sm:p-5"
+            >
+              <div className="flex flex-wrap items-center gap-2">
+                <h2 className="text-base font-semibold text-slate-900">{milestoneSummary.title}</h2>
+                <MilestoneDue due={dueDateValue(milestoneSummary.dueDate) || null} isClosed={milestoneSummary.isClosed} />
+                <Link href="/milestones" className="ml-auto text-sm text-blue-600 hover:underline">
+                  All milestones
+                </Link>
+              </div>
+              {milestoneSummary.description ? (
+                <p className="mt-1 text-sm text-slate-600">{milestoneSummary.description}</p>
+              ) : null}
+              <div className="mt-3 max-w-md">
+                <MilestoneProgressBar progress={milestoneSummary.progress} label={milestoneSummary.title} />
+              </div>
+            </section>
+          ) : null}
+
+          {isFirstRun ? (
+            <FirstRunWelcome isAdmin={canDelete} hasTenant={Boolean(tenantId)} />
+          ) : bugs.length === 0 ? (
+            <div className="rounded-xl border border-slate-200 bg-white px-4 py-5">
+              <p className="text-sm font-medium text-slate-800">
+                {isWatchingView && !qParam && !statusParam && !severityParam && !tagsParam && !selectedPlatform && !selectedMilestone
+                  ? "You're not watching any issues."
+                  : "No issues match these filters."}
+              </p>
+              <p className="mt-1 text-sm text-slate-600">
+                {isWatchingView
+                  ? "You watch issues you report, are assigned to or comment on, and any you choose to watch from the issue page."
+                  : "Try clearing filters, or report it with New issue at the top."}
+              </p>
+              {allIdeaIds.length > 0 && stageView !== "ideas" ? (
+                <p className="mt-2 text-sm text-amber-800">
+                  There {allIdeaIds.length === 1 ? "is" : "are"} {allIdeaIds.length} {allIdeaIds.length === 1 ? "idea" : "ideas"} awaiting review or upvotes.{" "}
+                  <Link href={ideasHref} className="font-medium underline hover:text-amber-900">
+                    View {allIdeaIds.length === 1 ? "idea" : "ideas"} →
+                  </Link>
                 </p>
+              ) : null}
+              <div className="mt-3 flex flex-wrap items-center gap-3">
+                <Link
+                  href="/issues"
+                  className="text-sm font-medium text-blue-600 hover:underline"
+                >
+                  Clear filters
+                </Link>
               </div>
             </div>
+          ) : (
+            <>
+              <ul className="divide-y divide-slate-100 overflow-hidden rounded-xl border border-slate-200 bg-white">
+                {bugs.map((bug) => {
+                  const userVote =
+                    Array.isArray(bug.votes) && bug.votes.length > 0
+                      ? (bug.votes[0].value ?? 1)
+                      : 0;
+                  const voterSummary =
+                    voterSummaries.get(bug.id) ?? createEmptyVoterSummary();
+                  const stage = stages.get(bug.id);
 
-            <div className="issues-table relative">
-              <div>
-                <div className="issues-table-heading">
-                  {canDelete && !isDeletedView ? <span className="issues-selection" aria-hidden="true" /> : null}
-                  <span className="w-[52px]">Votes</span>
-                  <span className="min-w-0 flex-1">Issue</span>
-                  <span className="issues-type">Type</span>
-                  <span className="issues-priority">Priority</span>
-                  <span className="issues-stage">Stage</span>
-                  <span className="w-10" aria-hidden="true" />
-                </div>
-                <ul>
-                  {bugs.map((bug, index) => {
-                    const userVote =
-                      Array.isArray(bug.votes) && bug.votes.length > 0
-                        ? (bug.votes[0].value ?? 1)
-                        : 0;
-                    const voterSummary =
-                      voterSummaries.get(bug.id) ?? createEmptyVoterSummary();
-                    const stage = stages.get(bug.id);
-                    const typeName = bug.type?.name ?? "—";
-                    const isSecurity = /security/i.test(typeName);
-
-                    return (
-                      <li
-                        key={bug.id}
-                        data-severity={bug.severity}
-                        className={`issues-row flex items-center gap-2 px-2 py-3.5 lg:gap-4 lg:px-4 ${
-                          index < bugs.length - 1 ? "border-b border-zk-divider" : ""
-                        }`}
-                      >
-                        {canDelete && !isDeletedView ? (
-                          <div className="issues-selection shrink-0">
-                            <BulkCheckbox id={bug.id} title={bug.title} />
-                          </div>
-                        ) : null}
-                        <div className="issues-vote w-[52px] shrink-0">
-                          <VoteButton
-                            bugId={bug.id}
-                            voteCount={bug.voteCount}
-                            userVote={userVote}
-                            likeCount={voterSummary.likes.count}
-                            size="sm"
-                            chevron
-                            readOnly={isDeletedView}
-                          />
-                        </div>
-                        <Link
-                          href={issuePath(bug.number)}
-                          data-issue-link=""
-                          className="flex min-h-11 min-w-0 flex-1 items-center gap-3 rounded-md text-left [touch-action:manipulation] focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-electric-blue"
-                        >
+                  // Priority order: severity and status answer "how urgent /
+                  // where is it" and type says what it is, so those three stay
+                  // visible; category and area fold into the +N chip (#686).
+                  const pills: RowPill[] = [
+                    {
+                      name: severityLabels[bug.severity],
+                      className: "border-slate-200 bg-white text-slate-700",
+                      content: (
+                        <>
                           <span
-                            data-issue-type-icon=""
-                            className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full ${
-                              isSecurity ? "bg-zk-bad-bg text-zk-bad-fg" : "bg-zk-tint text-zk-accent"
+                            className={`mr-1.5 h-2 w-2 rounded-full shrink-0 ${
+                              severityDotColors[bug.severity] ?? "bg-slate-400"
                             }`}
-                            aria-hidden="true"
-                          >
-                            {isSecurity ? (
-                              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" /></svg>
-                            ) : (
-                              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 20a6 6 0 0 0 6-6V10a6 6 0 0 0-12 0v4a6 6 0 0 0 6 6zM12 20v-9M4 13h2M18 13h2M5 7l2 2M19 7l-2 2" /></svg>
-                            )}
-                          </span>
-                          <span className="flex min-w-0 flex-col gap-0.5">
-                            <span className={`issues-row-title text-sm font-semibold leading-snug ${isDone(bug.status) ? "text-zk-muted" : "text-zk-text"}`}>
+                          />
+                          {severityLabels[bug.severity]}
+                        </>
+                      ),
+                    },
+                    {
+                      name: statusLabels[bug.status],
+                      className: `border-transparent ${statusClass[bug.status]}`,
+                      content: (
+                        <>
+                          {isDone(bug.status) ? (
+                            <svg
+                              viewBox="0 0 20 20"
+                              fill="currentColor"
+                              className="mr-1 h-3 w-3"
+                              aria-hidden="true"
+                            >
+                              <path
+                                fillRule="evenodd"
+                                d="M16.704 4.153a.75.75 0 0 1 .143 1.052l-8 10.5a.75.75 0 0 1-1.127.075l-4.5-4.5a.75.75 0 0 1 1.06-1.06l3.894 3.893 7.48-9.817a.75.75 0 0 1 1.05-.143Z"
+                                clipRule="evenodd"
+                              />
+                            </svg>
+                          ) : null}
+                          {statusLabels[bug.status]}
+                        </>
+                      ),
+                    },
+                    ...(bug.type
+                      ? [
+                          {
+                            name: bug.type.name,
+                            className: getIssueTypeBadgeClass(bug.type.name),
+                          },
+                        ]
+                      : []),
+                    ...(bug.category
+                      ? [
+                          {
+                            name: bug.category.name,
+                            className:
+                              "border-slate-200 bg-slate-100 text-slate-700",
+                          },
+                        ]
+                      : []),
+                    ...(bug.area
+                      ? [
+                          {
+                            name: bug.area.name,
+                            className: "border-teal-200 bg-teal-50 text-teal-900",
+                          },
+                        ]
+                      : []),
+                    ...(bug.isDeleted
+                      ? [
+                          {
+                            name: "Deleted",
+                            className:
+                              "border-red-300 bg-red-100 text-red-900 font-semibold",
+                            content: "🗑️ Deleted",
+                          },
+                        ]
+                      : []),
+                    ...(bug.duplicateOf
+                      ? [
+                          {
+                            name: `Duplicate of ${formatIssueNumber(bug.duplicateOf.number)}`,
+                            className: "border-amber-300 bg-amber-50 text-amber-900",
+                          },
+                        ]
+                      : []),
+                  ];
+                  return (
+                    <li
+                      key={bug.id}
+                      className="group flex flex-wrap items-start gap-3.5 p-3.5 sm:p-4 md:flex-nowrap transition hover:bg-slate-50/80 has-[a[data-issue-link]:focus-visible]:bg-blue-50/60"
+                    >
+                      {canDelete && !isDeletedView ? (
+                        <div className="pt-1">
+                          <BulkCheckbox id={bug.id} title={bug.title} />
+                        </div>
+                      ) : null}
+                      <div className="shrink-0 pt-0.5">
+                        <VoteButton
+                          bugId={bug.id}
+                          voteCount={bug.voteCount}
+                          userVote={userVote}
+                          likeCount={voterSummary.likes.count}
+                          size="sm"
+                          readOnly={isDeletedView}
+                        />
+                      </div>
+                      <Link
+                        href={issuePath(bug.number)}
+                        data-issue-link=""
+                        className="min-w-0 flex-1 basis-0 rounded-md scroll-my-24 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-blue-600"
+                      >
+                        <div className="flex flex-col gap-2">
+                          <div className="min-w-0 space-y-1">
+                            <p
+                              className={`font-semibold text-base break-words transition-colors group-hover:text-blue-600 ${
+                                isDone(bug.status) ? "text-slate-500" : "text-slate-900"
+                              }`}
+                            >
+                              <span className="font-mono text-xs font-semibold text-slate-600 mr-2 tabular-nums">
+                                {formatIssueNumber(bug.number)}
+                              </span>
                               {searchText ? (
                                 <Highlighted segments={highlightSegments(bug.title, searchText)} />
                               ) : (
                                 bug.title
                               )}
-                            </span>
-                            <span className={`inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-xs font-bold lg:hidden ${statusPillClass(bug.status)}`}>
-                              <span className="h-1.5 w-1.5 rounded-full bg-current" aria-hidden="true" />
-                              {statusLabels[bug.status]}
-                            </span>
-                            <span className="issues-row-meta flex items-center gap-2 text-xs text-zk-muted">
-                              <span className="font-mono tabular-nums">{formatIssueNumber(bug.number)}</span>
-                              {(bug._count?.comments ?? 0) > 0 ? (
-                                <span className="inline-flex items-center gap-1" title={`Conversation: ${bug._count?.comments}`}>
-                                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" /></svg>
-                                  {bug._count?.comments}
-                                </span>
-                              ) : null}
-                              {(bug._count?.attachments ?? 0) > 0 ? (
-                                <span title={`${bug._count?.attachments} attachments`}>📎 {bug._count?.attachments}</span>
-                              ) : null}
-                              {bug.isDeleted ? <span className="font-bold text-zk-bad-fg">Deleted</span> : null}
-                              {bug.duplicateOf ? (
-                                <span>Duplicate of {formatIssueNumber(bug.duplicateOf.number)}</span>
-                              ) : null}
-                              {bug.category ? <span>{bug.category.name}</span> : null}
-                              <RowAge date={currentSort === "newest" ? bug.createdAt : bug.updatedAt} sort={currentSort === "newest" ? "newest" : "updated"} />
-                            </span>
-                            {snippets.has(bug.id) ? <SearchSnippet snippet={snippets.get(bug.id)!} /> : null}
-                          </span>
-                        </Link>
-                        <span className="issues-type" title={typeName}>
-                          <span className="sr-only">{typeName}</span>
-                          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={isSecurity ? "M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" : "M12 20a6 6 0 0 0 6-6V10a6 6 0 0 0-12 0v4a6 6 0 0 0 6 6zM12 20v-9M4 13h2M18 13h2M5 7l2 2M19 7l-2 2"} /></svg>
-                        </span>
-                        <span className="issues-priority" title={`${severityLabels[bug.severity]} priority`}>
-                          <span className="sr-only">{severityLabels[bug.severity]} priority</span>
-                          <span className="issues-priority-bars" aria-hidden="true">{[0, 1, 2].map((bar) => <i key={bar} data-active={bar < ({ low: 1, medium: 2, high: 3, critical: 3 }[bug.severity])} />)}</span>
-                        </span>
-                        <span className="issues-stage" title={`${statusLabels[bug.status]}${stage ? ` · ${issueStageLabels[stage]}` : ""}`}>
-                          <span className="issues-stage-track" aria-hidden="true">{[0, 1, 2, 3, 4].map((step) => <i key={step} data-filled={step < (bug.status === "closed" ? 5 : bug.status === "resolved" ? 4 : bug.status === "in_progress" ? 3 : stage === "ready" ? 2 : 1)} />)}</span>
-                          <span className="sr-only">{statusLabels[bug.status]}</span>
-                          {stage ? (
-                            <span
-                              title={intakeDetail(stage, bug.voteCount)}
-                              className="sr-only"
-                            >
-                              <span className="h-1.5 w-1.5 rounded-full bg-current" aria-hidden="true" />
-                              {issueStageLabels[stage]}
-                            </span>
-                          ) : null}
-                        </span>
-                        <span
-                          className={`w-10 shrink-0 items-center justify-end gap-2 ${
-                            isWatchingView && !bug.isDeleted ? "flex" : "hidden lg:flex"
-                          }`}
-                        >
-                          {bug.assignee ? (
-                            <span className="hidden lg:inline-flex">
-                              <RowAssignee name={bug.assignee.name} image={bug.assignee.image} />
-                            </span>
-                          ) : bug.reporter ? (
-                            <span className="hidden lg:inline-flex" title={`Reported by ${bug.reporter.name}`}>
-                              <Avatar name={bug.reporter.name} image={bug.reporter.image} size="sm" />
-                              <span className="sr-only">Reported by {bug.reporter.name}</span>
-                            </span>
-                          ) : null}
-                          {isWatchingView && !bug.isDeleted ? (
-                            <UnwatchButton bugId={bug.id} label={`${formatIssueNumber(bug.number)} ${bug.title}`} />
-                          ) : null}
-                        </span>
-                      </li>
-                    );
-                  })}
-                </ul>
-              </div>
-            </div>
+                            </p>
+                            {snippets.has(bug.id) ? (
+                              <SearchSnippet snippet={snippets.get(bug.id)!} />
+                            ) : null}
 
-            <PaginationControls
-              page={pagination.page}
-              totalPages={pagination.totalPages}
-              totalCount={totalCount}
-              from={pagination.from}
-              to={pagination.to}
-              queryParams={issueListPaginationParams({
-                status: statusParam,
-                severity: severityParam,
-                mine: mineFilter,
-                q: qParam,
-                sort: sortParam,
-                milestone: milestoneParam,
-                tags: tagsParam,
-                platform: selectedPlatform,
-                area: selectedArea,
-                stage: stageView,
-                deleted: isDeletedView,
-                showDuplicates,
-                showResolved,
-                allProjects,
-              })}
-            />
-          </section>
-        )}
+                            {/* One muted line: taxonomy on the left in ≤3 pills
+                                (+N), then the metadata a triager scans for.
+                                Nothing here outranks the title (#686). */}
+                            <IssueRowMeta
+                              pills={pills}
+                              meta={
+                                <>
+                                  {stage ? (
+                                    <>
+                                      <span
+                                        title={intakeDetail(stage, bug.voteCount)}
+                                        className={`rounded-full px-2 py-0.5 text-xs font-medium ${stageClass[stage]}`}
+                                      >
+                                        {intakeLabel(stage)}
+                                      </span>
+                                      <MetaSeparator />
+                                    </>
+                                  ) : null}
+                                  <RowAge
+                                    date={currentSort === "newest" ? bug.createdAt : bug.updatedAt}
+                                    sort={currentSort === "newest" ? "newest" : "updated"}
+                                  />
+                                  {(bug._count?.comments ?? 0) > 0 ? (
+                                    <>
+                                      <MetaSeparator />
+                                      <span
+                                        title={`Conversation: ${bug._count?.comments} item${bug._count?.comments === 1 ? "" : "s"}`}
+                                      >
+                                        💬 {bug._count?.comments}
+                                      </span>
+                                    </>
+                                  ) : null}
+                                  {(bug._count?.attachments ?? 0) > 0 ? (
+                                    <>
+                                      <MetaSeparator />
+                                      <span title={`${bug._count?.attachments} attachments`}>
+                                        📎 {bug._count?.attachments}
+                                      </span>
+                                    </>
+                                  ) : null}
+                                </>
+                              }
+                            />
+
+                            {/* #1060: the vote count lives in the vote button only;
+                                who voted is on the issue page. */}
+                          </div>
+                        </div>
+                      </Link>
+
+                      {/* #1061: the assignee's face, at the right of the row on every width. */}
+                      {bug.assignee ? (
+                        <div className="shrink-0 self-start pt-0.5">
+                          <RowAssignee name={bug.assignee.name} image={bug.assignee.image} />
+                        </div>
+                      ) : null}
+
+                      <div className="flex w-full basis-full shrink-0 items-center justify-end gap-3 self-center border-t border-slate-100 pt-2 empty:hidden md:basis-auto md:w-auto md:border-0 md:pt-0 md:pl-2">
+                        {isWatchingView ? (
+                          <div className="flex items-center gap-2">
+                            {isWatchingView && !bug.isDeleted ? (
+                              <UnwatchButton
+                                bugId={bug.id}
+                                label={`${formatIssueNumber(bug.number)} ${bug.title}`}
+                              />
+                            ) : null}
+                          </div>
+                        ) : null}
+                      </div>
+                    </li>
+                  );
+                })}
+              </ul>
+              <PaginationControls
+                page={pagination.page}
+                totalPages={pagination.totalPages}
+                totalCount={totalCount}
+                from={pagination.from}
+                to={pagination.to}
+                queryParams={issueListPaginationParams({
+                  status: statusParam,
+                  severity: severityParam,
+                  mine: mineFilter,
+                  q: qParam,
+                  sort: sortParam,
+                  milestone: milestoneParam,
+                  tags: tagsParam,
+                  platform: selectedPlatform,
+                  area: selectedArea,
+                  stage: stageView,
+                  deleted: isDeletedView,
+                  showDuplicates,
+                  showResolved,
+                })}
+              />
+            </>
+          )}
       </div>
     </div>
   );
@@ -989,7 +1106,6 @@ export default async function BugsPage({
   );
 }
 
-
 /** What a brand-new tracker shows instead of an empty list (#292, #444). */
 function FirstRunWelcome({
   isAdmin,
@@ -1000,16 +1116,16 @@ function FirstRunWelcome({
 }) {
   if (!hasTenant) {
     return (
-      <section aria-labelledby="issues-workspace-heading" className="issues-workspace-empty rounded-[20px] border border-zk-border bg-zk-bg px-6 py-10 text-center sm:px-8">
-        <h2 id="issues-workspace-heading" className="text-xl font-bold leading-7 text-zk-text">No workspace yet</h2>
-        <p className="mx-auto mt-3 max-w-lg text-base leading-7 text-zk-text2">
+      <section className="rounded-xl border border-amber-200 bg-amber-50/70 px-4 py-5">
+        <h2 className="text-lg font-semibold text-slate-900">No workspace yet</h2>
+        <p className="mx-auto mt-2 max-w-md text-sm text-slate-600">
           You are not currently a member of any workspace. Join a workspace via an invite from your team,
           or create your own workspace to start filing issues.
         </p>
-        <div className="mt-6">
+        <div className="mt-5">
           <Link
             href="/tenants"
-            className="inline-flex min-h-12 max-w-full items-center justify-center rounded-full bg-electric-blue-strong px-6 py-3 text-sm font-bold leading-5 text-white transition-colors hover:bg-blue-slate focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-zk-accent"
+            className="inline-flex h-9 items-center justify-center rounded-full bg-teal-700 px-4 text-sm font-medium text-white hover:bg-teal-800"
           >
             Create or join a workspace
           </Link>
@@ -1019,28 +1135,34 @@ function FirstRunWelcome({
   }
 
   return (
-    <section className="rounded-[20px] border border-zk-border bg-zk-surface px-5 py-8 text-center">
-      <h2 className="text-lg font-bold text-zk-text">No issues yet</h2>
-      <p className="mx-auto mt-2 max-w-md text-sm text-zk-muted">
+    <section className="rounded-xl border border-slate-200 bg-white px-4 py-5">
+      <h2 className="text-lg font-semibold text-slate-900">No issues yet</h2>
+      <p className="mx-auto mt-2 max-w-md text-sm text-slate-600">
         This is where reported issues will appear. A good report says what you
         expected, what happened instead, and how to make it happen again.
       </p>
       <div className="mt-5">
         <Link
           href="/issues/new"
-          className="inline-flex h-[42px] items-center justify-center rounded-full bg-electric-blue-strong px-5 text-sm font-bold text-white shadow-[0_8px_20px_rgba(46,111,239,0.35)]"
+          className="inline-flex h-9 items-center justify-center rounded-full bg-teal-700 px-4 text-sm font-medium text-white hover:bg-teal-800"
         >
           Report the first issue
         </Link>
       </div>
       {isAdmin ? (
-        <p className="mx-auto mt-6 max-w-md text-sm text-zk-muted">
+        <p className="mx-auto mt-6 max-w-md text-sm text-slate-600">
           Before people start reporting, you may want to set up your{" "}
-          <Link href="/projects" className="font-bold text-zk-accent underline">projects</Link>
+          <Link href="/projects" className="font-medium text-teal-700 underline">
+            projects
+          </Link>
           , and the{" "}
-          <Link href="/admin/categories" className="font-bold text-zk-accent underline">platforms</Link>{" "}
+          <Link href="/admin/categories" className="font-medium text-teal-700 underline">
+            platforms
+          </Link>{" "}
           and{" "}
-          <Link href="/admin/types" className="font-bold text-zk-accent underline">issue types</Link>{" "}
+          <Link href="/admin/types" className="font-medium text-teal-700 underline">
+            issue types
+          </Link>{" "}
           they will choose from.
         </p>
       ) : null}

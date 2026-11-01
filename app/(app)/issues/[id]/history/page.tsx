@@ -76,16 +76,16 @@ export default async function IssueHistoryPage({ params, searchParams }: Props) 
   return (
     <div className="mx-auto max-w-4xl space-y-6">
       <div>
-        <Link href={issuePath(bug.number)} className="inline-flex min-h-8 items-center gap-1.5 text-sm font-semibold text-zk-accent hover:underline">
-          Back to issue
+        <Link href={issuePath(bug.number)} className="text-sm text-teal-700 hover:underline">
+          ← Back to issue
         </Link>
-        <h1 className="mt-3 text-[28px] font-extrabold tracking-[-0.02em] text-zk-text break-words">
+        <h1 className="mt-3 text-xl font-semibold text-slate-900 break-words">
           Edit history{" "}
-          <span className="font-bold text-zk-muted">
+          <span className="font-normal text-slate-500">
             · {formatIssueNumber(bug.number)} {bug.title}
           </span>
         </h1>
-        <p className="mt-1 text-sm text-zk-text2">
+        <p className="mt-1 text-sm text-slate-600">
           {versions.length === 1
             ? "This issue has not been edited."
             : `${versions.length} versions of the title and description, newest first.`}
@@ -100,36 +100,46 @@ export default async function IssueHistoryPage({ params, searchParams }: Props) 
           return (
             <li
               key={version.number}
-              className="rounded-[20px] border border-zk-border bg-zk-surface p-5 sm:p-6"
+              className="rounded-xl border border-slate-200 bg-white p-4 sm:p-6"
               aria-labelledby={`version-${version.number}`}
             >
               <h2 id={`version-${version.number}`} className="flex flex-wrap items-baseline gap-x-2 text-sm">
-                <span className="font-bold text-zk-text">
+                <span className="font-semibold text-slate-900">
                   {version.number === 1 ? "Original report" : `Version ${version.number}`}
                 </span>
                 {version.isCurrent ? (
-                  <span className="rounded-full bg-zk-ok-bg px-2 py-0.5 text-xs font-bold text-zk-ok-fg">
+                  <span className="rounded-full bg-teal-50 px-2 py-0.5 text-xs font-medium text-teal-800">
                     Current
                   </span>
                 ) : null}
-                <span className="text-zk-text2">
+                <span className="text-slate-600">
                   {version.number === 1 ? "by" : "edited by"} {version.author}
                 </span>
-                <LocalTime className="text-xs text-zk-muted" date={version.at} />
+                <LocalTime className="text-xs text-slate-500" date={version.at} />
               </h2>
 
               {previous ? (
                 <div className="mt-4 space-y-3">
                   {title ? (
-                    <p className="text-sm text-zk-text2">
+                    <p className="text-sm text-slate-700">
                       <span className="font-medium">Title: </span>
-                      <del className="rounded-sm bg-zk-bad-bg px-1 text-zk-bad-fg">{previous.title}</del>
+                      <del className="rounded-sm bg-red-50 px-1 text-red-900">
+                        {title.removed.map((s, i) =>
+                          s.changed ? (
+                            <span key={i} className="bg-red-200/80">
+                              {s.text}
+                            </span>
+                          ) : (
+                            <span key={i}>{s.text}</span>
+                          ),
+                        )}
+                      </del>
                       <span aria-hidden> → </span>
                       <span className="sr-only"> changed to </span>
-                      <ins className="rounded-sm bg-zk-ok-bg px-1 text-zk-ok-fg no-underline">
+                      <ins className="rounded-sm bg-emerald-50 px-1 text-emerald-900 no-underline">
                         {title.added.map((s, i) =>
                           s.changed ? (
-                            <span key={i} className="bg-zk-ok-fg/20">
+                            <span key={i} className="bg-emerald-200/80">
                               {s.text}
                             </span>
                           ) : (
@@ -144,11 +154,11 @@ export default async function IssueHistoryPage({ params, searchParams }: Props) 
               ) : null}
 
               <details className="group mt-4" open={!previous}>
-                <summary className="cursor-pointer text-xs font-bold text-zk-accent hover:underline">
+                <summary className="cursor-pointer text-xs font-medium text-teal-700 hover:underline">
                   {previous ? "Show this version as it read" : "As reported"}
                 </summary>
-                <div className="mt-2 rounded-xl border border-zk-divider p-3">
-                  {previous ? <p className="font-bold text-zk-text">{version.title}</p> : null}
+                <div className="mt-2 rounded-lg border border-slate-100 p-3">
+                  {previous ? <p className="font-semibold text-slate-900">{version.title}</p> : null}
                   <RichText content={version.description} />
                 </div>
               </details>

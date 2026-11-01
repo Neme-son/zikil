@@ -205,3 +205,23 @@ describe("IssueAgentActivity (#448)", () => {
     expect(items[2]).toHaveTextContent("merger-agent");
   });
 });
+
+
+describe("Agent decision labels (#455)", () => {
+  beforeEach(() => cleanup());
+  it("distinguishes work, validation verdicts and completed reviews without relying on color", () => {
+    const base = { at: "2026-10-22T00:00:00Z", agentName: "Agent", personName: "Owner" };
+    render(<IssueAgentActivity decisions={[
+      { ...base, id: "claim", kind: "claimed" },
+      { ...base, id: "confirm", kind: "confirmed", severity: "medium" },
+      { ...base, id: "reject", kind: "rejected", notes: "Cannot reproduce" },
+      { ...base, id: "review", kind: "verdict", goodToMerge: false },
+      { ...base, id: "accept", kind: "accepted" },
+    ]} />);
+    for (const label of ["Work started", "Validation: Accept", "Validation: Reject", "Review completed", "Fix accepted"]) {
+      const badge = screen.getByText(label, { exact: label !== "Review completed" });
+      expect(badge.querySelector('svg[aria-hidden="true"]')).toBeInTheDocument();
+    }
+    expect(screen.getByText("Cannot reproduce")).toBeInTheDocument();
+  });
+});
