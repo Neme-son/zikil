@@ -29,8 +29,23 @@ export async function ziki(...args: string[]): Promise<CliResult> {
 }
 
 /** Runs a command as `agent` and expects it to succeed. */
-export async function ok(agent: Agent, command: string, flags: Record<string, string | number | boolean | string[]> = {}): Promise<Json> {
+/**
+ * Runs a command as `agent`. An agent's writes have a 600-a-minute guard
+ * against runaway loops (lib/agents/rate-budget.ts); on a fast machine the
+ * scenarios together can reach it. A real agent waits for the reset the 429
+ * names, and so does this, once and for at most 65 seconds.
+ */
+async function asAgent(agent: Agent, command: string, flags: Record<string, string | number | boolean | string[]>): Promise<CliResult> {
   const result = await ziki(command, ...toArgs(flags), "--as", agent);
+  const body = result.json?.body;
+  if (result.code !== 1 || result.json?.status !== 429 || body?.budget !== "write") return result;
+  const seconds = Math.min(65, Math.max(1, Number(body.resetSeconds) || 60));
+  await new Promise((resolve) => setTimeout(resolve, seconds * 1000));
+  return ziki(command, ...toArgs(flags), "--as", agent);
+}
+
+export async function ok(agent: Agent, command: string, flags: Record<string, string | number | boolean | string[]> = {}): Promise<Json> {
+  const result = await asAgent(agent, command, flags);
   expect(result.code, `${command} as ${agent} failed:\n${result.err}\n${result.out}`).toBe(0);
   return result.json;
 }
@@ -42,7 +57,7 @@ export async function refused(
   flags: Record<string, string | number | boolean | string[]>,
   status: number,
 ): Promise<Json> {
-  const result = await ziki(command, ...toArgs(flags), "--as", agent);
+  const result = await asAgent(agent, command, flags);
   expect(result.code, `${command} as ${agent} should have been refused:\n${result.out}`).toBe(1);
   expect(result.json?.status, `${command} as ${agent}: ${JSON.stringify(result.json?.body)}`).toBe(status);
   return result.json.body;
@@ -66,6 +81,7 @@ export async function fileIdea(agent: Agent, label: string): Promise<string> {
   // Scenario titles look alike on purpose, so skip the similar-title check (tested on its own).
   const created = await ok(agent, "create-idea", {
     title: unique(label),
+    summary: "Pressing Save on the page does nothing.\nThe change is lost when you leave.",
     description: "Steps: open the page and press Save. Expected: it saves. Actual: nothing happens.",
     idempotencyKey: randomUUID(),
     acknowledgeSimilar: true,
@@ -79,9 +95,10 @@ export async function fileIdea(agent: Agent, label: string): Promise<string> {
  * agent, converts it. Returns the new issue's id.
  */
 export async function toIssue(ideaId: string, givers: [Agent, Agent, Agent]): Promise<string> {
-  for (const agent of givers) {
-    await ok(agent, "give-idea-verdict", { id: ideaId, opinion: "good", summary: "Worth doing.", description: `${agent} thinks this is worth doing.` });
-  }
+  // Three people's verdicts, sent together: each is its own write, and the server locks the idea for each.
+  await Promise.all(givers.map((agent) =>
+    ok(agent, "give-idea-verdict", { id: ideaId, opinion: "good", summary: "Worth doing.", description: `${agent} thinks this is worth doing.` }),
+  ));
   const converted = await ok("dana", "convert-idea", { id: ideaId });
   expect(converted.ideaId).toBe(ideaId);
   return converted.issueId as string;
@@ -92,12 +109,17 @@ export async function fileIssue(agent: Agent, label: string, givers: [Agent, Age
   return toIssue(await fileIdea(agent, label), givers);
 }
 
-/** The sandbox agent Ziki offered the issue to, from each agent's work feed, if any. */
+/**
+ * The sandbox agent the issue is offered to, from each agent's work feed, if any.
+ * Only an award of a bid makes an offer (#bids-only-offers).
+ */
 export async function offeredTo(id: string): Promise<{ agent: Agent; offerId: string } | null> {
-  for (const agent of ["ada", "bob", "cara", "dana", "eli"] as const) {
-    const feed = await ok(agent, "work");
+  const agents = ["ada", "bob", "cara", "dana", "eli"] as const;
+  // Five read-only feed reads, sent together.
+  const feeds = await Promise.all(agents.map((agent) => ok(agent, "work")));
+  for (const [index, feed] of feeds.entries()) {
     const offer = (feed.items as { kind: string; key: string; issue?: { id: string } }[]).find((item) => item.kind === "offer" && item.issue?.id === id);
-    if (offer) return { agent, offerId: offer.key.replace(/^offer:/, "") };
+    if (offer) return { agent: agents[index], offerId: offer.key.replace(/^offer:/, "") };
   }
   return null;
 }
@@ -108,9 +130,23 @@ export async function feedItem(agent: Agent, kind: string, id: string): Promise<
   return (feed.items as { kind: string; issue?: { id: string }; actions?: { name: string }[] }[]).find((item) => item.kind === kind && item.issue?.id === id);
 }
 
-/** Confirms an issue the way the workflow needs: two independent real-accepts and a duplicate clearance. */
-export async function confirm(id: string, reviewers: [Agent, Agent], triager: Agent): Promise<void> {
-  for (const agent of reviewers) await ok(agent, "validate-issue", { id, kind: "real", verdict: "accept", severity: "high" });
-  const cleared = await ok(triager, "validate-issue", { id, kind: "duplicate", verdict: "reject" });
-  expect(cleared.confirmed).toBe(true);
+/**
+ * Confirms an issue the way the workflow needs and moves it to Open
+ * (#confirmation-weights): three working-class confirms reach the default
+ * threshold of 3 (the two named agents, then the third of ada, bob and cara),
+ * and then any agent moves the confirmed issue to Open.
+ */
+export async function confirm(id: string, confirmers: [Agent, Agent]): Promise<void> {
+  const [first, second] = confirmers;
+  const third = (["ada", "bob", "cara"] as const).find((agent) => agent !== first && agent !== second)!;
+  // Three people's confirmations, sent together; whichever lands last reaches the threshold.
+  const entries = await Promise.all([
+    ok(first, "confirm-issue", { id, verdict: "confirm", summary: "Reproduced it.", description: "Followed the steps; it fails as reported. lib/save.ts:42 fires the request twice." }),
+    ok(second, "confirm-issue", { id, verdict: "confirm", summary: "Reproduced it too.", description: "Same result on a second machine; not a duplicate. See lib/save.ts:42." }),
+    ok(third, "confirm-issue", { id, verdict: "confirm", summary: "Reproduced it as well.", description: "Fails in lib/save.ts:42 here too." }),
+  ]);
+  expect(entries.some((entry) => entry.confirmed)).toBe(true);
+  expect(await feedItem(first, "open_issue", id)).toBeTruthy();
+  const opened = await ok(first, "open-issue", { id });
+  expect(opened.status).toBe("open");
 }

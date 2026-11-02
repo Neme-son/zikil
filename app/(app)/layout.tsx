@@ -9,24 +9,22 @@ import { MAIN_CONTENT_ID, SkipLink } from "@/components/skip-link";
 import { PAGE_CONTAINER_CLASS } from "@/components/page-container";
 import { FocusMainOnNavigate } from "@/components/focus-main-on-navigate";
 import { KeyboardShortcuts } from "@/components/keyboard-shortcuts";
-import { isAdmin } from "@/lib/roles";
+import { isOrganizationAdmin, type OrganizationRole } from "@/lib/organization-role";
 import type { WorkspaceChoice } from "@/components/workspace-switcher";
 import { prisma } from "@/lib/prisma";
 import { currentTenantIdFor } from "@/lib/tenant-context";
+import { firstProjectSlugFor } from "@/lib/project-route";
 import { tenantsForUser } from "@/lib/tenants";
 import { countPendingEscalations } from "@/lib/agent-questions";
 import { loadOwnAgents } from "@/lib/dashboard-overview";
-import { pointTotals } from "@/lib/points/leaderboard";
-import { getPlatformRewardConfig } from "@/lib/points/platform-rewards";
-import { TARGET_POINTS } from "@/lib/points/rules";
+import { AgentsDock, type DockAgent } from "@/components/agents-dock";
+import { AGENTS_DOCK_HEIGHT } from "@/lib/agents-dock";
+import { agentActivity, agentEarnings } from "@/lib/points/agent-earnings";
 
 export default async function AppLayout({
   children,
-  modal,
 }: {
   children: React.ReactNode;
-  /** Intercepted routes shown over the page, e.g. the quick report (#report-modal). */
-  modal: React.ReactNode;
 }) {
   const session = await auth();
 
@@ -54,16 +52,20 @@ export default async function AppLayout({
   let workspaces: WorkspaceChoice[] = [];
   let activeTenantId: string | null = null;
   let tenantId: string | null = null;
+  let membershipRole: OrganizationRole | null = null;
   try {
     tenantId = await currentTenantIdFor(user.id);
     activeTenantId = tenantId;
     const memberships = await tenantsForUser(prisma, user.id, user.role);
+    membershipRole = memberships.find((tenant) => tenant.id === tenantId)?.role ?? null;
     workspaces = memberships
       .filter((tenant) => tenant.archivedAt === null)
       .map((tenant) => ({ id: tenant.id, name: tenant.name, slug: tenant.slug }));
   } catch (error) {
     console.error("[layout] workspace context failed", error);
   }
+  // For links on pages whose URL names no project yet (#project-urls).
+  const defaultProjectSlug = await firstProjectSlugFor(user.id).catch(() => null);
   // A missing Notification table must not take down every signed-in page.
   let unreadCount = 0;
   try {
@@ -75,15 +77,7 @@ export default async function AppLayout({
   }
 
   let pendingEscalationsCount = 0;
-  let points = 0;
-  let solvedTasks = 0;
-  let shellAgents: { id: string; name: string; avatar: string | null; level: string }[] = [];
-  let targetPoints = TARGET_POINTS;
-  try {
-    targetPoints = (await getPlatformRewardConfig(prisma)).target;
-  } catch (error) {
-    console.error("[layout] platform rewards failed", error);
-  }
+  let dockAgents: DockAgent[] = [];
   if (tenantId) {
     try {
       pendingEscalationsCount = await countPendingEscalations(user.id, tenantId);
@@ -91,15 +85,18 @@ export default async function AppLayout({
       console.error("[layout] pending escalations count failed", error);
     }
     try {
-      const totals = await pointTotals(prisma, tenantId, user.id);
-      points = totals.points;
-      solvedTasks = totals.solvedTasks;
-    } catch (error) {
-      console.error("[layout] points failed", error);
-    }
-    try {
       const agents = await loadOwnAgents({ userId: user.id, tenantId });
-      shellAgents = agents.map((agent) => ({ id: agent.id, name: agent.name, avatar: agent.avatar, level: agent.level }));
+      // #710: what each agent earned, from the point entries its work wrote.
+      const ids = agents.map((agent) => agent.id);
+      const startOfToday = new Date();
+      startOfToday.setHours(0, 0, 0, 0);
+      const [earned, activity, pending] = await Promise.all([
+        agentEarnings(prisma, tenantId, ids),
+        agentActivity(prisma, tenantId, ids, startOfToday),
+        prisma.agentRequest.groupBy({ by: ["agentId"], where: { agentId: { in: ids }, doneAt: null }, _count: { _all: true } }),
+      ]);
+      const pendingBy = new Map(pending.map((row) => [row.agentId, row._count._all]));
+      dockAgents = agents.map((agent) => ({ id: agent.id, name: agent.name, avatar: agent.avatar, status: agent.status, activity: agent.activity, earnedPoints: earned.get(agent.id) ?? 0, ...(activity.get(agent.id) ?? { bids: 0, comments: 0, pointsToday: 0 }), pendingRequests: pendingBy.get(agent.id) ?? 0 }));
     } catch (error) {
       console.error("[layout] agents failed", error);
     }
@@ -133,11 +130,9 @@ export default async function AppLayout({
           userId={user.id}
           workspaces={workspaces}
           activeTenantId={activeTenantId}
-          points={points}
-          solvedTasks={solvedTasks}
-          targetPoints={targetPoints}
-          agents={shellAgents}
+          defaultProjectSlug={defaultProjectSlug}
           reportFormUrl={REPORT_FORM_URL}
+          organizationAdmin={tenantId !== null && isOrganizationAdmin(membershipRole, user.role)}
         />
         <main
           id={MAIN_CONTENT_ID}
@@ -150,11 +145,12 @@ export default async function AppLayout({
           {children}
         </main>
       </div>
-      {modal}
+      {/* The page's foot stays clear of the agents strip, so everything scrolls above it. */}
+      {dockAgents.length ? <div aria-hidden="true" className="hidden shrink-0 lg:block" style={{ height: AGENTS_DOCK_HEIGHT }} /> : null}
+      <AgentsDock agents={dockAgents} />
       <FocusMainOnNavigate />
       <KeyboardShortcuts
         enabled={shortcutsEnabled}
-        dashboard={isAdmin(user.role)}
       />
     </div>
   );

@@ -6,7 +6,7 @@ import { requireUser } from "@/lib/auth-helpers";
 import { isTenantAdmin } from "@/lib/agents/membership";
 import { currentTenantIdFor, NO_TENANT_MESSAGE } from "@/lib/tenant-context";
 import { prisma } from "@/lib/prisma";
-import { nextProjectSlug, projectAreaSchema, projectSlugBase } from "@/app/(app)/projects/validation";
+import { nextProjectSlug, projectAreaSchema, urlSlugBase } from "@/app/(app)/projects/validation";
 
 export type ProjectAreaActionResult = { ok: true } | { ok: false; error: string };
 
@@ -27,7 +27,7 @@ async function projectSettingsAccess(slug: string) {
 
 function revalidateProject(slug: string) {
   revalidatePath(`/projects/${encodeURIComponent(slug)}/settings`);
-  revalidatePath("/issues");
+  revalidatePath("/[project]", "layout");
 }
 
 /** How many times a create re-reads the slugs after losing a race to the same slug. */
@@ -68,7 +68,7 @@ export async function createProjectAreaAction(
       where: { projectId: access.project.id },
       select: { slug: true },
     });
-    const areaSlug = nextProjectSlug(projectSlugBase(parsed.data.name), new Set(existing.map((area) => area.slug)));
+    const areaSlug = nextProjectSlug(urlSlugBase(parsed.data.name), new Set(existing.map((area) => area.slug)));
     try {
       await prisma.$transaction(async (tx) => {
         const area = await tx.projectArea.create({

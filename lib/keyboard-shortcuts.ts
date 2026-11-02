@@ -15,7 +15,6 @@ export type ShortcutAction =
   | "previous-row"
   | "new-issue"
   | "go-issues"
-  | "go-dashboard"
   | "go-notifications"
   | "show-help";
 
@@ -27,26 +26,13 @@ export type ShortcutSpec = {
   joiner?: "then" | "or";
 };
 
-export type ShortcutOptions = {
-  /** The dashboard is admin-only, so it's hidden for everyone else. */
-  dashboard?: boolean;
-};
-
-/**
- * What the cheat sheet lists, in order. The dashboard entry is omitted when
- * the signed-in user isn't an admin, since the route redirects them away.
- */
-export function shortcutGroups({
-  dashboard = true,
-}: ShortcutOptions = {}): { title: string; items: ShortcutSpec[] }[] {
+/** What the cheat sheet lists, in order. */
+export function shortcutGroups(): { title: string; items: ShortcutSpec[] }[] {
   const anywhere: ShortcutSpec[] = [
     { keys: ["n", "c"], label: "Report a new issue", action: "new-issue", joiner: "or" },
     { keys: ["Ctrl/Cmd+K"], label: "Search", action: "focus-search" },
     { keys: ["g", "i"], label: "Go to issues", action: "go-issues" },
   ];
-  if (dashboard) {
-    anywhere.push({ keys: ["g", "d"], label: "Go to dashboard", action: "go-dashboard" });
-  }
   anywhere.push(
     { keys: ["g", "n"], label: "Go to notifications", action: "go-notifications" },
     { keys: ["?"], label: "Show these shortcuts", action: "show-help" },
@@ -117,7 +103,6 @@ export function shortcutFor(
   target: TargetLike,
   state: SequenceState,
   now: number,
-  { dashboard = true }: ShortcutOptions = {},
 ): { action: ShortcutAction | null; state: SequenceState } {
   if (event.defaultPrevented || event.isComposing) return { action: null, state: IDLE };
   if (event.altKey) return { action: null, state: IDLE };
@@ -138,7 +123,6 @@ export function shortcutFor(
   if (state.pending === "g" && now - state.at <= SEQUENCE_TIMEOUT_MS) {
     if (key === "i") return { action: "go-issues", state: IDLE };
     if (key === "n") return { action: "go-notifications", state: IDLE };
-    if (key === "d" && dashboard) return { action: "go-dashboard", state: IDLE };
   }
   switch (key) {
     case "/":

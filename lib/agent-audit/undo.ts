@@ -1,8 +1,10 @@
-import type { PrismaClient, Prisma, Severity } from "@prisma/client";
+import type { PrismaClient, Prisma } from "@prisma/client";
 import { audit } from "@/lib/agents/audit";
 import { correct } from "@/lib/points/correct";
 import { pointSourceKey } from "@/lib/points/rules";
 import { isTenantAdminRole } from "@/lib/agents/membership";
+import { isConfirmed } from "@/lib/agent-api/confirmations";
+import { moveTo } from "@/lib/issue-substatus";
 
 /**
  * Reverses an agent action recorded in the audit log (#450).
@@ -14,9 +16,10 @@ import { isTenantAdminRole } from "@/lib/agents/membership";
  * the agent on the row being undone.
  *
  * Supported reversible actions:
- * - `issue.validated` — restores the severity the validation set, drops the
- *   confirmation if fewer than two independent accepts remain, and reverses
- *   the reporter points the confirmation awarded.
+ * - `issue.confirmation` — an agent's confirmation entry: it stops counting,
+ *   the issue goes back to Requires
+ *   confirmation if it is no longer confirmed, and the reporter points the
+ *   confirmation awarded are reversed.
  */
 
 type Db = PrismaClient | Prisma.TransactionClient;
@@ -136,64 +139,58 @@ export async function undoAuditEvent(
     }
 
     switch (event.action) {
-      case "issue.validated":
-        return undoValidation(tx, event);
+      case "issue.confirmation":
+        return undoConfirmation(tx, event);
       default:
         return { ok: true, message: "Action marked undone." };
     }
   });
 }
 
-/** Reverse an `issue.validated` audit event. */
-async function undoValidation(tx: Db, event: AuditEvent): Promise<UndoResult> {
+/**
+ * Reverse an `issue.confirmation` audit event: the agent's confirmation entry
+ * (#issue-confirmations). The entry stays, marked undone, so it stops counting; it
+ * reverses the reporter points if it confirmed
+ * the issue, and an Open issue that is no longer confirmed goes back to
+ * Requires confirmation. If the entry was given again since, the newer entry
+ * is left alone.
+ */
+async function undoConfirmation(tx: Db, event: AuditEvent): Promise<UndoResult> {
   const payload = (event.payload as {
-    validationId?: string;
+    confirmationId?: string;
+    entryAt?: string;
     confirmed?: boolean;
-    severity?: Severity;
-    previousSeverity?: Severity | null;
   } | null) ?? {};
-  const validationId = payload.validationId;
-  if (!validationId) {
-    return { ok: true, message: "Validation marked undone." };
+  const confirmationId = payload.confirmationId;
+  if (!confirmationId) {
+    return { ok: true, message: "Confirmation marked undone." };
   }
 
-  const validation = await tx.issueValidation.findUnique({
-    where: { id: validationId },
+  const confirmation = await tx.issueConfirmation.findUnique({
+    where: { id: confirmationId },
     select: {
       id: true,
       bugId: true,
-      kind: true,
       verdict: true,
-      severity: true,
-      previousSeverity: true,
+      undoneAt: true,
+      updatedAt: true,
     },
   });
-  if (!validation) {
-    return { ok: true, message: "Validation marked undone." };
+  if (!confirmation || confirmation.undoneAt) {
+    return { ok: true, message: "Confirmation marked undone." };
+  }
+  if (payload.entryAt && confirmation.updatedAt.toISOString() !== payload.entryAt) {
+    return { ok: true, message: "Confirmation marked undone. It was given again since, so the newer one stands." };
   }
 
-  // Restore the severity this validation set, if it changed the issue.
-  if (
-    validation.previousSeverity !== null &&
-    validation.severity !== null &&
-    validation.previousSeverity !== validation.severity
-  ) {
-    await tx.bug.update({
-      where: { id: validation.bugId },
-      data: { severity: validation.previousSeverity },
-    });
-  }
+  await tx.issueConfirmation.update({ where: { id: confirmation.id }, data: { undoneAt: new Date() } });
 
-  // If this validation was the one that confirmed the issue, reverse the
-  // reporter points it awarded. The correction reuses idempotency, so a
-  // second undo does not pay twice in reverse.
-  if (
-    payload.confirmed === true &&
-    validation.kind === "real" &&
-    validation.verdict === "accept"
-  ) {
+  // If this entry was the one that confirmed the issue, reverse the reporter
+  // points it awarded. The correction reuses idempotency, so a second undo
+  // does not pay twice in reverse.
+  if (payload.confirmed === true && confirmation.verdict === "confirm") {
     const bug = await tx.bug.findUnique({
-      where: { id: validation.bugId },
+      where: { id: confirmation.bugId },
       select: { id: true, tenantId: true, beneficiaryUserId: true, reporterId: true },
     });
     if (bug) {
@@ -211,5 +208,11 @@ async function undoValidation(tx: Db, event: AuditEvent): Promise<UndoResult> {
     }
   }
 
-  return { ok: true, message: "Validation undone." };
+  // #requires-confirmation: an Open issue that loses its confirmation goes back.
+  const issue = await tx.bug.findUnique({ where: { id: confirmation.bugId }, select: { substatus: true } });
+  if (issue?.substatus === "open" && !(await isConfirmed(confirmation.bugId, tx))) {
+    await tx.bug.update({ where: { id: confirmation.bugId }, data: moveTo("requires_confirmation") });
+  }
+
+  return { ok: true, message: "Confirmation undone." };
 }

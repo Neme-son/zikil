@@ -27,14 +27,18 @@ describe("the CLI itself", () => {
     const result = await ziki("commands");
     expect(result.code).toBe(0);
     expect(result.out.split("\n")).toHaveLength(CLI_TOOLS.length);
-    for (const command of ["create-idea", "vote", "dispatch", "save-notes", "admin-merge"]) expect(result.out).toContain(command);
+    for (const command of ["create-idea", "mark-important", "bid", "vote-bid", "upvote-comment", "award-bid", "suggest-close", "close-issue", "save-notes", "report-pr-status"]) expect(result.out).toContain(command);
+    // Offers come only from an awarded bid (#bids-only-offers); Ziki never merges on GitHub (#pr-reports).
+    for (const removed of ["request-offer", "dispatch", "admin-merge"]) expect(result.out).not.toMatch(new RegExp(`^${removed} `, "m"));
   });
 
   it("shows a command's flags with types and which are required", async () => {
-    const result = await ziki("help", "validate-issue");
+    const result = await ziki("help", "confirm-issue");
     expect(result.code).toBe(0);
-    expect(result.out).toMatch(/--kind <real\|format\|duplicate\|fix>\s+\(required\)/);
-    expect(result.out).toMatch(/--severity <low\|medium\|high\|critical>\n/);
+    expect(result.out).toMatch(/--verdict <confirm\|reject\|neutral>\s+\(required\)/);
+    expect(result.out).toMatch(/--duplicate-of-id\b/);
+    // Confirmations take no severity.
+    expect(result.out).not.toMatch(/--severity/);
   });
 
   it("rejects unknown commands, unknown flags and missing required flags as usage errors (exit 2)", async () => {

@@ -1,5 +1,5 @@
 import { expectNoA11yViolations } from "./axe";
-import { fileIssue, test } from "./fixtures";
+import { fileIssue, test, PROJECT } from "./fixtures";
 
 /**
  * Real-browser accessibility gate (#A11Y). The jsdom unit tests cover the
@@ -24,12 +24,12 @@ test.describe("accessibility", () => {
     test.use({ as: "user" });
 
     test("the issue list", async ({ page }) => {
-      await page.goto("/issues");
+      await page.goto(`${PROJECT}/issues/open`);
       await expectNoA11yViolations(page);
     });
 
     test("the report form", async ({ page }) => {
-      await page.goto("/issues/new");
+      await page.goto(`${PROJECT}/issues/new`);
       await expectNoA11yViolations(page);
     });
 
@@ -57,11 +57,20 @@ test.describe("accessibility", () => {
   test.describe("as an admin", () => {
     test.use({ as: "admin" });
 
-    test("the admin screens", async ({ page }) => {
-      await page.goto("/admin/users");
+    test("the organization admin screens", async ({ page }) => {
+      await page.goto(`${PROJECT}/org/members`);
       await expectNoA11yViolations(page);
 
-      await page.goto("/admin/categories");
+      await page.goto(`${PROJECT}/org/platforms`);
+      await expectNoA11yViolations(page);
+    });
+  });
+
+  test.describe("as a super admin", () => {
+    test.use({ as: "super" });
+
+    test("the site admin screen", async ({ page }) => {
+      await page.goto("/admin/users");
       await expectNoA11yViolations(page);
     });
   });
