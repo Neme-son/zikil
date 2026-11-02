@@ -1,11 +1,11 @@
 "use client";
 
-import { Children, isValidElement, useEffect, useId, useRef, useState, useTransition, type ReactNode } from "react";
+import { useEffect, useId, useMemo, useRef, useState, useTransition, type ReactNode } from "react";
 import Image from "next/image";
-import { ProjectNotesLink } from "@/components/project-notes-link";
-import { useRouter, useSearchParams } from "next/navigation";
-import { severities, statuses } from "@/lib/validations/issue";
-import { severityLabel, statusLabel } from "@/lib/labels";
+import { useParams, usePathname, useRouter, useSearchParams } from "next/navigation";
+import { ideasPath, issuesPath, statusFromSegment } from "@/lib/project-paths";
+import { statuses } from "@/lib/validations/issue";
+import { statusLabel } from "@/lib/labels";
 import { FINISHED_STATUS_FILTER, statusFilterLabel } from "@/lib/issue-state";
 import {
   BUG_SORT_OPTIONS,
@@ -38,102 +38,22 @@ import {
   type IssueSuggestion,
 } from "@/lib/issue-suggest";
 import { isTypingTarget } from "@/lib/keyboard-shortcuts";
-import { issuePath } from "@/lib/issue-ref";
 
 type TagType = { id: string; name: string; isActive?: boolean };
 
 type Suggestion =
   | { kind: "tag"; id: string; name: string }
-  | { kind: "issue"; id: string; number: number; title: string };
+  | { kind: "issue"; id: string; number: number; title: string; path: string };
 
 /** Long enough not to query on every keystroke, short enough to feel live. */
 const SEARCH_DEBOUNCE_MS = 300;
 
-/** Native radios keep the existing single-choice filters keyboard accessible. */
-function FilterSelect({ compact, id, value, onValueChange, onChoose, children, className, "aria-label": label }: {
-  compact: boolean; id: string; value: string; onValueChange: (value: string) => void;
+/** One of the filter dialog's single-choice filters, as a native select. */
+function FilterSelect({ id, value, onValueChange, children, className, "aria-label": label }: {
+  id: string; value: string; onValueChange: (value: string) => void;
   children: ReactNode; className?: string; "aria-label": string;
-  onChoose?: () => void;
 }) {
-  if (!compact) return <select id={id} value={value} onChange={(event) => onValueChange(event.target.value)} className={className} aria-label={label}>{children}</select>;
-  return (
-    <div id={id} role="radiogroup" aria-label={label} className="issues-filter-options">
-      {Children.toArray(children).map((child) => {
-        if (!isValidElement<{ value: string; children: ReactNode }>(child)) return null;
-        const option = child.props;
-        return (
-          <label key={option.value} className="issues-filter-option">
-            <input type="radio" name={`issues-filter-${id}`} value={option.value} checked={value === option.value} onChange={() => onValueChange(option.value)} onClick={onChoose}
-              onKeyDown={(event) => { if (event.key === "Enter" && onChoose) { event.preventDefault(); onChoose(); } }} />
-            <span className="issues-filter-check" aria-hidden="true" />
-            <span>{option.children}</span>
-          </label>
-        );
-      })}
-    </div>
-  );
-}
-
-function IssuesSort({ value, onChange }: { value: ReturnType<typeof parseBugSort>; onChange: (value: string) => void }) {
-  const [open, setOpen] = useState(false);
-  const rootRef = useRef<HTMLDivElement>(null);
-  const buttonRef = useRef<HTMLButtonElement>(null);
-  const panelId = useId();
-  const close = () => { setOpen(false); buttonRef.current?.focus(); };
-
-  useEffect(() => {
-    if (!open) return;
-    const positionPanel = () => {
-      const root = rootRef.current;
-      const panel = root?.querySelector<HTMLElement>('[role="dialog"]');
-      if (!root || !panel) return;
-      const anchor = root.getBoundingClientRect();
-      const bounds = panel.getBoundingClientRect();
-      const left = Math.max(16, Math.min(anchor.right - bounds.width, window.innerWidth - bounds.width - 16));
-      const top = Math.max(16, Math.min(anchor.bottom + 8, window.innerHeight - bounds.height - 16));
-      root.style.setProperty("--issues-sort-left", `${left}px`);
-      root.style.setProperty("--issues-sort-top", `${top}px`);
-    };
-    positionPanel();
-    window.addEventListener("resize", positionPanel);
-    document.addEventListener("scroll", positionPanel, true);
-    const frame = requestAnimationFrame(() => rootRef.current?.querySelector<HTMLInputElement>('input:checked')?.focus());
-    const outside = (event: PointerEvent) => {
-      if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
-    };
-    const escape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") { event.preventDefault(); setOpen(false); buttonRef.current?.focus(); }
-    };
-    const focusOut = (event: FocusEvent) => {
-      if (!rootRef.current?.contains(event.relatedTarget as Node)) setOpen(false);
-    };
-    const root = rootRef.current;
-    root?.addEventListener("focusout", focusOut);
-    document.addEventListener("keydown", escape);
-    document.addEventListener("pointerdown", outside);
-    return () => {
-      cancelAnimationFrame(frame); document.removeEventListener("pointerdown", outside);
-      window.removeEventListener("resize", positionPanel); document.removeEventListener("scroll", positionPanel, true);
-      root?.removeEventListener("focusout", focusOut); document.removeEventListener("keydown", escape);
-    };
-  }, [open]);
-
-  return (
-    <div ref={rootRef} className="issues-sort">
-      <button ref={buttonRef} type="button" className="issues-sort-trigger" aria-label="Sort issues" title={`Sort: ${bugSortLabels[value]}`} aria-haspopup="dialog" aria-expanded={open} aria-controls={open ? panelId : undefined}
-        onClick={() => setOpen((current) => !current)}>
-        <Image src="/icons/issues-sort.svg" width={16} height={16} alt="" />
-      </button>
-      {open ? (
-        <div id={panelId} className="issues-sort-popover" role="dialog" aria-label="Sort options">
-          <p className="issues-sort-heading">Sort by</p>
-          <FilterSelect compact id="issues-sort-order" aria-label="Sort order" value={value} onValueChange={onChange} onChoose={close}>
-            {BUG_SORT_OPTIONS.map((option) => <option key={option} value={option}>{bugSortLabels[option]}</option>)}
-          </FilterSelect>
-        </div>
-      ) : null}
-    </div>
-  );
+  return <select id={id} value={value} onChange={(event) => onValueChange(event.target.value)} className={className} aria-label={label}>{children}</select>;
 }
 
 /**
@@ -160,15 +80,32 @@ const FILTER_PARAMS = [
   TAGS_PARAM,
   "mine",
   "status",
-  "severity",
   PLATFORM_PARAM,
   AREA_PARAM,
   "sort",
   MILESTONE_PARAM,
 ];
 
+/** The Ideas lists' names in the list logic (the issue list's IDEAS_STATUS and REJECTED_IDEAS_STATUS). */
+const IDEAS_STATUS = "ideas";
+const REJECTED_IDEAS_STATUS = "rejected_ideas";
+
+/**
+ * The list URL for `params`: the status is the path (`/<slug>/issues/open`,
+ * #project-urls) and everything else stays in the query.
+ */
+function listHref(slug: string, params: URLSearchParams): string {
+  const next = new URLSearchParams(params.toString());
+  const status = next.get("status") || "all";
+  next.delete("status");
+  if (status === IDEAS_STATUS) return ideasPath(slug, "new", next);
+  if (status === REJECTED_IDEAS_STATUS) return ideasPath(slug, "rejected", next);
+  return issuesPath(slug, status, next);
+}
+
 /** The issues URL with `changes` applied and paging reset. */
 function hrefWithChanges(
+  slug: string,
   params: URLSearchParams,
   changes: Record<string, string>,
 ): string {
@@ -178,8 +115,7 @@ function hrefWithChanges(
     else next.delete(key);
   }
   next.delete("page");
-  const qs = next.toString();
-  return qs ? `/issues?${qs}` : "/issues";
+  return listHref(slug, next);
 }
 
 export function IssueFilters({
@@ -190,10 +126,7 @@ export function IssueFilters({
   shortcutsEnabled = true,
   stageCounts,
   compact = false,
-  trailing,
 }: {
-  /** Extra controls at the end of the search/filter/sort row (the platform menu). */
-  trailing?: ReactNode;
   tagTypes?: TagType[];
   platforms?: PlatformOption[];
   /** #289: open milestones first; closed ones stay selectable for history. */
@@ -206,7 +139,20 @@ export function IssueFilters({
   compact?: boolean;
 }) {
   const router = useRouter();
-  const params = useSearchParams();
+  const { project: slug } = useParams<{ project: string }>();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+  // The list is in the path; the filters read it as if it were `?status=`.
+  const segments = pathname?.split("/").filter(Boolean) ?? [];
+  const pathStatus = segments[1] === "ideas"
+    ? (segments[2] === "rejected" ? REJECTED_IDEAS_STATUS : IDEAS_STATUS)
+    : statusFromSegment(segments[2] ?? "") ?? "all";
+  const params = useMemo(() => {
+    const next = new URLSearchParams(searchParams?.toString() ?? "");
+    next.delete("status");
+    if (pathStatus !== "all") next.set("status", pathStatus);
+    return next;
+  }, [searchParams, pathStatus]);
   // #690: while a navigation kicked off from this control is in flight, expose
   // a busy state so typing/searching gets visible + announced feedback.
   const [isSearching, startSearchTransition] = useTransition();
@@ -300,7 +246,7 @@ export function IssueFilters({
     if (Object.entries(changes).every(([key, value]) => (params.get(key) ?? "") === value)) {
       return;
     }
-    const href = hrefWithChanges(params, changes);
+    const href = hrefWithChanges(slug, params, changes);
     startSearchTransition(() => {
       if (replace) router.replace(href);
       else router.push(href);
@@ -355,7 +301,7 @@ export function IssueFilters({
         skipLiveRef.current = null;
         return;
       }
-      const href = hrefWithChanges(new URLSearchParams(paramsString), { q: trimmed });
+      const href = hrefWithChanges(slug, new URLSearchParams(paramsString), { q: trimmed });
       startSearchTransition(() => {
         if (livePushedRef.current) router.replace(href);
         else {
@@ -365,7 +311,7 @@ export function IssueFilters({
       });
     }, SEARCH_DEBOUNCE_MS);
     return () => clearTimeout(timer);
-  }, [text, currentQuery, paramsString, router, startSearchTransition]);
+  }, [text, currentQuery, paramsString, router, startSearchTransition, slug]);
 
   // Matching issue titles for the dropdown (#671), also debounced.
   useEffect(() => {
@@ -407,6 +353,7 @@ export function IssueFilters({
           id: issue.id,
           number: issue.number,
           title: issue.title,
+          path: issue.path,
         }))
       : [];
   const suggestions = [...tagSuggestions, ...titleSuggestions];
@@ -444,7 +391,7 @@ export function IssueFilters({
     }
     setOpen(false);
     setActive(-1);
-    router.push(issuePath(suggestion.number));
+    router.push(suggestion.path);
   }
 
   function removeTag(name: string) {
@@ -458,8 +405,7 @@ export function IssueFilters({
     if (rest) next.set(TAGS_PARAM, rest);
     else next.delete(TAGS_PARAM);
     next.delete("page");
-    const qs = next.toString();
-    return qs ? `/issues?${qs}` : "/issues";
+    return listHref(slug, next);
   }
 
   const currentSort = parseBugSort(
@@ -477,7 +423,6 @@ export function IssueFilters({
   const activeFilterCount = [
     Boolean(currentStage),
     Boolean(params.get("status")),
-    Boolean(params.get("severity")),
     Boolean(currentMine),
     selectedNames.length > 0,
     currentPlatform === PLATFORM_NONE,
@@ -500,7 +445,8 @@ export function IssueFilters({
     setOpen(false);
     setActive(-1);
     setFilterOpen(false);
-    router.push("/issues");
+    // The compact toolbar sits under the status tabs, so clearing keeps the tab.
+    router.push(issuesPath(slug, compact ? pathStatus : "all"));
   }
 
   const milestoneValue =
@@ -602,7 +548,6 @@ export function IssueFilters({
           </div>
         </div>
 
-        {compact ? <ProjectNotesLink /> : null}
         <button type="button" onClick={applyQueryNow} disabled={isSearching} className={`inline-flex h-[42px] shrink-0 items-center gap-1.5 rounded-full border-0 bg-electric-blue-strong px-4 text-sm font-bold text-white shadow-[0_8px_20px_rgba(46,111,239,0.30)] transition-colors hover:brightness-105 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-electric-blue focus-visible:ring-offset-2 disabled:cursor-default disabled:opacity-70 ${compact ? "issues-search-submit" : ""}`}>
           {isSearching ? (
             <svg className="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" /><path className="opacity-90" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" /></svg>
@@ -613,6 +558,8 @@ export function IssueFilters({
         </button>
 
         <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
+          {/* The Issues page (compact) has no Filter button: the stages and the platform icon replace it. */}
+          {compact ? null : (
           <div className="relative shrink-0">
             <button
               ref={filterButtonRef}
@@ -646,44 +593,36 @@ export function IssueFilters({
                   {hasActiveFilters ? (
                     <button type="button" onClick={clearAllFilters} className="h-8 rounded-full px-2.5 text-[13px] font-bold text-zk-accent hover:bg-zk-tint">Reset</button>
                   ) : null}
-                  {compact ? <button type="button" aria-label="Close filters" title="Close filters" className="issues-filter-close" onClick={() => { setFilterOpen(false); filterButtonRef.current?.focus(); }}><Image src="/icons/issues-close.svg" width={18} height={18} alt="" /></button> : null}
                 </div>
 
                 <div className="max-h-[70vh] space-y-3.5 overflow-y-auto pr-1">
                   <div>
                     <label htmlFor="mine" className={fieldLabelClass}>Show</label>
-                    <FilterSelect compact={compact} aria-label="Show" id="mine" className={selectClass} value={currentMine === "reported" ? "created" : currentMine} onValueChange={(value) => update("mine", value)}>
+                    <FilterSelect aria-label="Show" id="mine" className={selectClass} value={currentMine === "reported" ? "created" : currentMine} onValueChange={(value) => update("mine", value)}>
                       <option value="">All issues</option>
                       {MINE_FILTER_OPTIONS.map((option) => (<option key={option} value={option}>{mineFilterLabels[option]}</option>))}
                     </FilterSelect>
                   </div>
                   <div>
                     <label htmlFor="stage" className={fieldLabelClass}>Kind</label>
-                    <FilterSelect compact={compact} aria-label="Kind" id="stage" className={selectClass} value={currentStage} onValueChange={(value) => update(STAGE_PARAM, value)}>
+                    <FilterSelect aria-label="Kind" id="stage" className={selectClass} value={currentStage} onValueChange={(value) => update(STAGE_PARAM, value)}>
                       <option value="">All issues</option>
                       {STAGE_OPTIONS.map((option) => (
                         <option key={option.value} value={option.value}>{stageCounts ? `${option.label} (${stageCounts[option.value]})` : option.label}</option>
                       ))}
                     </FilterSelect>
                   </div>
-                  {!compact ? <div>
+                  <div>
                     <label htmlFor="status" className={fieldLabelClass}>Status</label>
-                    <FilterSelect compact={compact} aria-label="Status" id="status" className={selectClass} value={params.get("status") ?? ""} onValueChange={(value) => update("status", value)}>
+                    <FilterSelect aria-label="Status" id="status" className={selectClass} value={params.get("status") ?? ""} onValueChange={(value) => update("status", value)}>
                       <option value="">All</option>
                       {statuses.map((status) => (<option key={status} value={status}>{statusLabel[status]}</option>))}
                       <option value={FINISHED_STATUS_FILTER}>Closed (incl. resolved)</option>
                     </FilterSelect>
-                  </div> : null}
-                  <div>
-                    <label htmlFor="severity" className={fieldLabelClass}>Severity</label>
-                    <FilterSelect compact={compact} aria-label="Severity" id="severity" className={selectClass} value={params.get("severity") ?? ""} onValueChange={(value) => update("severity", value)}>
-                      <option value="">All</option>
-                      {severities.map((severity) => (<option key={severity} value={severity}>{severityLabel[severity]}</option>))}
-                    </FilterSelect>
                   </div>
                   <div>
                     <label htmlFor="category" className={fieldLabelClass}>Category</label>
-                    <FilterSelect compact={compact} aria-label="Category" id="category" className={selectClass} value={selectedNames[0] ?? ""} onValueChange={(value) => update(TAGS_PARAM, serializeTags([value]))}>
+                    <FilterSelect aria-label="Category" id="category" className={selectClass} value={selectedNames[0] ?? ""} onValueChange={(value) => update(TAGS_PARAM, serializeTags([value]))}>
                       <option value="">All</option>
                       {Array.from(new Set(["Features", "Fixes", "Design", "Marketing", "Documentation", "Other", ...tagTypes.filter((t) => t.isActive !== false).map((t) => t.name)])).map((name) => (
                         <option key={name} value={name}>{name}</option>
@@ -693,7 +632,7 @@ export function IssueFilters({
                   {platformOptions.length > 0 ? (
                     <div>
                       <label htmlFor="platform" className={fieldLabelClass}>Platform</label>
-                      <FilterSelect compact={compact} aria-label="Platform" id="platform" className={selectClass} value={currentPlatform} onValueChange={(value) => update(PLATFORM_PARAM, value)}>
+                      <FilterSelect aria-label="Platform" id="platform" className={selectClass} value={currentPlatform} onValueChange={(value) => update(PLATFORM_PARAM, value)}>
                         <option value="">All</option>
                         {platformOptions.map((platform) => (<option key={platform.id} value={platform.id}>{platform.name}</option>))}
                         <option value={PLATFORM_NONE}>No platform</option>
@@ -703,7 +642,7 @@ export function IssueFilters({
                   {areas.length > 0 ? (
                     <div>
                       <label htmlFor="area" className={fieldLabelClass}>Area</label>
-                      <FilterSelect compact={compact} aria-label="Area" id="area" className={selectClass} value={currentArea} onValueChange={(value) => update(AREA_PARAM, value)}>
+                      <FilterSelect aria-label="Area" id="area" className={selectClass} value={currentArea} onValueChange={(value) => update(AREA_PARAM, value)}>
                         <option value="">All</option>
                         {areas.map((area) => <option key={area.id} value={area.id}>{area.name}</option>)}
                         <option value={AREA_NONE}>No area</option>
@@ -713,7 +652,7 @@ export function IssueFilters({
                   {milestones.length > 0 ? (
                     <div>
                       <label htmlFor="milestone" className={fieldLabelClass}>Milestone</label>
-                      <FilterSelect compact={compact} aria-label="Milestone" id="milestone" className={selectClass} value={milestoneValue} onValueChange={(value) => update(MILESTONE_PARAM, value)}>
+                      <FilterSelect aria-label="Milestone" id="milestone" className={selectClass} value={milestoneValue} onValueChange={(value) => update(MILESTONE_PARAM, value)}>
                         <option value="">All</option>
                         {milestones.map((m) => (<option key={m.id} value={m.id}>{m.title}{m.isClosed ? " (closed)" : ""}</option>))}
                         <option value={MILESTONE_NONE}>No milestone</option>
@@ -722,24 +661,21 @@ export function IssueFilters({
                   ) : null}
                   <div>
                     <label htmlFor="sort" className={fieldLabelClass}>Sort By</label>
-                    <FilterSelect compact={compact} aria-label="Sort By" id="sort" className={selectClass} value={currentSort} onValueChange={(value) => update("sort", value)}>
+                    <FilterSelect aria-label="Sort By" id="sort" className={selectClass} value={currentSort} onValueChange={(value) => update("sort", value)}>
                       {BUG_SORT_OPTIONS.map((option) => (<option key={option} value={option}>{bugSortLabels[option]}</option>))}
                     </FilterSelect>
                   </div>
                 </div>
 
                 <div className="flex gap-2 pt-1">
-                  <button type="button" onClick={() => setFilterOpen(false)} className="h-[42px] flex-1 rounded-full border border-zk-border bg-zk-surface font-bold text-zk-text hover:bg-zk-chip">{compact ? "Close" : "Cancel"}</button>
-                  <button type="button" onClick={() => setFilterOpen(false)} className="h-[42px] flex-1 rounded-full border-0 bg-electric-blue-strong font-bold text-white shadow-[0_8px_20px_rgba(46,111,239,0.30)] hover:brightness-105">{compact ? "Done" : "Apply filters"}</button>
+                  <button type="button" onClick={() => setFilterOpen(false)} className="h-[42px] flex-1 rounded-full border border-zk-border bg-zk-surface font-bold text-zk-text hover:bg-zk-chip">Cancel</button>
+                  <button type="button" onClick={() => setFilterOpen(false)} className="h-[42px] flex-1 rounded-full border-0 bg-electric-blue-strong font-bold text-white shadow-[0_8px_20px_rgba(46,111,239,0.30)] hover:brightness-105">Apply filters</button>
                 </div>
               </div>
             ) : null}
           </div>
+          )}
         </div>
-        {compact ? (
-          <IssuesSort value={currentSort} onChange={(value) => update("sort", value)} />
-        ) : null}
-        {trailing}
       </div>
 
       {selectedTags.length > 0 ? (
@@ -776,12 +712,6 @@ export function IssueFilters({
             <span className="inline-flex items-center gap-1 rounded-full border border-transparent bg-zk-ok-bg py-0.5 pl-2.5 pr-1.5 text-xs font-bold text-zk-ok-fg">
               Status: {statusFilterLabel(params.get("status") ?? "")}
               <button type="button" onClick={() => update("status", "")} aria-label="Remove status filter" className="ml-0.5 rounded-full p-0.5 hover:bg-zk-chip">✕</button>
-            </span>
-          ) : null}
-          {params.get("severity") ? (
-            <span className="inline-flex items-center gap-1 rounded-full border border-zk-warn-bd bg-zk-warn-bg py-0.5 pl-2.5 pr-1.5 text-xs font-bold text-zk-warn-fg">
-              Severity: {severityLabel[params.get("severity") as keyof typeof severityLabel] ?? params.get("severity")}
-              <button type="button" onClick={() => update("severity", "")} aria-label="Remove severity filter" className="ml-0.5 rounded-full p-0.5 hover:bg-zk-chip">✕</button>
             </span>
           ) : null}
           {selectedTags.map((type) => (

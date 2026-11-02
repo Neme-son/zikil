@@ -12,7 +12,7 @@ const fieldClass =
   "h-12 rounded-xl border-zk-border bg-zk-surface text-zk-text shadow-none placeholder:text-zk-muted focus:border-electric-blue focus:ring-electric-blue/20";
 
 export function SignupForm({
-  callbackUrl = "/dashboard",
+  callbackUrl = "/home",
 }: {
   callbackUrl?: string;
 }) {

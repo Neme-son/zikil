@@ -1,5 +1,6 @@
-import type { Prisma, PrismaClient, DisputeStatus, Severity } from "@prisma/client";
+import type { Prisma, PrismaClient, DisputeStatus } from "@prisma/client";
 import { z } from "zod";
+import { issueHref } from "@/lib/issue-ref";
 import { award, type PointAward } from "./award";
 import { getProjectRewardConfig } from "./platform-rewards";
 import {
@@ -62,7 +63,6 @@ export type DisputableBug = {
   tenantId: string;
   reporterId: string;
   assigneeId: string | null;
-  severity: Severity;
   projectId?: string | null;
 };
 
@@ -80,7 +80,7 @@ export type GrantResult = { ok: true; awarded: boolean } | { ok: false; error: s
 
 /** The canonical entry for the award a "missing" dispute asks for; null when there is nobody to award. */
 export function missingAwardEntry(
-  bug: Pick<DisputableBug, "id" | "tenantId" | "reporterId" | "assigneeId" | "severity">,
+  bug: Pick<DisputableBug, "id" | "tenantId" | "reporterId" | "assigneeId">,
   role: DisputeRole,
   rewardConfig?: ProjectRewardConfig | null,
 ): PointAward | null {
@@ -100,7 +100,7 @@ export function missingAwardEntry(
     userId: bug.assigneeId,
     bugId: bug.id,
     role: "solver",
-    points: calculateSolverPoints(bug.severity, rewardConfig),
+    points: calculateSolverPoints(rewardConfig),
     sourceKey: pointSourceKey("solver", bug.id, bug.assigneeId),
   };
 }
@@ -163,7 +163,7 @@ export async function grantMissingAward(
   db: Db,
   args: {
     dispute: DisputeRow;
-    bug: Pick<DisputableBug, "id" | "tenantId" | "reporterId" | "assigneeId" | "severity" | "projectId">;
+    bug: Pick<DisputableBug, "id" | "tenantId" | "reporterId" | "assigneeId" | "projectId">;
     role: DisputeRole;
     resolvedById: string;
   },
@@ -284,7 +284,7 @@ const disputeSelect = {
   createdAt: true,
   pointEntryId: true,
   requestedRole: true,
-  bug: { select: { id: true, number: true, title: true } },
+  bug: { select: { id: true, number: true, title: true, project: { select: { slug: true } } } },
   user: { select: { id: true, name: true } },
   pointEntry: { select: { id: true, points: true, role: true } },
 } satisfies Prisma.PointDisputeSelect;
@@ -303,6 +303,8 @@ export type DisputeView = {
   bugId: string;
   bugNumber: number;
   bugTitle: string;
+  /** The issue's address, `/<project-slug>/<number>`. */
+  bugPath: string;
   openerId: string;
   openerName: string;
   entry: { id: string; points: number; role: PointRole } | null;
@@ -324,6 +326,7 @@ function toView(row: DisputeRowWithRelations): DisputeView {
     bugId: row.bug.id,
     bugNumber: row.bug.number,
     bugTitle: row.bug.title,
+    bugPath: issueHref(row.bug),
     openerId: row.user.id,
     openerName: row.user.name,
     entry: row.pointEntry
@@ -445,7 +448,6 @@ export async function creditMissingAwards(
       tenantId: true,
       reporterId: true,
       assigneeId: true,
-      severity: true,
       status: true,
       isDeleted: true,
       duplicateOfId: true,
