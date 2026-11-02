@@ -5,14 +5,18 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 /** The issue page's stage panels: bids with their votes and the Award control only where it may be used, confirmations and their banner, and judgements and merge reviews with their replies. */
-const mocks = vi.hoisted(() => ({ addComment: vi.fn() }));
-vi.mock("@/app/actions/issues", () => ({ addCommentAction: mocks.addComment }));
+const mocks = vi.hoisted(() => ({ addComment: vi.fn(), editPullRequestUrl: vi.fn() }));
+vi.mock("@/app/actions/issues", () => ({
+  addCommentAction: mocks.addComment,
+  editPullRequestUrlAction: mocks.editPullRequestUrl,
+}));
 vi.mock("@/app/actions/issue-bids", () => ({ awardIssueBidAction: vi.fn() }));
 vi.mock("@/app/actions/confirmations", () => ({ giveConfirmationAction: vi.fn() }));
 
 import { MergeReviewsPanel, TestVerdictsPanel, type MergeReviewView, type TestVerdictView } from "@/components/issue-review-entries";
 import { IssueBidsPanel, type BidEntryView } from "@/components/issue-bids";
 import { IssueConfirmationsPanel, type ConfirmationEntryView, type ConfirmationsData } from "@/components/issue-confirmations";
+import { IssueLinks } from "@/components/issue-links";
 
 const PR = "https://github.com/emerjent/ziki/pull/42";
 
@@ -222,5 +226,47 @@ describe("IssueConfirmationsPanel past Requires confirmation", () => {
     const banner = screen.getByTestId("confirmation-banner");
     expect(banner).toHaveAttribute("data-confirmed", "true");
     expect(banner).toHaveTextContent(/Ada.*Bob/);
+  });
+});
+
+describe("IssueLinks (#edit-pr-link)", () => {
+  it("lets the contributor edit and replace a submitted pull request link, and hides Edit from other viewers", async () => {
+    mocks.editPullRequestUrl.mockResolvedValue({ ok: true });
+    const user = userEvent.setup();
+    const nextPr = "https://github.com/emerjent/ziki/pull/99";
+
+    const { unmount } = render(<IssueLinks links={[PR]} linkedPullRequestUrl={PR} bugId="bug1" canEditPullRequest={false} />);
+    expect(screen.queryByRole("button", { name: "Edit pull request link" })).toBeNull();
+    unmount();
+
+    render(<IssueLinks links={[PR]} linkedPullRequestUrl={PR} bugId="bug1" canEditPullRequest />);
+    await user.click(screen.getByRole("button", { name: "Edit pull request link" }));
+    const input = screen.getByRole("textbox", { name: "Pull request URL" });
+    expect(input).toHaveValue(PR);
+    await user.clear(input);
+    await user.type(input, nextPr);
+    await user.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => expect(mocks.editPullRequestUrl).toHaveBeenCalledTimes(1));
+    const [bugId, formData] = mocks.editPullRequestUrl.mock.calls[0] as [string, FormData];
+    expect(bugId).toBe("bug1");
+    expect(formData.get("pullRequestUrl")).toBe(nextPr);
+    expect(screen.getByRole("link", { name: "emerjent/ziki #99 · PR" })).toHaveAttribute("href", nextPr);
+  });
+
+  it("shows a validation error when the replacement pull request URL is rejected", async () => {
+    mocks.editPullRequestUrl.mockResolvedValue({
+      field: "pullRequestUrl",
+      fieldErrors: { pullRequestUrl: "That pull request is not in this project's repository." },
+    });
+    const user = userEvent.setup();
+    render(<IssueLinks links={[PR]} linkedPullRequestUrl={PR} bugId="bug1" canEditPullRequest />);
+    await user.click(screen.getByRole("button", { name: "Edit pull request link" }));
+    const input = screen.getByRole("textbox", { name: "Pull request URL" });
+    await user.clear(input);
+    await user.type(input, "https://github.com/other/repo/pull/10");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("That pull request is not in this project's repository."));
   });
 });

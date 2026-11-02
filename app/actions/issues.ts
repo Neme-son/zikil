@@ -37,6 +37,7 @@ import {
   createBugSchema,
   editBugContentSchema,
   editProofLinksSchema,
+  editPullRequestUrlSchema,
   updateBugSchema,
 } from "@/lib/validations/issue";
 import {
@@ -96,7 +97,9 @@ import { issueChangePayload, publishWebEvent } from "@/lib/agent-api/web-events"
 import { firstPullRequestLink } from "@/lib/github/pr-mention";
 import { CommentPlacementError, placeComment, type CommentPlacement } from "@/lib/comment-placement";
 import { standingAcceptance } from "@/lib/accepted-fix";
-import { reportedClosedUnmerged } from "@/lib/agent-api/pull-request-report";
+import { latestPullRequestReport, reportedClosedUnmerged } from "@/lib/agent-api/pull-request-report";
+import { isFormerNameOf } from "@/lib/github/former-repos";
+import { parseGitHubRepoUrl, parsePullRequestUrl, sameRepo } from "@/lib/github/pull-request-url";
 import {
   agentMentionNames,
   agentOwnerIds,
@@ -1259,6 +1262,194 @@ export async function editProofLinksAction(
         },
       });
     }
+  });
+
+  revalidatePath("/[project]", "layout");
+  revalidateIssue();
+  revalidatePath("/bugs");
+  revalidatePath(`/bugs/${bugId}`);
+  return { ok: true };
+}
+
+/**
+ * Updates or replaces the submitted GitHub pull request URL on an issue
+ * (#edit-pr-link). Allowed for the contributor who submitted the PR (or whose
+ * agent delivered it / holds the claim), the assignee, the reporter, or a
+ * tenant admin. Validates that the URL is a pull request in the project's
+ * repository and refreshes `pullRequestHeadSha`.
+ */
+export async function editPullRequestUrlAction(
+  bugId: string,
+  formData: FormData,
+): Promise<ActionResult> {
+  const user = await requireUser();
+  const userId = user.id;
+
+  const limit = checkRateLimit(
+    `edit-bug:${userId}`,
+    ACTION_RATE_LIMITS.editBug,
+  );
+  if (!limit.allowed) {
+    return { error: RATE_LIMIT_MESSAGE };
+  }
+
+  const existing = await prisma.bug.findUnique({
+    where: { id: bugId, ...bugInTenant(await currentTenantIdFor(userId)) },
+    select: {
+      id: true,
+      status: true,
+      proofLinks: true,
+      pullRequestUrl: true,
+      pullRequestHeadSha: true,
+      reporterId: true,
+      assigneeId: true,
+      isDeleted: true,
+      project: { select: { repoUrl: true } },
+      claims: {
+        where: { releasedAt: null, status: { in: ["active", "offered"] } },
+        select: { beneficiaryUserId: true, agent: { select: { ownerUserId: true } } },
+      },
+      deliveries: {
+        select: { beneficiaryUserId: true, pullRequestUrl: true, agent: { select: { ownerUserId: true } } },
+      },
+    },
+  });
+
+  if (!existing || existing.isDeleted) {
+    return { error: TICKET_EDIT_ERRORS.notFound };
+  }
+
+  if (existing.status === "resolved" || existing.status === "closed") {
+    return { error: "A resolved or closed issue's pull request link can't be replaced." };
+  }
+
+  const isClaimHolder = existing.claims.some(
+    (c) => c.beneficiaryUserId === userId || c.agent.ownerUserId === userId,
+  );
+  const isDeliverer = existing.deliveries.some(
+    (d) => d.beneficiaryUserId === userId || d.agent.ownerUserId === userId,
+  );
+  const mayEditPullRequest =
+    existing.assigneeId === userId ||
+    isClaimHolder ||
+    isDeliverer ||
+    canEditTicket({
+      actorId: userId,
+      actorRole: user.role,
+      membershipRole: (await currentTenantAccess(userId, user.role)).membershipRole,
+      reporterId: existing.reporterId,
+    });
+  if (!mayEditPullRequest) {
+    return { error: TICKET_EDIT_ERRORS.unauthorized };
+  }
+
+  const parsed = editPullRequestUrlSchema.safeParse({
+    pullRequestUrl: formData.get("pullRequestUrl") ?? "",
+  });
+  if (!parsed.success) {
+    return fromZodError(parsed.error);
+  }
+
+  const parsedPr = parsePullRequestUrl(parsed.data.pullRequestUrl);
+  if (!parsedPr) {
+    return fieldError(
+      "pullRequestUrl",
+      "Enter a valid GitHub pull request URL (https://github.com/owner/repo/pull/123).",
+    );
+  }
+
+  const repo = parseGitHubRepoUrl(existing.project?.repoUrl);
+  if (repo && !sameRepo(parsedPr, repo)) {
+    return fieldError(
+      "pullRequestUrl",
+      "That pull request is not in this project's repository.",
+    );
+  }
+
+  const nextPullRequestUrl = `https://github.com/${repo ? repo.owner : parsedPr.owner}/${repo ? repo.repo : parsedPr.repo}/pull/${parsedPr.number}`;
+  const previousPullRequestUrl = existing.pullRequestUrl;
+  if (nextPullRequestUrl === previousPullRequestUrl) {
+    return { ok: true };
+  }
+
+  const oldPr = previousPullRequestUrl ? parsePullRequestUrl(previousPullRequestUrl) : null;
+  const samePullRequest = Boolean(
+    oldPr &&
+      oldPr.number === parsedPr.number &&
+      repo &&
+      (sameRepo(oldPr, repo) || isFormerNameOf(oldPr, repo)),
+  );
+
+  const accepted = await standingAcceptance(prisma, bugId);
+  if (accepted && previousPullRequestUrl && !samePullRequest) {
+    return {
+      error:
+        "This issue's accepted fix is bound to a different pull request — link the accepted one again.",
+    };
+  }
+
+  const latestReport = !samePullRequest
+    ? await latestPullRequestReport(bugId, nextPullRequestUrl)
+    : null;
+  const nextHeadSha = samePullRequest
+    ? existing.pullRequestHeadSha
+    : (latestReport?.headSha ?? null);
+
+  const existingProofLinks = existing.proofLinks ?? [];
+  const nextProofLinks =
+    previousPullRequestUrl && existingProofLinks.includes(previousPullRequestUrl)
+      ? [...new Set(existingProofLinks.map((link) => (link === previousPullRequestUrl ? nextPullRequestUrl : link)))]
+      : existingProofLinks;
+
+  await prisma.$transaction(async (tx) => {
+    await tx.bug.update({
+      where: { id: bugId },
+      data: {
+        pullRequestUrl: nextPullRequestUrl,
+        pullRequestHeadSha: nextHeadSha,
+        proofLinks: nextProofLinks,
+        updatedAt: new Date(),
+      },
+    });
+
+    if (previousPullRequestUrl) {
+      await tx.delivery.updateMany({
+        where: { bugId, pullRequestUrl: previousPullRequestUrl },
+        data: {
+          pullRequestUrl: nextPullRequestUrl,
+          ...(nextHeadSha ? { headSha: nextHeadSha } : {}),
+        },
+      });
+    }
+
+    await publishWebEvent(tx, {
+      bugId,
+      type: "issue.updated",
+      actorUserId: userId,
+      payload: issueChangePayload({
+        pullRequestUrl: nextPullRequestUrl,
+        ...(nextProofLinks !== existingProofLinks ? { proofLinks: nextProofLinks } : {}),
+      }),
+    });
+
+    await tx.bugActivity.create({
+      data: {
+        bugId,
+        actorId: userId,
+        type: "edited",
+        summary: previousPullRequestUrl
+          ? `updated PR link to ${nextPullRequestUrl}`
+          : `linked PR ${nextPullRequestUrl}`,
+        metadata: {
+          field: "pullRequestUrl",
+          from: previousPullRequestUrl,
+          to: nextPullRequestUrl,
+          pullRequestUrl: nextPullRequestUrl,
+          headSha: nextHeadSha,
+          via: "editPullRequest",
+        },
+      },
+    });
   });
 
   revalidatePath("/[project]", "layout");

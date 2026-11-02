@@ -8,25 +8,32 @@ import { publish } from "@/lib/agent-api/events";
 import { parseIssueRef } from "@/lib/issue-ref";
 import { isFormerNameOf } from "@/lib/github/former-repos";
 import { parseGitHubRepoUrl, parsePullRequestUrl, sameRepo } from "@/lib/github/pull-request-url";
+import { standingAcceptance } from "@/lib/accepted-fix";
+import { latestPullRequestReport } from "@/lib/agent-api/pull-request-report";
 
 /**
- * Repairing a stale pull request link (#repair-pr-link).
+ * Repairing or updating a pull request link (#repair-pr-link, #edit-pr-link).
  *
  * Some issues link a pull request under a name the repository no longer has
  * (it was renamed from Zedu-Endor/issue-tracker and zeduchat/bug-tracker to
- * emerjent/ziki), and some links are reported missing on GitHub. An
- * independent manager agent replaces the link with a pull request in the
- * project's repository, told from its URL: the one it names, or, when it names
- * none, the same number in the project's repository. Ziki never asks GitHub
- * (#pr-reports); the new link has no report yet, so an independent agent checks
- * it on GitHub and reports it before anything that needs its state.
+ * emerjent/ziki), and some links are reported missing on GitHub or need to be
+ * replaced by the contributor who submitted them (for example after closing and
+ * reopening a PR, rebasing onto a new branch, or fixing a typo). The
+ * contributor holding or assigned to the issue (or who delivered its pull
+ * request), or an independent manager agent, replaces the link with a pull
+ * request in the project's repository, told from its URL: the one it names, or,
+ * when it names none, the same number in the project's repository. Ziki never
+ * asks GitHub (#pr-reports); the new link has no report unless an independent
+ * agent already reported it, so an independent agent checks it on GitHub and
+ * reports it before anything that needs its state.
  *
  * Judgements (`TestVerdict`) and merge reviews count only on the linked pull
  * request. When the new link is the same pull request moved (the old link's
  * repository is a former name of this one, `FORMER_REPOSITORY_NAMES`, or this
  * repository, and the number is the same), they, the delivery and any review
  * offers move with it and keep counting. When it is a different pull request,
- * they stay on the old address and stop counting: nobody judged the new code.
+ * judgements and merge reviews stay on the old address and stop counting:
+ * nobody judged the new code.
  */
 
 export const repairPullRequestSchema = z
@@ -77,9 +84,6 @@ export async function repairPullRequestLink(
   issueRef: string,
   input: Omit<RepairPullRequestInput, "projectId">,
 ): Promise<RepairResult> {
-  if (!hasLevel(agent.level, "manager")) {
-    return fail(403, "insufficient_level", "Only a manager or merger agent can repair a pull request link.");
-  }
   const named = input.pullRequestUrl === undefined ? null : parsePullRequestUrl(input.pullRequestUrl);
   if (input.pullRequestUrl !== undefined && !named) return fail(422, "invalid_url", "That is not a GitHub pull request URL.");
 
@@ -91,6 +95,7 @@ export async function repairPullRequestLink(
       status: true,
       pullRequestUrl: true,
       pullRequestHeadSha: true,
+      proofLinks: true,
       reporterId: true,
       beneficiaryUserId: true,
       assigneeId: true,
@@ -99,12 +104,39 @@ export async function repairPullRequestLink(
       claims: {
         select: { status: true, releasedAt: true, beneficiaryUserId: true, agentId: true, dispatcherUserId: true, agent: { select: { ownerUserId: true } } },
       },
+      deliveries: {
+        select: { id: true, pullRequestUrl: true, agentId: true, beneficiaryUserId: true, agent: { select: { ownerUserId: true } } },
+      },
     },
   });
   if (!bug) return fail(404, "not_found", "No such issue in this project.");
 
-  const conflict = reviewerConflict({ id: agent.agentId, ownerUserId: agent.ownerId }, bug);
-  if (conflict) return fail(403, "not_independent", new ReviewerNotIndependentError(conflict).message);
+  const isContributor =
+    bug.assigneeId === agent.ownerId ||
+    Boolean(
+      bug.claims?.some(
+        (c) =>
+          !c.releasedAt &&
+          (c.status === "active" || c.status === "offered") &&
+          (c.agentId === agent.agentId || c.beneficiaryUserId === agent.ownerId || c.agent?.ownerUserId === agent.ownerId),
+      ),
+    ) ||
+    Boolean(
+      bug.deliveries?.some(
+        (d) =>
+          d.agentId === agent.agentId || d.beneficiaryUserId === agent.ownerId || d.agent?.ownerUserId === agent.ownerId,
+      ),
+    );
+
+  if (!isContributor) {
+    if (!hasLevel(agent.level, "manager")) {
+      return fail(403, "insufficient_level", "Only a manager or merger agent, or the contributor who submitted the pull request, can repair or update a pull request link.");
+    }
+    const conflict = reviewerConflict({ id: agent.agentId, ownerUserId: agent.ownerId }, bug);
+    if (conflict) return fail(403, "not_independent", new ReviewerNotIndependentError(conflict).message);
+  } else if (!hasLevel(agent.level, "manager") && (bug.status === "resolved" || bug.status === "closed")) {
+    return fail(409, "status_changed", "A resolved or closed issue's pull request link can't be replaced by the contributor.");
+  }
 
   const previous = bug.pullRequestUrl;
   if (!previous) return fail(409, "no_pull_request", "This issue has no linked pull request to repair.");
@@ -126,15 +158,33 @@ export async function repairPullRequestLink(
   // The same pull request moved: same number, under a former name of this
   // repository (or this one, spelled differently).
   const samePullRequest = Boolean(old && old.number === target.number && (sameRepo(old, repo) || isFormerNameOf(old, repo)));
+
+  if (!samePullRequest && prisma.agentAuditEvent) {
+    const accepted = await standingAcceptance(prisma, bug.id);
+    if (accepted) {
+      return fail(409, "status_changed", "This issue's accepted fix is bound to a different pull request — link the accepted one again.");
+    }
+  }
+
   // The same pull request keeps the head its judgements were given on; a
-  // different one's head is unknown until someone reports it.
-  const headSha = samePullRequest ? bug.pullRequestHeadSha : null;
+  // different one refreshes from the latest report on the new link, or null
+  // until someone reports it.
+  const latestReport = !samePullRequest && prisma.pullRequestReport ? await latestPullRequestReport(bug.id, next) : null;
+  const headSha = samePullRequest ? bug.pullRequestHeadSha : (latestReport?.headSha ?? null);
+  const nextProofLinks =
+    Array.isArray(bug.proofLinks) && bug.proofLinks.includes(previous)
+      ? [...new Set(bug.proofLinks.map((link) => (link === previous ? next : link)))]
+      : undefined;
 
   const moved = await prisma.$transaction(async (tx) => {
     // Only from the link read above: someone may have linked another since.
     const changed = await tx.bug.updateMany({
       where: { id: bug.id, pullRequestUrl: previous },
-      data: { pullRequestUrl: next, pullRequestHeadSha: headSha },
+      data: {
+        pullRequestUrl: next,
+        pullRequestHeadSha: headSha,
+        ...(nextProofLinks ? { proofLinks: nextProofLinks } : {}),
+      },
     });
     if (changed.count !== 1) return null;
     const counts = { judgements: 0, mergeReviews: 0, deliveries: 0, reviewOffers: 0 };
@@ -145,6 +195,13 @@ export async function repairPullRequestLink(
       counts.mergeReviews = (await tx.mergeReview.updateMany({ where, data })).count;
       counts.deliveries = (await tx.delivery.updateMany({ where, data })).count;
       counts.reviewOffers = (await tx.reviewOffer.updateMany({ where, data })).count;
+    } else if (isContributor && tx.delivery) {
+      counts.deliveries = (
+        await tx.delivery.updateMany({
+          where: { bugId: bug.id, pullRequestUrl: previous },
+          data: { pullRequestUrl: next, ...(headSha ? { headSha } : {}) },
+        })
+      ).count;
     }
     await audit(
       agent,
