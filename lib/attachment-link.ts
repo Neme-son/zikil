@@ -2,11 +2,6 @@ import type { Prisma, PrismaClient } from "@prisma/client";
 
 type Db = Pick<PrismaClient, "attachment"> | Pick<Prisma.TransactionClient, "attachment">;
 
-/**
- * Links freshly uploaded files to the issue (and comment) being saved (#215).
- * Only the uploader's own, not-yet-linked files can be claimed, so nobody can
- * attach - or steal - someone else's upload by guessing its id.
- */
 /** Most files one description or comment links by reference. */
 export const MAX_REFERENCED_ATTACHMENTS = 20;
 
@@ -21,19 +16,28 @@ export function attachmentIdsInMarkdown(text: string | null | undefined): string
   return [...new Set(ids)].slice(0, MAX_REFERENCED_ATTACHMENTS);
 }
 
+/**
+ * What a file is attached to: an issue (and maybe one of its comments or
+ * confirmation entries), or an idea (#idea-table).
+ */
+export type AttachmentTarget = { bugId: string; commentId?: string | null; confirmationId?: string | null } | { ideaId: string };
+
+/**
+ * Links freshly uploaded files to the issue, comment or idea being saved (#215).
+ * Only the uploader's own, not-yet-linked files can be claimed, so nobody can
+ * attach - or steal - someone else's upload by guessing its id.
+ */
 export async function linkAttachments(
   db: Db,
-  {
-    ids,
-    uploaderId,
-    bugId,
-    commentId = null,
-  }: { ids: string[]; uploaderId: string; bugId: string; commentId?: string | null },
+  { ids, uploaderId, ...target }: { ids: string[]; uploaderId: string } & AttachmentTarget,
 ): Promise<number> {
   if (ids.length === 0) return 0;
   const result = await db.attachment.updateMany({
-    where: { id: { in: ids }, uploaderId, bugId: null, commentId: null },
-    data: { bugId, commentId },
+    where: { id: { in: ids }, uploaderId, bugId: null, ideaId: null, commentId: null, confirmationId: null },
+    data:
+      "ideaId" in target
+        ? { ideaId: target.ideaId }
+        : { bugId: target.bugId, commentId: target.commentId ?? null, confirmationId: target.confirmationId ?? null },
   });
   return result.count;
 }

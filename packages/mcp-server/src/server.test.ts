@@ -32,21 +32,23 @@ describe("tools over MCP", () => {
     expect(tools.map((tool) => tool.name).sort()).toEqual(TOOLS.map((tool) => tool.name).sort());
     const comment = tools.find((tool) => tool.name === "ziki_comment")!;
     const properties = comment.inputSchema.properties as Record<string, { description?: string; maxLength?: number; enum?: string[] }>;
-    expect(properties.body.maxLength).toBe(2000);
-    expect(properties.body.description).toMatch(/2000/);
-    expect(properties.type.enum).toContain("delivery");
+    expect(properties.body.maxLength).toBe(10000);
+    // A comment goes on the issue itself at any stage, replies to a comment there, or replies to one entry; it has no type or metadata.
+    expect(properties.type).toBeUndefined();
+    expect(properties.metadata).toBeUndefined();
+    expect(properties.parentId.description).toMatch(/comment on the issue itself/);
+    expect(properties.bidId.description).toMatch(/bid/);
     expect(comment.inputSchema.required).toEqual(expect.arrayContaining(["id", "body"]));
   });
 
   it("lists issues with filters and the bearer key", async () => {
     fetchMock.mockResolvedValueOnce(json({ items: [{ id: "i1" }], nextCursor: null }));
-    const result = await call("ziki_list_issues", { status: "open", area: "none", stage: "reported", limit: 10 });
+    const result = await call("ziki_list_issues", { status: "open", area: "none", limit: 10 });
     const { url, init } = sent();
     expect(url.pathname).toBe("/api/v1/issues");
     expect(Object.fromEntries(url.searchParams)).toEqual({
       status: "open",
       area: "none",
-      stage: "reported",
       limit: "10",
       projectId: "proj_1",
     });
@@ -55,25 +57,35 @@ describe("tools over MCP", () => {
     expect(JSON.stringify(result.content)).toContain("i1");
   });
 
-  it("comments on an issue", async () => {
-    await call("ziki_comment", { id: "i1", body: "Fixed", type: "delivery", metadata: { prUrl: "https://github.com/o/r/pull/1" } });
+  it("replies to an entry on an issue", async () => {
+    await call("ziki_comment", { id: "i1", summary: "The plan works.", body: "Thanks, that plan works.", bidId: "bid1" });
     const { url, init } = sent();
     expect(init.method).toBe("POST");
     expect(url.pathname).toBe("/api/v1/issues/i1/comments");
-    expect(JSON.parse(init.body as string)).toEqual({ body: "Fixed", type: "delivery", metadata: { prUrl: "https://github.com/o/r/pull/1" } });
+    expect(JSON.parse(init.body as string)).toEqual({ summary: "The plan works.", body: "Thanks, that plan works.", bidId: "bid1" });
   });
 
   it("covers the issue lifecycle routes", async () => {
     const cases: Array<[string, Record<string, unknown>, string, string]> = [
-      ["ziki_volunteer", { id: "i1", note: "I can" }, "POST", "/api/v1/issues/i1/bid"],
-      ["ziki_request_offer", { id: "i1" }, "POST", "/api/v1/issues/i1/offer"],
+      ["ziki_bid", { id: "i1", summary: "I can fix this.", description: "I reproduced it and know the fix." }, "POST", "/api/v1/issues/i1/bid"],
+      ["ziki_vote_bid", { id: "bid1" }, "POST", "/api/v1/bids/bid1/votes"],
+      ["ziki_upvote_comment", { id: "c9" }, "POST", "/api/v1/comments/c9/votes"],
+      ["ziki_award_bid", { id: "bid1" }, "POST", "/api/v1/bids/bid1/award"],
       ["ziki_accept_offer", { id: "c1" }, "POST", "/api/v1/offers/c1/accept"],
       ["ziki_heartbeat", { id: "i1" }, "POST", "/api/v1/issues/i1/heartbeat"],
-      ["ziki_link_pull_request", { id: "i1", pullRequestUrl: "https://github.com/o/r/pull/9" }, "POST", "/api/v1/issues/i1/github"],
-      ["ziki_validate_issue", { id: "i1", kind: "real", verdict: "accept", severity: "high" }, "POST", "/api/v1/issues/i1/validations"],
-      ["ziki_submit_test_result", { id: "i1", goodToMerge: true }, "POST", "/api/v1/issues/i1/test-results"],
+      ["ziki_deliver", { id: "i1", pullRequestUrl: "https://github.com/o/r/pull/9", summary: "Fixed it.", description: "How.", testResults: "1 passed" }, "POST", "/api/v1/issues/i1/delivery"],
+      ["ziki_confirm_issue", { id: "i1", verdict: "confirm", summary: "Reproduced it.", description: "Steps and result." }, "POST", "/api/v1/issues/i1/confirmations"],
+      ["ziki_list_confirmations", { id: "i1" }, "GET", "/api/v1/issues/i1/confirmations"],
+      ["ziki_submit_test_result", { id: "i1", goodToMerge: true, summary: "Good to merge.", description: "Tested on the branch." }, "POST", "/api/v1/issues/i1/test-results"],
+      ["ziki_list_test_verdicts", { id: "i1" }, "GET", "/api/v1/issues/i1/test-results"],
+      ["ziki_merge_fix", { id: "i1", verdict: "reject", summary: "Reject.", description: "Add a regression test." }, "POST", "/api/v1/issues/i1/merge"],
+      ["ziki_list_merge_reviews", { id: "i1" }, "GET", "/api/v1/issues/i1/merge-reviews"],
       ["ziki_ask_owner", { body: "Which endpoint?", bugId: "i1" }, "POST", "/api/v1/questions"],
       ["ziki_read_inbox", { unread: true, wait: 0 }, "GET", "/api/v1/inbox"],
+      ["ziki_suggest_close", { id: "i1", reason: "duplicate", summary: "#2 covers it.", evidence: "#2 asks for the same export fix.", duplicateOf: 2 }, "POST", "/api/v1/issues/i1/close-suggestions"],
+      ["ziki_close_issue", { id: "i1", reason: "not_reproducible", evidence: "Three runs on main, request ids r1 to r3, all pass." }, "POST", "/api/v1/issues/i1/close"],
+      ["ziki_reopen_issue", { id: "i1", evidence: "Fails again: request id r9." }, "POST", "/api/v1/issues/i1/reopen"],
+      ["ziki_withdraw_issue", { id: "i1" }, "POST", "/api/v1/issues/i1/withdraw"],
     ];
     for (const [name, args, method, pathname] of cases) {
       const result = await call(name, args);
@@ -83,9 +95,9 @@ describe("tools over MCP", () => {
     }
   });
 
-  it("creates an issue without sending fields the route rejects", async () => {
-    await call("ziki_create_issue", { title: "Bug title", description: "Steps to reproduce it" });
-    expect(JSON.parse(sent().init.body as string)).toEqual({ title: "Bug title", description: "Steps to reproduce it" });
+  it("files an idea, with its required summary, without sending fields the route rejects", async () => {
+    await call("ziki_create_idea", { title: "Bug title", summary: "Pressing Save does nothing on the page.", description: "Steps to reproduce it" });
+    expect(JSON.parse(sent().init.body as string)).toEqual({ title: "Bug title", summary: "Pressing Save does nothing on the page.", description: "Steps to reproduce it" });
     expect((sent().init.headers as Record<string, string>)["Idempotency-Key"]).toBeTruthy();
   });
 
@@ -99,7 +111,7 @@ describe("tools over MCP", () => {
 
   it("rejects invalid input without calling the API", async () => {
     fetchMock.mockClear();
-    const result = await call("ziki_comment", { id: "i1", body: "x".repeat(2001) });
+    const result = await call("ziki_comment", { id: "i1", body: "x".repeat(10001) });
     expect(result.isError).toBe(true);
     expect(fetchMock).not.toHaveBeenCalled();
   });

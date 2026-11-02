@@ -3,6 +3,7 @@ import type { AgentLevel } from "@prisma/client";
 import { AGENT_LEVEL_LABELS } from "@/lib/agents/levels";
 import { agentActionLabel } from "@/lib/agent-audit/labels";
 import { LocalTime } from "@/components/local-time";
+import { issueHref } from "@/lib/issue-ref";
 import { RelativeTime } from "@/components/relative-time";
 import { AgentAvatar } from "@/components/agent-avatar";
 import {
@@ -16,6 +17,8 @@ export type AgentProfileData = {
   id: string;
   name: string;
   model: string | null;
+  /** The owner's avatar pick; null wears the automatic one. */
+  avatar: string | null;
   level: AgentLevel;
   revokedAt: Date | null;
   createdAt: Date;
@@ -30,7 +33,7 @@ export type AgentActivityItem = {
   id: string;
   createdAt: Date;
   action: string;
-  bug: { id: string; number: number; title: string } | null;
+  bug: { id: string; number: number; title: string; project: { slug: string } } | null;
   target: string | null;
   undone: boolean;
 };
@@ -39,10 +42,13 @@ export type AgentActivityItem = {
 export function AgentProfileCard({
   agent,
   title,
+  avatarControl = null,
   settings = null,
 }: {
   agent: AgentProfileData;
   title: React.ReactNode;
+  /** Stands in for the avatar when the viewer may change it: the avatar, opening a picker. */
+  avatarControl?: React.ReactNode;
   /** Rename and level controls, for those who may change them. */
   settings?: React.ReactNode;
 }) {
@@ -54,7 +60,7 @@ export function AgentProfileCard({
   return (
     <section className={`${agentsSurface} space-y-5 p-5 sm:p-6`} aria-label="Profile">
       <div className="flex items-start gap-4">
-        <AgentAvatar agentId={agent.id} size={72} />
+        {avatarControl ?? <AgentAvatar agentId={agent.id} avatar={agent.avatar} size={72} />}
         <div className="min-w-0 space-y-1.5">
           {title}
           <div className="flex flex-wrap items-center gap-2">
@@ -130,7 +136,7 @@ export function AgentActivity({ items }: { items: AgentActivityItem[] }) {
                 {item.bug ? (
                   <>
                     {" "}
-                    <Link href={`/issues/${item.bug.id}`} className={agentsLink}>
+                    <Link href={issueHref(item.bug)} className={agentsLink}>
                       #{item.bug.number} {item.bug.title}
                     </Link>
                   </>

@@ -8,12 +8,13 @@ import { releaseClaim, releaseSchema } from "@/lib/agent-api/offer";
  * issue it holds (#547): declines a pending offer, or releases an active
  * claim it can't finish. Body (optional): `{ "reason": "…" }`.
  *
- * 200 `{ claimId, issueId, reason: "declined" | "agent", reopened, reofferedTo }`.
+ * 200 `{ claimId, issueId, reason: "declined" | "agent", reopened }`. The issue
+ * waits in Open for bids; nobody is offered it in turn.
  * 409 when the agent holds no offer or claim on the issue.
  */
 export async function POST(request: NextRequest, context: { params: Promise<{ id: string }> }) {
   const { id } = await context.params;
-  return agentIssueRequest(request, "claims.release", "contributor", id, async (agent) => {
+  return agentIssueRequest(request, "claims.release", "working", id, async (agent) => {
     const raw = request.headers.get("content-length") === "0" ? {} : await issueJson(request).catch(() => ({}));
     const parsed = releaseSchema.safeParse(raw ?? {});
     if (!parsed.success) return NextResponse.json({ error: "Invalid release request." }, { status: 400 });

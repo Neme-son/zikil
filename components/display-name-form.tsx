@@ -5,17 +5,22 @@ import { updateDisplayNameAction, type DisplayNameResult } from "@/app/actions/s
 import { FieldError, useFieldErrors } from "@/components/ui/field-errors";
 import { useToast } from "@/components/ui/toast";
 import { DISPLAY_NAME_MAX } from "@/lib/display-name";
+import { Avatar } from "@/components/avatar";
 
 const FORM_ID = "display-name";
 
 /** Change how your name appears on issues and comments (#293). */
 export function DisplayNameForm({
   initialName,
+  initialImage,
   avatarInitials,
+  showAvatar = true,
 }: {
   initialName: string;
+  initialImage?: string | null;
   /** Optional initials shown beside the field (settings Account card). */
   avatarInitials?: string;
+  showAvatar?: boolean;
 }) {
   const formRef = useRef<HTMLFormElement>(null);
   const toast = useToast();
@@ -53,26 +58,17 @@ export function DisplayNameForm({
     }
   }, [result, show, clear, toast]);
 
-  const initials =
-    avatarInitials ??
-    (savedName.trim()
-      ? savedName
-          .trim()
-          .split(/\s+/)
-          .slice(0, 2)
-          .map((part) => part[0]?.toUpperCase() ?? "")
-          .join("")
-      : "?");
-
   return (
     <form ref={formRef} action={action} className="space-y-4" noValidate>
       <div className="flex flex-wrap items-center gap-4">
-        <span
-          className="flex h-16 w-16 shrink-0 items-center justify-center rounded-full bg-electric-blue-strong text-[22px] font-extrabold text-white"
-          aria-hidden="true"
-        >
-          {initials}
-        </span>
+        {showAvatar && (
+          <Avatar
+            name={avatarInitials || savedName}
+            image={initialImage}
+            size="lg"
+            className="!h-16 !w-16 !text-[22px]"
+          />
+        )}
         <label className="flex min-w-0 flex-1 flex-col gap-1.5 text-[13px] font-bold text-zk-text">
           Display name
           <span className="flex flex-wrap gap-2.5">

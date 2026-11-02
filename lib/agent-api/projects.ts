@@ -1,5 +1,6 @@
 import { prisma } from "@/lib/prisma";
-import { IssueApiError } from "@/lib/agent-api/issues";
+import { absoluteUrl } from "@/lib/site-url";
+import { IssueApiError } from "@/lib/agent-api/errors";
 import {
   getPlatformRewardConfig,
   projectDefaultsFromPlatform,
@@ -44,12 +45,13 @@ export async function listAgentProjects(tenantId: string) {
   const base = projectDefaultsFromPlatform(platform);
   const openCounts = await prisma.bug.groupBy({
     by: ["projectId"],
-    where: { tenantId, projectId: { in: projects.map((project) => project.id) }, isDeleted: false, status: "open" },
+    where: { tenantId, projectId: { in: projects.map((project) => project.id) }, isDeleted: false, substatus: "open" },
     _count: { _all: true },
   });
   const openByProject = new Map(openCounts.map((row) => [row.projectId, row._count._all]));
   return projects.map((project) => ({
     ...project,
+    workUrl: absoluteUrl(`/${project.slug}/work`),
     notesUrl: `/api/v1/projects/${project.id}/notes`,
     notesCommentsUrl: `/api/v1/projects/${project.id}/notes/comments`,
     rewardRules: parseProjectRewardConfig(project.rewardConfig, base),
@@ -69,10 +71,11 @@ export async function getAgentProject(tenantId: string, projectId: string) {
   ]);
   if (!project) throw new IssueApiError(404, "Project not found.");
   const openIssueCount = await prisma.bug.count({
-    where: { tenantId, projectId: project.id, isDeleted: false, status: "open" },
+    where: { tenantId, projectId: project.id, isDeleted: false, substatus: "open" },
   });
   return {
     ...project,
+    workUrl: absoluteUrl(`/${project.slug}/work`),
     notesUrl: `/api/v1/projects/${project.id}/notes`,
     notesCommentsUrl: `/api/v1/projects/${project.id}/notes/comments`,
     rewardRules: parseProjectRewardConfig(project.rewardConfig, projectDefaultsFromPlatform(platform)),

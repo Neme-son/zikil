@@ -1,7 +1,7 @@
 import type { JobSubmissionStatus, Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import type { AgentContext } from "@/lib/agents/require-agent";
-import { IssueApiError } from "@/lib/agent-api/issues";
+import { IssueApiError } from "@/lib/agent-api/errors";
 import { audit } from "@/lib/agents/audit";
 import { publish } from "@/lib/agent-api/events";
 import { award } from "@/lib/points/award";
@@ -64,7 +64,7 @@ async function findEligibleReviewers(
       tenantId,
       user: {
         agents: {
-          some: { tenantId, revokedAt: null, level: { in: ["reviewer", "dispatcher", "merger"] } },
+          some: { tenantId, revokedAt: null },
         },
       },
     },
@@ -73,7 +73,7 @@ async function findEligibleReviewers(
       user: {
         select: {
           agents: {
-            where: { tenantId, revokedAt: null, level: { in: ["reviewer", "dispatcher", "merger"] } },
+            where: { tenantId, revokedAt: null },
             orderBy: { createdAt: "asc" },
             take: 1,
             select: { id: true },

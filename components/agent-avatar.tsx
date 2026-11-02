@@ -1,7 +1,10 @@
+import { avatarLook, type AgentLook } from "@/lib/agents/avatars";
+
 /**
- * A little robot face for an agent. Its colors, antenna, eyes and mouth come
- * from the agent's id, so an agent always looks the same and two agents
- * rarely look alike. Decorative: the agent's name is always shown beside it.
+ * A little robot face for an agent: the one its owner picked, or else one whose
+ * colors, antenna, eyes and mouth come from the agent's id, so an agent always
+ * looks the same and two agents rarely look alike. Decorative: the agent's name
+ * is always shown beside it.
  */
 
 const PALETTES = [
@@ -26,9 +29,7 @@ function seedOf(id: string): number {
   return hash >>> 0;
 }
 
-export type AgentLook = { palette: number; antenna: number; eyes: number; mouth: number; cheeks: boolean };
-
-/** Which features an agent gets. Exported so tests can check it is stable. */
+/** Which features an agent gets when its owner hasn't picked one. Exported so tests can check it is stable. */
 export function agentLook(id: string): AgentLook {
   const seed = seedOf(id);
   return {
@@ -141,14 +142,17 @@ function Mouth({ kind }: { kind: number }) {
 
 export function AgentAvatar({
   agentId,
+  avatar = null,
   size = 48,
   className = "",
 }: {
   agentId: string;
+  /** The owner's pick (`Agent.avatar`); null or unknown falls back to the automatic robot. */
+  avatar?: string | null;
   size?: number;
   className?: string;
 }) {
-  const look = agentLook(agentId);
+  const look = avatarLook(avatar) ?? agentLook(agentId);
   const { bg, head } = PALETTES[look.palette]!;
   return (
     <svg

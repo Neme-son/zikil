@@ -3,7 +3,7 @@
 import { fromZodError } from "@/lib/form-errors";
 import { revalidatePath } from "next/cache";
 import { revalidateIssue } from "@/lib/revalidate-issue";
-import { expireTag, TAGS } from "@/lib/lookups";
+import { expireTag, TAGS } from "@/lib/cache-tags";
 import { prisma } from "@/lib/prisma";
 import { requireUser } from "@/lib/auth-helpers";
 import { platformScopeFor } from "@/lib/categories";
@@ -17,9 +17,8 @@ export type CategoryActionResult = {
 
 function revalidatePlatforms() {
   expireTag(TAGS.platforms);
-  revalidatePath("/admin/categories");
-  revalidatePath("/issues/new");
-  revalidatePath("/issues");
+  revalidatePath("/[project]/org", "layout");
+  revalidatePath("/[project]", "layout");
   revalidatePath("/bugs/new");
   revalidatePath("/bugs");
 }
@@ -172,7 +171,7 @@ export async function updateCategoryAction(
 
   revalidatePlatforms();
   for (const bugId of linkedBugIds) {
-    revalidateIssue(bugId);
+    revalidateIssue();
     revalidatePath(`/bugs/${bugId}`);
   }
   return { ok: true };

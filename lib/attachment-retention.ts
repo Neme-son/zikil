@@ -23,7 +23,7 @@ export const SWEEP_BATCH = 500;
 type Db = Pick<PrismaClient, "attachment">;
 
 function unlinkedBefore(cutoff: Date) {
-  return { bugId: null, commentId: null, redesignProposalId: null, createdAt: { lt: cutoff } };
+  return { bugId: null, ideaId: null, commentId: null, redesignProposalId: null, createdAt: { lt: cutoff } };
 }
 
 /**
@@ -110,9 +110,9 @@ export async function sweepOrphanedAttachments(
     unlinked = removed.count;
   }
 
-  // 2. Purge attachments whose parent bug was marked deleted
+  // 2. Purge attachments whose parent bug or idea was marked deleted
   const staleBugs = await db.attachment.findMany({
-    where: { bug: { isDeleted: true } },
+    where: { OR: [{ bug: { isDeleted: true } }, { idea: { isDeleted: true } }] },
     select: { id: true },
     take: batchSize,
   });

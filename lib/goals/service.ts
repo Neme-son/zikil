@@ -1,9 +1,9 @@
-import type { Prisma } from "@prisma/client";
+import { Prisma } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 import { prisma } from "@/lib/prisma";
 import type { AgentContext } from "@/lib/agents/require-agent";
 import { assertKeyProject } from "@/lib/agents/require-agent";
-import { IssueApiError } from "@/lib/agent-api/issues";
+import { IssueApiError } from "@/lib/agent-api/errors";
 import { audit } from "@/lib/agents/audit";
 import { publish } from "@/lib/agent-api/events";
 import {
@@ -349,7 +349,10 @@ export async function splitGoalPool(
 
   return prisma.$transaction(async (tx) => {
     const existing = await tx.goalAllocation.findMany({
-      where: { sourceKey: { in: rows.map((row) => row.sourceKey) } },
+      where: {
+        goalId: goal.id,
+        sourceKey: { in: rows.map((row) => row.sourceKey) },
+      },
       select: { sourceKey: true },
     });
     if (existing.length) {
@@ -365,7 +368,20 @@ export async function splitGoalPool(
     if (guard.count === 0) {
       throw new IssueApiError(409, "This split would over-allocate the goal's budget pool.");
     }
-    if (rows.length) await tx.goalAllocation.createMany({ data: rows });
+    if (rows.length) {
+      try {
+        await tx.goalAllocation.createMany({ data: rows });
+      } catch (error) {
+        if (
+          (error instanceof Prisma.PrismaClientKnownRequestError ||
+            (typeof error === "object" && error !== null && "code" in error)) &&
+          (error as { code: unknown }).code === "P2002"
+        ) {
+          throw new IssueApiError(409, "This split was already applied; reuse a new sourceKey to split again.");
+        }
+        throw error;
+      }
+    }
 
     const fresh = await tx.goal.findUniqueOrThrow({ where: { id: goal.id }, select: goalSelect });
     const allocations = await tx.goalAllocation.findMany({

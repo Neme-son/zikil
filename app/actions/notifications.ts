@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/prisma";
 import { requireUser } from "@/lib/auth-helpers";
-import { expireTag, TAGS } from "@/lib/lookups";
+import { expireTag, TAGS } from "@/lib/cache-tags";
 import { currentTenantIdFor, notificationInTenant } from "@/lib/tenant-context";
 
 /** A bounded preview, scoped exactly like the current workspace's feed (#615). */

@@ -1,7 +1,7 @@
 import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import type { AgentContext } from "@/lib/agents/require-agent";
-import { IssueApiError } from "@/lib/agent-api/issues";
+import { IssueApiError } from "@/lib/agent-api/errors";
 import { assertKeyProject } from "@/lib/agents/require-agent";
 import { audit } from "@/lib/agents/audit";
 import { publish } from "@/lib/agent-api/events";
@@ -75,11 +75,12 @@ export async function createJob(agent: AgentContext, input: CreateJobInput): Pro
 }
 
 /** Lists a project's jobs, newest first (#617). */
-export async function listJobs(tenantId: string, projectId: string, take = 50) {
+/** `take: null` lists every job (the work feed has no cap). */
+export async function listJobs(tenantId: string, projectId: string, take: number | null = 50) {
   return prisma.job.findMany({
     where: { tenantId, projectId },
     orderBy: [{ createdAt: "desc" }, { id: "desc" }],
-    take,
+    take: take ?? undefined,
     select: jobSelect,
   });
 }

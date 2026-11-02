@@ -12,10 +12,8 @@ import {
   categoryChangedSummary,
   commentedSummary,
   commentPreview,
-  createdSummary,
   deletedSummary,
   restoredSummary,
-  severityChangedSummary,
   statusChangedSummary,
   typeChangedSummary,
   unboostedSummary,
@@ -28,7 +26,6 @@ import {
   resolveSessionUserId,
   SESSION_EXPIRED_MESSAGE,
 } from "@/lib/session-user";
-import { MAX_COMMENT_DEPTH, commentDepth } from "@/lib/comments";
 import {
   extractMentionedUserIds,
   newlyMentionedUserIds,
@@ -47,6 +44,7 @@ import {
   DOWNVOTES_REMOVED_MESSAGE,
   isValidVoteDirection,
   reconcileVoteCount,
+  tallyVoteGroups,
 } from "@/lib/voting";
 import {
   canDeleteTicket,
@@ -68,8 +66,7 @@ import {
   getProofLinkChanges,
   TICKET_EDIT_ERRORS,
 } from "@/lib/ticket-editing";
-import { Prisma, type ActivityType } from "@prisma/client";
-import { isBugNumberConflict, repairBugNumberSequence } from "@/lib/bug-number";
+import { Prisma, type ActivityType, type Substatus } from "@prisma/client";
 import { notifyLater } from "@/lib/notify";
 import { ensureWatching } from "@/lib/watch";
 import { parseResolutionNote } from "@/lib/resolution-note";
@@ -81,14 +78,13 @@ import { attachmentIdsInMarkdown, linkAttachments } from "@/lib/attachment-link"
 import {
   bugInTenant,
   currentTenantIdFor,
-  defaultProjectIdFor,
   NO_TENANT_MESSAGE,
 } from "@/lib/tenant-context";
 import { currentTenantAccess } from "@/lib/tenant-access";
-import { awardSolver } from "@/lib/points/award";
-import { isConfirmed } from "@/lib/agent-api/validation";
+import { award, awardSolver } from "@/lib/points/award";
+import { isConfirmed } from "@/lib/agent-api/confirmations";
 import { correct } from "@/lib/points/correct";
-import { pointSourceKey } from "@/lib/points/rules";
+import { VOTE_POINTS, importanceSourceKey, pointSourceKey } from "@/lib/points/rules";
 import {
   checkRateLimit,
   consumeRateLimit,
@@ -97,15 +93,18 @@ import {
 } from "@/lib/rate-limit";
 import { publish } from "@/lib/agent-api/events";
 import { issueChangePayload, publishWebEvent } from "@/lib/agent-api/web-events";
-import { firstPullRequestLink, pullRequestAttachment } from "@/lib/github/pr-mention";
-import { isPullRequestClosedUnmerged, standingAcceptance } from "@/lib/github/merge-pr";
+import { firstPullRequestLink } from "@/lib/github/pr-mention";
+import { CommentPlacementError, placeComment, type CommentPlacement } from "@/lib/comment-placement";
+import { standingAcceptance } from "@/lib/accepted-fix";
+import { reportedClosedUnmerged } from "@/lib/agent-api/pull-request-report";
 import {
   agentMentionNames,
   agentOwnerIds,
   mentionedAgents,
   type MentionedAgent,
 } from "@/lib/agent-mentions";
-import { issuePath } from "@/lib/issue-ref";
+import { ideaPath } from "@/lib/project-paths";
+import { ENTRY_SUBSTATUS, moveTo } from "@/lib/issue-substatus";
 
 export type ActionResult = {
   error?: string;
@@ -184,14 +183,16 @@ async function requireUserId() {
   return resolved.userId;
 }
 
-/** Creates a bug as the signed-in user; only admins may set severity/assignee. */
+/**
+ * Files a report as the signed-in user. Every report is an idea
+ * (#idea-table): it takes verdicts until an agent converts it, which
+ * creates the issue. Ideas have no assignee.
+ */
 export async function createBugAction(
   formData: FormData,
 ): Promise<ActionResult> {
   const user = await requireUser();
   const userId = user.id;
-  const access = await currentTenantAccess(userId, user.role);
-  const admin = access.admin;
 
   const limit = await consumeRateLimit(
     `create-bug:${userId}`,
@@ -199,28 +200,6 @@ export async function createBugAction(
   );
   if (!limit.allowed) {
     return { error: RATE_LIMIT_MESSAGE };
-  }
-
-  const rawAssignee = formData.get("assigneeId");
-  const targetAssigneeId =
-    rawAssignee === "" || rawAssignee === "unassigned" || rawAssignee === null || rawAssignee === undefined
-      ? null
-      : typeof rawAssignee === "string"
-        ? rawAssignee.trim()
-        : null;
-
-  if (targetAssigneeId) {
-    if (
-      !canAssignTicket({
-        actorId: userId,
-        actorRole: user.role,
-        membershipRole: access.membershipRole,
-        currentAssigneeId: null,
-        targetAssigneeId,
-      })
-    ) {
-      return { error: TICKET_ASSIGN_ERRORS.unauthorized };
-    }
   }
 
   // Auto-generate title from description if omitted or blank (for simplified report intake)
@@ -237,13 +216,11 @@ export async function createBugAction(
     }
   }
 
-  // Non-admins cannot set severity at creation; assignee validated above.
   const parsed = createBugSchema.safeParse({
     title: titleStr,
     description: formData.get("description"),
-    severity: admin ? formData.get("severity") || "medium" : "medium",
     typeId: formData.get("typeId") || "",
-    assigneeId: targetAssigneeId || "",
+    assigneeId: "",
     categoryId: formData.get("categoryId") || "",
     areaId: formData.get("areaId") || "",
     proofLinks: formData.get("proofLinks") || "",
@@ -253,32 +230,22 @@ export async function createBugAction(
     return fromZodError(parsed.error);
   }
 
-  const assigneeId =
-    parsed.data.assigneeId && parsed.data.assigneeId.length > 0
-      ? parsed.data.assigneeId
-      : null;
-
   const typeId =
     parsed.data.typeId && parsed.data.typeId.length > 0
       ? parsed.data.typeId
       : null;
 
-  // #425: the issue goes into the reporter's tenant. No membership, no issue.
+  // #425: the idea goes into the reporter's tenant. No membership, no idea.
   const tenantId = await currentTenantIdFor(userId);
-  const projectId = tenantId ? await defaultProjectIdFor(prisma, tenantId) : null;
-  if (!tenantId || !projectId) {
+  // #project-urls: the project the form was opened in, and only if it is in this workspace.
+  const requestedProjectId = typeof formData.get("projectId") === "string" ? String(formData.get("projectId")) : "";
+  const targetProject = tenantId && requestedProjectId
+    ? await prisma.project.findFirst({ where: { id: requestedProjectId, tenantId, archivedAt: null }, select: { id: true, slug: true } })
+    : null;
+  if (!tenantId || !targetProject) {
     return { error: NO_TENANT_MESSAGE };
   }
-
-  if (assigneeId) {
-    const assignee = await prisma.user.findFirst({
-      where: { id: assigneeId, memberships: { some: { tenantId } } },
-      select: { id: true },
-    });
-    if (!assignee) {
-      return fieldError("assigneeId", "Assignee not found in this workspace");
-    }
-  }
+  const projectId = targetProject.id;
 
   if (typeId) {
     const issueType = await issueTypeForCreate(typeId, tenantId);
@@ -298,7 +265,7 @@ export async function createBugAction(
   const areaId = parsed.data.areaId && parsed.data.areaId.length > 0
     ? parsed.data.areaId
     : null;
-  // #502: mentions resolve only to members of the issue's tenant.
+  // #502: mentions resolve only to members of the idea's tenant.
   const description = await resolveTenantMentions(prisma, tenantId, parsed.data.description);
 
   if (categoryId) {
@@ -319,117 +286,64 @@ export async function createBugAction(
     if (!area) return fieldError("areaId", "Area not found in this project.");
   }
 
-  // Always open at creation — createBugSchema rejects client status.
-  const issueData = {
-    tenantId,
-    projectId,
-    beneficiaryUserId: userId,
-    title: parsed.data.title,
-    description,
-    severity: admin ? parsed.data.severity : "medium",
-    status: "open" as const,
-    voteCount: 0,
-    typeId,
-    proofLinks: parsed.data.proofLinks,
-    reporterId: userId,
-    assigneeId,
-    categoryId,
-    areaId,
-    // Reporter and assignee watch the issue from the start (#216).
-    watches: {
-      create: [...new Set([userId, assigneeId].filter((id): id is string => Boolean(id)))].map(
-        (watcherId) => ({ userId: watcherId }),
-      ),
-    },
-    activities: {
-      create: {
-        actorId: userId,
-        type: "created" as const,
-        summary: createdSummary(parsed.data.title),
-        metadata: {
-          field: "title",
-          to: parsed.data.title,
-        } as Prisma.InputJsonValue,
-      },
-    },
-  };
-
-  let bug;
+  let idea: { id: string; number: number };
   try {
-    bug = await prisma.bug.create({ data: issueData });
+    idea = await prisma.$transaction(async (tx) => {
+      const created = await tx.idea.create({
+        data: {
+          tenantId,
+          projectId,
+          beneficiaryUserId: userId,
+          reporterId: userId,
+          title: parsed.data.title,
+          description,
+          typeId,
+          proofLinks: parsed.data.proofLinks,
+          categoryId,
+          areaId,
+        },
+        select: { id: true, number: true },
+      });
+      // Files uploaded while writing the report (#215), and images pasted
+      // or dropped into the description (#305).
+      await linkAttachments(tx, {
+        ids: [
+          ...new Set([
+            ...parseAttachmentIds(formData.get("attachmentIds")),
+            ...attachmentIdsInMarkdown(description),
+          ]),
+        ],
+        uploaderId: userId,
+        ideaId: created.id,
+      });
+      // #600 / #534: agents hear about ideas people file.
+      await publish(tx, {
+        tenantId,
+        type: "idea.created",
+        projectId,
+        payload: {
+          ideaId: created.id,
+          ideaNumber: created.number,
+          projectId,
+          reporterId: userId,
+          beneficiaryUserId: userId,
+          isReport,
+          actor: { kind: "user", id: userId, name: user.name ?? null },
+        },
+      });
+      return created;
+    });
   } catch (error) {
     const foreignKey = foreignKeyError(error);
     if (foreignKey) return { error: foreignKey };
-    // The issue-number sequence can sit behind MAX(number) and then every
-    // create hits a unique violation, which the form shows as a 500.
-    if (isBugNumberConflict(error)) {
-      try {
-        await repairBugNumberSequence(prisma);
-        bug = await prisma.bug.create({ data: issueData });
-      } catch (retryError) {
-        const retryForeignKey = foreignKeyError(retryError);
-        if (retryForeignKey) return { error: retryForeignKey };
-        console.error("[issues] create failed after repairing the issue number", retryError);
-        return { error: "Could not save the issue. Try again." };
-      }
-    } else if (
-      error instanceof Prisma.PrismaClientKnownRequestError &&
-      error.code === "P2002"
-    ) {
-      return { error: "That issue could not be saved because it conflicts with an existing one. Try again." };
-    } else {
-      throw error;
-    }
+    throw error;
   }
 
-  // Files uploaded while writing the report (#215).
-  // …and images pasted or dropped into the description (#305).
-  await linkAttachments(prisma, {
-    ids: [
-      ...new Set([
-        ...parseAttachmentIds(formData.get("attachmentIds")),
-        ...attachmentIdsInMarkdown(description),
-      ]),
-    ],
-    uploaderId: userId,
-    bugId: bug.id,
-  });
-
-  // #600 / #534: agents hear about issues people file, published once with complete payload.
-  // The issue already exists, so a failed event mustn't fail the report.
-  try {
-    await publishWebEvent(prisma, {
-      bugId: bug.id,
-      type: "issue.created",
-      actorUserId: userId,
-      payload: {
-        reporterId: userId,
-        projectId,
-        beneficiaryUserId: userId,
-        isReport,
-      },
-    });
-  } catch (error) {
-    console.error("[issues] issue.created event failed", error);
-  }
-
-  const events: NotificationEvent[] = [];
-  const actor = { actorId: userId, actorName: user.name ?? "Someone", bugId: bug.id, bugTitle: bug.title };
-  const mentioned = extractMentionedUserIds(description);
-  if (mentioned.length > 0) {
-    events.push({ ...actor, kind: "mentioned", place: "description", recipientIds: mentioned });
-  }
-  if (assigneeId) {
-    events.push({ ...actor, kind: "assignee_changed", fromUserId: null, toUserId: assigneeId });
-  }
-  if (events.length > 0) notifyLater(...events);
-
-  revalidatePath("/issues");
-  revalidatePath("/bugs");
-  redirect(issuePath(bug.number));
+  revalidatePath("/[project]", "layout");
+  redirect(ideaPath(targetProject.slug, idea.number));
 }
 
-/** Updates status (assignee/admin) and severity/assignee (admin) and logs activity. */
+/** Updates status (assignee/admin) and type/assignee (admin) and logs activity. */
 export async function updateBugAction(
   bugId: string,
   formData: FormData,
@@ -448,7 +362,6 @@ export async function updateBugAction(
       area: { select: { id: true, name: true } },
       type: { select: { id: true, name: true } },
       milestone: { select: { id: true, title: true } },
-      project: { select: { githubInstallationId: true } },
     },
   });
   if (!existing || existing.isDeleted) {
@@ -505,12 +418,8 @@ export async function updateBugAction(
         membershipRole: access.membershipRole,
         currentAssigneeId: existing.assigneeId,
         targetAssigneeId,
-        voteCount: existing.voteCount,
       })
     ) {
-      if (targetAssigneeId && typeof existing.voteCount === "number" && existing.voteCount < 3) {
-        return { error: TICKET_ASSIGN_ERRORS.needsVotes };
-      }
       return { error: TICKET_ASSIGN_ERRORS.unauthorized };
     }
   }
@@ -520,7 +429,6 @@ export async function updateBugAction(
   const typeRaw = formData.get("typeId");
   const parsed = updateBugSchema.safeParse({
     status: requestedStatus,
-    severity: admin ? formData.get("severity") || undefined : undefined,
     typeId: admin
       ? typeRaw === "" || typeRaw === "none"
         ? null
@@ -564,24 +472,20 @@ export async function updateBugAction(
   if ("error" in parsedNote) return { error: parsedNote.error, field: "resolutionNote" };
   const resolutionNote = parsedNote.note;
 
-  // #642: a closed, unmerged pull request cannot resolve the issue.
+  // #642: a pull request reported closed without merging cannot resolve the
+  // issue (#pr-reports: the latest independent report, not GitHub).
   if (
     parsed.data.status === "resolved" &&
     existing.status !== "resolved" &&
-    existing.pullRequestUrl
+    existing.pullRequestUrl &&
+    (await reportedClosedUnmerged(existing.id, existing.pullRequestUrl))
   ) {
-    const isClosed = await isPullRequestClosedUnmerged(
-      existing.pullRequestUrl,
-      existing.project?.githubInstallationId,
-    );
-    if (isClosed) {
-      return { error: "The linked pull request is closed without being merged." };
-    }
+    return { error: "The linked pull request is reported closed without being merged." };
   }
 
   const data: {
     status?: typeof parsed.data.status;
-    severity?: typeof parsed.data.severity;
+    substatus?: Substatus;
     typeId?: string | null;
     assigneeId?: string | null;
     categoryId?: string | null;
@@ -591,9 +495,8 @@ export async function updateBugAction(
     boostedAt?: Date | null;
   } = {};
 
-  if (parsed.data.status) data.status = parsed.data.status;
+  if (parsed.data.status && parsed.data.status !== existing.status) Object.assign(data, moveTo(ENTRY_SUBSTATUS[parsed.data.status]));
   if (admin) {
-    if (parsed.data.severity) data.severity = parsed.data.severity;
     if (parsed.data.typeId !== undefined) {
       data.typeId = parsed.data.typeId === "" ? null : parsed.data.typeId;
     }
@@ -617,14 +520,14 @@ export async function updateBugAction(
   };
   const pending: PendingActivity[] = [];
 
-  if (data.status && data.status !== existing.status) {
+  if (data.substatus && data.substatus !== existing.substatus) {
     pending.push({
       type: "status_changed",
-      summary: statusChangedSummary(existing.status, data.status),
+      summary: statusChangedSummary(existing.substatus, data.substatus),
       metadata: {
         field: "status",
-        from: existing.status,
-        to: data.status,
+        from: existing.substatus,
+        to: data.substatus,
         ...(resolutionNote ? { note: resolutionNote } : {}),
       },
     });
@@ -644,18 +547,6 @@ export async function updateBugAction(
       type: "unboosted",
       summary: unboostedSummary(),
       metadata: { field: "isBoosted", to: "false" },
-    });
-  }
-
-  if (data.severity && data.severity !== existing.severity) {
-    pending.push({
-      type: "severity_changed",
-      summary: severityChangedSummary(existing.severity, data.severity),
-      metadata: {
-        field: "severity",
-        from: existing.severity,
-        to: data.severity,
-      },
     });
   }
 
@@ -835,9 +726,9 @@ export async function updateBugAction(
         // The new assignee starts watching (#216).
         await ensureWatching(tx, bugId, [data.assigneeId]);
       }
-      // Admin assignment follows the dispatcher (offer) flow: creating or
+      // Admin assignment follows the offer flow: creating or
       // reassigning an assignee produces an offered IssueClaim for that
-      // user's agent, mirroring POST /api/v1/issues/{id}/offer. Releasing
+      // user's agent, as an awarded bid does. Releasing
       // any prior active/offered claim first keeps the cap slot free.
       const assigneeChanged =
         data.assigneeId !== undefined && data.assigneeId !== existing.assigneeId;
@@ -909,7 +800,6 @@ export async function updateBugAction(
           tenantId: existing.tenantId,
           projectId: existing.projectId,
           pullRequestUrl: existing.pullRequestUrl,
-          severity: data.severity ?? existing.severity,
           assigneeId: data.assigneeId !== undefined ? data.assigneeId : existing.assigneeId,
         });
       }
@@ -958,8 +848,8 @@ export async function updateBugAction(
   }
   if (events.length > 0) notifyLater(...events);
 
-  revalidatePath("/issues");
-  revalidateIssue(bugId);
+  revalidatePath("/[project]", "layout");
+  revalidateIssue();
   revalidatePath("/bugs");
   revalidatePath(`/bugs/${bugId}`);
   return { ok: true };
@@ -1006,7 +896,7 @@ export async function reopenAgentResolvedAction(bugId: string): Promise<ActionRe
   const tenantId = await currentTenantIdFor(user.id);
   const existing = await prisma.bug.findUnique({
     where: { id: bugId, ...bugInTenant(tenantId) },
-    select: { id: true, status: true, assigneeId: true, isDeleted: true },
+    select: { id: true, status: true, substatus: true, assigneeId: true, isDeleted: true },
   });
   if (!existing || existing.isDeleted) return { error: "Issue not found" };
   if (
@@ -1031,24 +921,24 @@ export async function reopenAgentResolvedAction(bugId: string): Promise<ActionRe
 
   const reopened = await prisma.$transaction(async (tx) => {
     // Someone may have changed the status since the read above.
-    const changed = await tx.bug.updateMany({ where: { id: bugId, status: "resolved" }, data: { status: to } });
+    const changed = await tx.bug.updateMany({ where: { id: bugId, status: "resolved" }, data: moveTo(to) });
     if (changed.count !== 1) return false;
     await tx.bugActivity.create({
       data: {
         bugId,
         actorId: user.id,
         type: "status_changed",
-        summary: statusChangedSummary("resolved", to),
-        metadata: { field: "status", from: "resolved", to, via: "reopen_agent_resolve" },
+        summary: statusChangedSummary(existing.substatus, to),
+        metadata: { field: "status", from: existing.substatus, to, via: "reopen_agent_resolve" },
       },
     });
-    await publishWebEvent(tx, { bugId, type: "issue.updated", actorUserId: user.id, payload: issueChangePayload({ status: to }) });
+    await publishWebEvent(tx, { bugId, type: "issue.updated", actorUserId: user.id, payload: issueChangePayload(moveTo(to)) });
     return true;
   });
   if (!reopened) return { error: "The issue's status changed meanwhile. Refresh and try again." };
 
-  revalidatePath("/issues");
-  revalidatePath(`/issues/${bugId}`);
+  revalidatePath("/[project]", "layout");
+  revalidateIssue();
   revalidatePath("/bugs");
   revalidatePath(`/bugs/${bugId}`);
   return { ok: true };
@@ -1090,6 +980,8 @@ export async function editBugContentAction(
       description: true,
       reporterId: true,
       beneficiaryUserId: true,
+      status: true,
+      substatus: true,
       tenantId: true,
       isDeleted: true,
     },
@@ -1137,6 +1029,8 @@ export async function editBugContentAction(
     // none goes missing from the history.
     const [previous] = await tx.$queryRaw<{ title: string; description: string }[]>`
       SELECT "title", "description" FROM "Bug" WHERE "id" = ${bugId} FOR UPDATE`;
+    // Read before the revision below voids the confirmations.
+    const wasConfirmed = await isConfirmed(bugId, tx);
     await tx.bugRevision.create({
       data: {
         bugId,
@@ -1146,20 +1040,19 @@ export async function editBugContentAction(
       },
     });
 
-    // #713: Editing an issue invalidates confirmations and previous validations,
-    // and reverses any reporter points awarded for the replaced report.
+    // #713: Editing an issue voids its confirmations and reverses any
+    // reporter points awarded for the replaced report. The entries and their
+    // replies stay (a person wrote them), but only entries given after the
+    // latest edit count (lib/issue-stage.ts), so this revision clears them:
+    // each person gives theirs again to count.
     type OptionalTxExtensions = {
       pointEntry?: {
         findFirst?: (args: unknown) => Promise<{ id: string; tenantId: string; userId: string; bugId: string | null; role: "solver" | "reporter" | "reviewer"; points: number } | null>;
         update?: (args: unknown) => Promise<unknown>;
       };
-      issueValidation?: {
-        deleteMany?: (args: unknown) => Promise<unknown>;
-      };
     };
     const txExtensions = tx as unknown as OptionalTxExtensions;
 
-    const wasConfirmed = await isConfirmed(bugId, tx);
     if (wasConfirmed) {
       const recipientId = existing.beneficiaryUserId ?? existing.reporterId;
       const tenantId = existing.tenantId ?? (await currentTenantIdFor(userId));
@@ -1185,18 +1078,14 @@ export async function editBugContentAction(
       }
     }
 
-    if (typeof txExtensions.issueValidation?.deleteMany === "function") {
-      await txExtensions.issueValidation.deleteMany({
-        where: { bugId },
-      });
-    }
-
     await tx.bug.update({
       where: { id: bugId },
       data: {
         title: parsed.data.title,
         description: normalizedDescription,
         updatedAt: new Date(),
+        // #requires-confirmation: the edit voided its confirmations, so an Open issue needs confirming again.
+        ...(existing.substatus === "open" ? moveTo("requires_confirmation") : {}),
       },
     });
 
@@ -1247,8 +1136,8 @@ export async function editBugContentAction(
     });
   }
 
-  revalidatePath("/issues");
-  revalidateIssue(bugId);
+  revalidatePath("/[project]", "layout");
+  revalidateIssue();
   revalidatePath("/bugs");
   revalidatePath(`/bugs/${bugId}`);
   return { ok: true };
@@ -1372,14 +1261,17 @@ export async function editProofLinksAction(
     }
   });
 
-  revalidatePath("/issues");
-  revalidateIssue(bugId);
+  revalidatePath("/[project]", "layout");
+  revalidateIssue();
   revalidatePath("/bugs");
   revalidatePath(`/bugs/${bugId}`);
   return { ok: true };
 }
 
-/** Adds a (possibly threaded) comment to a bug and records the activity. */
+/**
+ * Adds a comment to a bug and records the activity: a reply to one stage
+ * entry, or a comment on the issue itself (at any stage) or a reply to one.
+ */
 export async function addCommentAction(
   bugId: string,
   formData: FormData,
@@ -1394,21 +1286,14 @@ export async function addCommentAction(
     return { error: RATE_LIMIT_MESSAGE };
   }
 
-  let metadata: Record<string, unknown> | undefined;
-  const metadataRaw = formData.get("metadata");
-  if (typeof metadataRaw === "string" && metadataRaw.trim()) {
-    try {
-      metadata = JSON.parse(metadataRaw);
-    } catch {
-      // ignore invalid json metadata
-    }
-  }
-
   const parsed = commentSchema.safeParse({
     body: formData.get("body"),
+    confirmationId: formData.get("confirmationId") || undefined,
+    bidId: formData.get("bidId") || undefined,
+    deliveryId: formData.get("deliveryId") || undefined,
+    testVerdictId: formData.get("testVerdictId") || undefined,
+    mergeReviewId: formData.get("mergeReviewId") || undefined,
     parentId: formData.get("parentId") || undefined,
-    type: formData.get("type") || undefined,
-    metadata,
   });
 
   if (!parsed.success) {
@@ -1424,60 +1309,41 @@ export async function addCommentAction(
       reporterId: true,
       assigneeId: true,
       tenantId: true,
+      status: true,
+      substatus: true,
       pullRequestUrl: true,
-      proofLinks: true,
     },
   });
   if (!bug || bug.isDeleted) {
     return { error: "Issue not found" };
   }
 
-  const parentId = parsed.data.parentId;
-  let parentAuthorId: string | null = null;
-
-  if (parentId) {
-    const parent = await prisma.comment.findUnique({
-      where: { id: parentId },
-      select: { id: true, bugId: true, parentId: true, deletedAt: true, authorId: true },
-    });
-
-    if (!parent || parent.bugId !== bugId) {
-      return { error: "Parent comment not found on this issue" };
-    }
-    if (parent.deletedAt) {
-      return { error: "You can't reply to a deleted comment" };
-    }
-    parentAuthorId = parent.authorId;
-
-    const threadComments = await prisma.comment.findMany({
-      where: { bugId },
-      select: { id: true, parentId: true },
-    });
-    const parentById = new Map(
-      threadComments.map((c) => [c.id, c.parentId] as const),
-    );
-    const parentDepth = commentDepth(parent.id, parentById);
-
-    if (parentDepth >= MAX_COMMENT_DEPTH) {
-      return {
-        error: `Replies are limited to ${MAX_COMMENT_DEPTH} levels of nesting`,
-      };
-    }
+  // One rule for where a comment may go, as for agents (lib/comment-placement.ts).
+  let placement: CommentPlacement;
+  try {
+    placement = await placeComment(prisma, bug, parsed.data);
+  } catch (error) {
+    if (error instanceof CommentPlacementError) return { error: error.message };
+    throw error;
   }
+  const { confirmationId, bidId, deliveryId, testVerdictId, mergeReviewId, parentId, parentAuthorId } = placement;
 
   // #603: only agents in this issue's organization can be mentioned.
   const agents = await mentionedAgents(prisma, bug.tenantId, parsed.data.body);
   const normalizedBody = await normalizeMentionTags(parsed.data.body, bug.tenantId, agents);
 
-  const { commentId, attachedPrUrl } = await prisma.$transaction(async (tx) => {
+  const commentId = await prisma.$transaction(async (tx) => {
     const created = await tx.comment.create({
       data: {
         bugId,
         authorId: userId,
         body: normalizedBody,
-        parentId: parentId ?? null,
-        type: parsed.data.type ?? "comment",
-        metadata: parsed.data.metadata ? (parsed.data.metadata as Prisma.InputJsonValue) : undefined,
+        confirmationId,
+        bidId,
+        deliveryId,
+        testVerdictId,
+        mergeReviewId,
+        parentId,
       },
       select: { id: true },
     });
@@ -1506,36 +1372,7 @@ export async function addCommentAction(
         } as Prisma.InputJsonValue,
       },
     });
-    let attachedPrUrl: string | null = null;
-    const attachment = pullRequestAttachment({
-      authorId: userId,
-      assigneeId: bug.assigneeId,
-      pullRequestUrl: bug.pullRequestUrl,
-      proofLinks: bug.proofLinks ?? [],
-      body: normalizedBody,
-      type: parsed.data.type,
-      metadata: parsed.data.metadata as Record<string, unknown> | undefined,
-    });
-    if (attachment) attachedPrUrl = attachment.pullRequestUrl;
-    await tx.bug.update({
-      where: { id: bugId },
-      data: {
-        updatedAt: new Date(),
-        ...(attachment ? { pullRequestUrl: attachment.pullRequestUrl } : {}),
-        ...(attachment?.proofLinks ? { proofLinks: attachment.proofLinks } : {}),
-      },
-    });
-    if (attachment) {
-      await tx.bugActivity.create({
-        data: {
-          bugId,
-          actorId: userId,
-          type: "edited",
-          summary: `linked PR ${attachment.pullRequestUrl}`,
-          metadata: { field: "pullRequestUrl", pullRequestUrl: attachment.pullRequestUrl, via: "comment" },
-        },
-      });
-    }
+    await tx.bug.update({ where: { id: bugId }, data: { updatedAt: new Date() } });
     // Commenting on an issue means you want to hear about replies (#216).
     await ensureWatching(tx, bugId, [userId]);
     // #600: a person's reply reaches the agents polling /api/v1/events.
@@ -1545,12 +1382,11 @@ export async function addCommentAction(
       actorUserId: userId,
       payload: {
         commentId: created.id,
-        parentId: parentId ?? null,
+        parentId,
         authorId: userId,
-        ...(attachment ? { linkedPullRequestUrl: attachment.pullRequestUrl } : {}),
       },
     });
-    return { commentId: created.id, attachedPrUrl };
+    return created.id;
   });
 
   // A mentioned agent's owner hears about it like a mention of them (#603).
@@ -1580,11 +1416,11 @@ export async function addCommentAction(
   });
   notifyLater(...events);
 
-  revalidatePath("/issues");
-  revalidateIssue(bugId);
+  revalidatePath("/[project]", "layout");
+  revalidateIssue();
   revalidatePath("/bugs");
   revalidatePath(`/bugs/${bugId}`);
-  return { ok: true, commentId, ...(attachedPrUrl ? { linkedPullRequestUrl: attachedPrUrl } : {}) };
+  return { ok: true, commentId };
 }
 
 export type ToggleVoteResult = ActionResult & {
@@ -1595,7 +1431,11 @@ export type ToggleVoteResult = ActionResult & {
   dislikeCount?: number;
 };
 
-/** Toggles the current user's reaction on a bug; rejects any direction other than 1 or -1. */
+/**
+ * Toggles the current user's importance mark on an issue (#importance; once an
+ * upvote). Rejects any direction other than
+ * 1 or -1, and -1 because downvotes are gone.
+ */
 export async function toggleVoteAction(
   bugId: string,
   direction: unknown = 1,
@@ -1626,7 +1466,7 @@ export async function toggleVoteAction(
 
   const bug = await prisma.bug.findUnique({
     where: { id: bugId, ...bugInTenant(await currentTenantIdFor(userId)) },
-    select: { id: true, isDeleted: true },
+    select: { id: true, isDeleted: true, tenantId: true },
   });
   if (!bug || bug.isDeleted) {
     return { error: "Issue not found" };
@@ -1647,13 +1487,23 @@ export async function toggleVoteAction(
     if (nextVote === 0 && existing) {
       await tx.vote.delete({ where: { id: existing.id } });
     } else if (existing) {
+      // #importance: a person's own click; no agent made it.
       await tx.vote.update({
         where: { id: existing.id },
-        data: { value: nextVote },
+        data: { value: nextVote, agentId: null },
       });
     } else {
       await tx.vote.create({
         data: { userId, bugId, value: nextVote },
+      });
+      // The first mark on an issue earns a point, once per person (#vote-points).
+      await award(tx, {
+        tenantId: bug.tenantId,
+        userId,
+        bugId,
+        role: "vote",
+        points: VOTE_POINTS,
+        sourceKey: importanceSourceKey(bugId, userId),
       });
     }
 
@@ -1663,13 +1513,7 @@ export async function toggleVoteAction(
       _count: { _all: true },
     });
 
-    let likeCount = 0;
-    let dislikeCount = 0;
-    for (const c of voteCounts) {
-      if (c.value === 1) likeCount = c._count._all;
-      if (c.value === -1) dislikeCount = c._count._all;
-    }
-
+    const { likeCount, dislikeCount } = tallyVoteGroups(voteCounts);
     const voteCount = reconcileVoteCount(likeCount, dislikeCount);
 
     await tx.bug.update({
@@ -1686,8 +1530,8 @@ export async function toggleVoteAction(
     };
   });
 
-  revalidatePath("/issues");
-  revalidateIssue(bugId);
+  revalidatePath("/[project]", "layout");
+  revalidateIssue();
   revalidatePath("/bugs");
   revalidatePath(`/bugs/${bugId}`);
   return { ok: true, ...result };
@@ -1735,6 +1579,11 @@ export async function deleteBugAction(bugId: string): Promise<ActionResult> {
           deletedAt: new Date(),
         },
       });
+      // Release any unreleased claims on the soft-deleted issue (#627)
+      await tx.issueClaim.updateMany({
+        where: { bugId, releasedAt: null, status: { in: ["active", "offered"] } },
+        data: { status: "released", releasedAt: new Date(), releaseReason: "deleted" },
+      });
       // Delete attachments associated with the issue to prevent storage bloat (#658)
       await tx.attachment.deleteMany({ where: { bugId } });
 
@@ -1754,11 +1603,11 @@ export async function deleteBugAction(bugId: string): Promise<ActionResult> {
     return { error: TICKET_DELETION_ERRORS.failed };
   }
 
-  revalidatePath("/issues");
-  revalidateIssue(bugId);
+  revalidatePath("/[project]", "layout");
+  revalidateIssue();
   revalidatePath("/bugs");
   revalidatePath(`/bugs/${bugId}`);
-  redirect("/issues");
+  redirect("/home");
 }
 
 /**
@@ -1805,13 +1654,7 @@ export async function restoreBugAction(bugId: string): Promise<ActionResult> {
           _count: { _all: true },
         });
 
-        let likeCount = 0;
-        let dislikeCount = 0;
-        for (const c of voteCounts) {
-          if (c.value === 1) likeCount = c._count._all;
-          if (c.value === -1) dislikeCount = c._count._all;
-        }
-
+        const { likeCount, dislikeCount } = tallyVoteGroups(voteCounts);
         voteCount = reconcileVoteCount(likeCount, dislikeCount);
       }
 
@@ -1839,8 +1682,8 @@ export async function restoreBugAction(bugId: string): Promise<ActionResult> {
     return { error: TICKET_DELETION_ERRORS.failedRestore };
   }
 
-  revalidatePath("/issues");
-  revalidateIssue(bugId);
+  revalidatePath("/[project]", "layout");
+  revalidateIssue();
   revalidatePath("/bugs");
   revalidatePath(`/bugs/${bugId}`);
   return { ok: true };
@@ -1910,8 +1753,8 @@ export async function toggleBoostBugAction(
     return { error: TICKET_BOOST_ERRORS.failed };
   }
 
-  revalidatePath("/issues");
-  revalidateIssue(bugId);
+  revalidatePath("/[project]", "layout");
+  revalidateIssue();
   revalidatePath("/bugs");
   revalidatePath(`/bugs/${bugId}`);
   return { ok: true, isBoosted: nextBoosted };
@@ -1947,7 +1790,6 @@ export async function selfAssignBugAction(
       title: true,
       assigneeId: true,
       isDeleted: true,
-      voteCount: true,
       assignee: { select: { name: true } },
     },
   });
@@ -1969,12 +1811,8 @@ export async function selfAssignBugAction(
       membershipRole: (await currentTenantAccess(userId, user.role)).membershipRole,
       currentAssigneeId: existing.assigneeId,
       targetAssigneeId,
-      voteCount: existing.voteCount,
     })
   ) {
-    if (assign && typeof existing.voteCount === "number" && existing.voteCount < 3) {
-      return { error: TICKET_ASSIGN_ERRORS.needsVotes };
-    }
     return { error: TICKET_ASSIGN_ERRORS.unauthorized };
   }
 
@@ -2036,8 +1874,8 @@ export async function selfAssignBugAction(
     toUserId: targetAssigneeId,
   });
 
-  revalidateIssue(bugId);
-  revalidatePath("/issues");
+  revalidateIssue();
+  revalidatePath("/[project]", "layout");
   revalidatePath(`/bugs/${bugId}`);
   revalidatePath("/bugs");
   return { ok: true };

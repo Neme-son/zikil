@@ -3,7 +3,7 @@ import { prisma } from "@/lib/prisma";
 import type { AgentContext } from "@/lib/agents/require-agent";
 import { assertKeyProject } from "@/lib/agents/require-agent";
 import { audit } from "@/lib/agents/audit";
-import { IssueApiError } from "@/lib/agent-api/issues";
+import { IssueApiError } from "@/lib/agent-api/errors";
 import { submitJobSchema, type SubmitJobInput } from "@/lib/validations/job";
 import type { SubmissionSchema } from "@/lib/validations/job";
 import {

@@ -16,6 +16,7 @@ import { sendMail, smtpConfigured } from "@/lib/mail";
 import { logger } from "@/lib/logger";
 import { consumeAuthRateLimit, RATE_LIMIT_MESSAGE } from "@/lib/rate-limit";
 import { changePasswordSchema } from "@/lib/validations/issue";
+import { validateAvatarBytes } from "@/lib/avatar-upload";
 
 export type SettingsResult = { error?: string; ok?: boolean; emailNotifications?: boolean };
 
@@ -24,6 +25,8 @@ export type DisplayNameResult = Partial<FieldErrorResult> & { ok?: boolean; name
 export type WalletResult = Partial<FieldErrorResult> & { ok?: boolean; walletAddress?: string | null };
 
 export type ChangePasswordResult = Partial<FieldErrorResult> & { ok?: boolean };
+
+export type AvatarResult = { error?: string; ok?: boolean; image?: string | null };
 
 /**
  * Change a credentials password from Settings (#570). Updating sessionVersion
@@ -206,4 +209,77 @@ export async function setWalletAddressAction(
   revalidatePath("/settings");
   revalidatePath(`/users/${user.id}`);
   return { ok: true, walletAddress: parsed.data };
+}
+
+/**
+ * Update the signed-in person's profile avatar image (#290, #576).
+ */
+export async function updateAvatarAction(
+  _prev: AvatarResult | undefined,
+  formData: FormData,
+): Promise<AvatarResult> {
+  const user = await requireUser();
+  const file = formData.get("avatar");
+  if (!file || !(file instanceof File)) {
+    return { error: "Please select an image file to upload." };
+  }
+  const arrayBuffer = await file.arrayBuffer();
+  const bytes = new Uint8Array(arrayBuffer);
+  const validated = validateAvatarBytes(bytes);
+  if (!validated.ok) {
+    return { error: validated.error };
+  }
+
+  // Remove previous avatar attachments for this user
+  await prisma.attachment.deleteMany({
+    where: { uploaderId: user.id, filename: { startsWith: "avatar" } },
+  }).catch(() => undefined);
+
+  const ext = validated.contentType.split("/")[1] || "png";
+  await prisma.attachment.create({
+    data: {
+      uploaderId: user.id,
+      filename: `avatar-${user.id}.${ext}`,
+      contentType: validated.contentType,
+      size: bytes.byteLength,
+      data: Buffer.from(bytes),
+    },
+  });
+
+  const base = (process.env.NEXT_PUBLIC_SITE_URL || "https://ziki.dev")
+    .replace(/^http:\/\//i, "https://")
+    .replace(/\/$/, "");
+  const avatarUrl = `${base}/api/users/${user.id}/avatar?v=${Date.now()}`;
+
+  await prisma.user.update({
+    where: { id: user.id },
+    data: { image: avatarUrl },
+  });
+
+  revalidatePath("/", "layout");
+  revalidatePath("/settings");
+  revalidatePath("/settings/profile");
+  revalidatePath(`/users/${user.id}`);
+  return { ok: true, image: avatarUrl };
+}
+
+/**
+ * Remove the signed-in person's profile avatar, reverting to initials fallback (#290, #576).
+ */
+export async function removeAvatarAction(): Promise<AvatarResult> {
+  const user = await requireUser();
+  await prisma.attachment.deleteMany({
+    where: { uploaderId: user.id, filename: { startsWith: "avatar" } },
+  }).catch(() => undefined);
+
+  await prisma.user.update({
+    where: { id: user.id },
+    data: { image: null },
+  });
+
+  revalidatePath("/", "layout");
+  revalidatePath("/settings");
+  revalidatePath("/settings/profile");
+  revalidatePath(`/users/${user.id}`);
+  return { ok: true, image: null };
 }

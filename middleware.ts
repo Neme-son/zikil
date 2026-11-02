@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import authConfig from "@/auth.config";
 import { isLinkPreviewBot } from "@/lib/link-preview";
 import { BASE_PATH, toAppPath } from "@/lib/base-path";
+import { isProjectIssuePath } from "@/lib/project-slug";
 
 /**
  * Edge-only auth wrapper — initialized from auth.config (no Prisma/bcrypt).
@@ -11,8 +12,8 @@ import { BASE_PATH, toAppPath } from "@/lib/base-path";
  */
 const { auth } = NextAuth(authConfig);
 
-/** Issue detail paths only — enough for unfurl bots to hit generateMetadata. */
-const ISSUE_DETAIL_PATH = /^\/(?:issues|bugs)\/[^/]+\/?$/;
+/** A project's agent work feed: `/<project-slug>/work`. */
+const PROJECT_WORK_PATH = /^\/[^/]+\/work\/?$/;
 
 export function isPublicPath(
   pathWithoutBase: string,
@@ -24,7 +25,7 @@ export function isPublicPath(
     pathWithoutBase.startsWith("/forgot-password") ||
     pathWithoutBase.startsWith("/reset-password");
   const isIssuePreview =
-    ISSUE_DETAIL_PATH.test(pathWithoutBase) &&
+    isProjectIssuePath(pathWithoutBase) &&
     isLinkPreviewBot(userAgent);
 
   return (
@@ -43,8 +44,6 @@ export function isPublicPath(
     pathWithoutBase.startsWith("/join/") ||
     pathWithoutBase.startsWith("/api/auth") ||
     pathWithoutBase.startsWith("/api/health") ||
-    // GitHub calls this with an HMAC signature, not a session (#474).
-    pathWithoutBase === "/api/github/webhook" ||
     // The scheduler calls the platform sweeps with Bearer CRON_SECRET and no
     // session (#571); the route rejects a wrong or missing secret itself.
     pathWithoutBase === "/api/internal/cron" ||
@@ -60,16 +59,6 @@ export default auth((req) => {
   const pathWithoutBase = toAppPath(req.nextUrl.pathname);
   const isLoggedIn = !!req.auth?.user;
 
-  // Seamless backwards compatibility: redirect /bugs and /bugs/* to /issues and /issues/*
-  if (pathWithoutBase === "/bugs" || pathWithoutBase.startsWith("/bugs/")) {
-    const newPath = pathWithoutBase.replace(/^\/bugs/, "/issues");
-    const targetUrl = new URL(
-      BASE_PATH ? `${BASE_PATH}${newPath}` : newPath,
-      req.nextUrl.origin,
-    );
-    targetUrl.search = req.nextUrl.search;
-    return NextResponse.redirect(targetUrl, 308);
-  }
   if (pathWithoutBase.startsWith("/api/bugs/")) {
     const newPath = pathWithoutBase.replace(/^\/api\/bugs\//, "/api/issues/");
     const targetUrl = new URL(
@@ -84,7 +73,13 @@ export default auth((req) => {
     pathWithoutBase.startsWith("/login") || pathWithoutBase.startsWith("/signup");
   const isPublic = isPublicPath(pathWithoutBase, req.headers.get("user-agent"));
 
-  if (!isLoggedIn && !isPublic) {
+  // An agent watching `/<project>/work` (#work-feed) authenticates with its
+  // key, not a session; the route rejects a missing or wrong one.
+  const isAgentWorkFeed =
+    PROJECT_WORK_PATH.test(pathWithoutBase) &&
+    (req.headers.get("authorization") ?? "").startsWith("Bearer ");
+
+  if (!isLoggedIn && !isPublic && !isAgentWorkFeed) {
     const url = new URL(
       BASE_PATH ? `${BASE_PATH}/login` : "/login",
       req.nextUrl.origin,
@@ -97,7 +92,7 @@ export default auth((req) => {
   // Signed-in people land on the Overview, the post-login home.
   if (isLoggedIn && isAuthPage) {
     return NextResponse.redirect(
-      new URL(BASE_PATH ? `${BASE_PATH}/dashboard` : "/dashboard", req.nextUrl.origin),
+      new URL(BASE_PATH ? `${BASE_PATH}/home` : "/home", req.nextUrl.origin),
     );
   }
 

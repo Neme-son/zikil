@@ -1,11 +1,11 @@
 import { prisma } from "@/lib/prisma";
+import { issueIdFor } from "@/lib/issue-ref";
 import type { AgentContext } from "@/lib/agents/require-agent";
 import { IssueApiError, readAgentIssue } from "@/lib/agent-api/issues";
 import { findSimilarIssues } from "@/lib/agent-api/create-policy";
 import type { SimilarIssue } from "@/lib/similar-issues";
 import { audit } from "@/lib/agents/audit";
 import { publish } from "@/lib/agent-api/events";
-import { hasLevel } from "@/lib/agents/levels";
 import { reviewerConflict, ReviewerNotIndependentError } from "@/lib/agents/independence";
 import { z } from "zod";
 
@@ -141,16 +141,20 @@ export type StructureResult = {
 
 /**
  * Processes an incoming report: checks duplicates, infers metadata, formats
- * structured description, logs activity, and records format validation.
+ * structured description and logs activity. Marking a duplicate here sets
+ * `duplicateOfId` on the issue; it is not a confirmation entry.
  */
 export async function structureIssue(
   agent: AgentContext,
   projectId: string,
-  bugId: string,
+  issueRef: string,
   rawInput: unknown,
 ): Promise<StructureResult> {
   const input = structureInputSchema.parse(rawInput ?? {});
 
+  // #457: the path may be the readable number (`123`, `ZE-123`) or the id.
+  const bugId = await issueIdFor(prisma, issueRef, agent.tenantId);
+  if (!bugId) throw new IssueApiError(404, "Issue not found in this project.");
   const bug = await prisma.bug.findFirst({
     where: { id: bugId, tenantId: agent.tenantId, projectId, isDeleted: false },
     select: {
@@ -167,7 +171,7 @@ export async function structureIssue(
       beneficiaryUserId: true,
       assigneeId: true,
       createdByAgent: { select: { ownerUserId: true } },
-      claims: { where: { status: "active", releasedAt: null }, select: { status: true, releasedAt: true, beneficiaryUserId: true, dispatcherUserId: true, agent: { select: { ownerUserId: true } } } },
+      claims: { where: { status: "active", releasedAt: null }, select: { status: true, releasedAt: true, beneficiaryUserId: true, agentId: true, dispatcherUserId: true, agent: { select: { ownerUserId: true } } } },
     },
   });
 
@@ -177,7 +181,6 @@ export async function structureIssue(
 
   const conflict = reviewerConflict({ id: agent.agentId, ownerUserId: agent.ownerId }, bug);
   if (input.duplicateOfId) {
-    if (!hasLevel(agent.level, "triager")) throw new IssueApiError(403, "Triage permission is required to mark an issue as a duplicate.");
     if (conflict) throw new IssueApiError(403, new ReviewerNotIndependentError(conflict).message);
   }
 
@@ -274,54 +277,6 @@ export async function structureIssue(
         updatedAt: new Date(),
       },
     });
-
-    // Record format validation indicating structured format acceptance
-    if (hasLevel(agent.level, "reviewer") && !conflict) await tx.issueValidation.upsert({
-      where: {
-        bugId_agentId_kind: {
-          bugId: bug.id,
-          agentId: agent.agentId,
-          kind: "format",
-        },
-      },
-      create: {
-        bugId: bug.id,
-        agentId: agent.agentId,
-        onBehalfOfUserId: agent.ownerId,
-        kind: "format",
-        verdict: "accept",
-        notes: "Agent structured issue from report",
-      },
-      update: {
-        verdict: "accept",
-        notes: "Agent updated structured issue formulation",
-      },
-    });
-
-    // If duplicate was confirmed, record duplicate validation
-    if (resolvedDuplicateOfId && resolvedDuplicateOfId !== bug.duplicateOfId) {
-      await tx.issueValidation.upsert({
-        where: {
-          bugId_agentId_kind: {
-            bugId: bug.id,
-            agentId: agent.agentId,
-            kind: "duplicate",
-          },
-        },
-        create: {
-          bugId: bug.id,
-          agentId: agent.agentId,
-          onBehalfOfUserId: agent.ownerId,
-          kind: "duplicate",
-          verdict: "accept",
-          notes: `Duplicate of ${resolvedDuplicateOfId}`,
-        },
-        update: {
-          verdict: "accept",
-          notes: `Duplicate of ${resolvedDuplicateOfId}`,
-        },
-      });
-    }
 
     // Activity log
     await tx.bugActivity.create({

@@ -1,0 +1,297 @@
+/* Issue-lane only: security / merge-request rose tokens (not in shell globals). */
+.issue-detail-scope {
+  --issue-sec-bg: #fdecef;
+  --issue-sec-fg: #b4233f;
+}
+
+@media screen and (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .issue-detail-scope {
+    --issue-sec-bg: #3a1424;
+    --issue-sec-fg: #f9a8c0;
+  }
+}
+
+@media screen {
+  :root[data-theme="dark"] .issue-detail-scope {
+    --issue-sec-bg: #3a1424;
+    --issue-sec-fg: #f9a8c0;
+  }
+}
+
+/*
+ * Progress report and the staged Conversation with its stage summary (#1446, #186), from
+ * the "Ziki for Businesses" design. Colours are zk tokens (and Tailwind's
+ * violet, which theme-dark.css remaps) so both themes follow.
+ */
+.issue-progress .cap {
+  margin: 0;
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--zk-muted);
+}
+.issue-progress .mono {
+  font-family: var(--font-mono, ui-monospace, Menlo, monospace);
+  letter-spacing: 0;
+}
+.issue-progress .i {
+  width: 16px;
+  height: 16px;
+  flex: none;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.issue-progress .chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 20px;
+  padding: 0 7px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.issue-progress .cg { background: var(--zk-ok-bg); color: var(--zk-ok-fg); }
+.issue-progress .cr { background: var(--zk-bad-bg); color: var(--zk-bad-fg); }
+.issue-progress .ca { background: var(--zk-warn-bg); color: var(--zk-warn-fg); }
+.issue-progress .cb { background: var(--zk-info-bg); color: var(--zk-info-fg); }
+.issue-progress .cn { background: var(--zk-chip); color: var(--zk-text2); }
+.issue-progress .cv { background: var(--color-violet-50); color: var(--color-violet-700); }
+
+/* Stepper: a track with a flowing green fill, a dot per stage. */
+.issue-progress .pgw { position: relative; margin-top: 16px; }
+.issue-progress .pg {
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.issue-progress .pg li { animation: zk-pop 0.45s cubic-bezier(0.2, 0.8, 0.3, 1.2) both; }
+.issue-progress .pg-track {
+  position: absolute;
+  top: 22px;
+  /* Dot centres: half a column in from each side (6 columns). */
+  left: calc(100% / 12);
+  right: calc(100% / 12);
+  height: 4px;
+  overflow: hidden;
+  border-radius: 4px;
+  background: var(--zk-divider);
+}
+.issue-progress .pg-fill {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  border-radius: 4px;
+  background: linear-gradient(90deg, #16a34a 0%, #4ade80 50%, #16a34a 100%);
+  background-size: 200% 100%;
+  transform-origin: left center;
+  animation:
+    pg-grow 0.9s cubic-bezier(0.3, 0.7, 0.2, 1) 0.15s both,
+    pg-flow 2.4s linear 1.1s infinite;
+}
+.issue-progress .pgs {
+  display: flex;
+  width: 100%;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 4px 9px;
+  border: 0;
+  border-radius: 12px;
+  background: transparent;
+  color: var(--zk-text2);
+  font: inherit;
+  cursor: pointer;
+  transition: background-color 0.2s ease;
+}
+.issue-progress .pgs:hover { background: var(--zk-chip); }
+.issue-progress .pgs.sel { background: var(--zk-tint); }
+.issue-progress .pgs:focus-visible { outline: 2px solid var(--zk-accent); outline-offset: 2px; }
+.issue-progress .pgd {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  border-radius: 50%;
+  transition: transform 0.2s ease;
+}
+.issue-progress .pgd .i { width: 14px; height: 14px; }
+.issue-progress .pgs:hover .pgd,
+.issue-progress .pgs.sel .pgd { transform: scale(1.08); }
+.issue-progress .pgd.done { background: var(--zk-ok-bg); color: var(--zk-ok-fg); }
+.issue-progress .pgd.warn { background: var(--zk-warn-bg); color: var(--zk-warn-fg); }
+.issue-progress .pgd.now { background: var(--zk-accent); color: #fff; }
+.issue-progress .pgd.todo {
+  border: 1.5px dashed var(--zk-border);
+  background: var(--zk-surface);
+  color: var(--zk-muted);
+}
+.issue-progress .pgs.now .pgd { animation: pg-ring 2s ease-out infinite; }
+.issue-progress .pgs.now.warn .pgd { animation-name: pg-ring-a; }
+.issue-progress .pgl { font-size: 12.5px; font-weight: 600; line-height: 1.25; text-align: center; }
+.issue-progress .pgs.sel .pgl { color: var(--zk-accent); }
+.issue-progress .pgs.todo .pgl { color: var(--zk-muted); font-weight: 500; }
+.issue-progress .pgn {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 11px;
+  color: var(--zk-muted);
+}
+.issue-progress .pgc { margin-top: -4px; font-size: 11px; color: var(--zk-muted); }
+/* The picked stage's summary at the top of the Conversation card (#186). */
+.issue-progress.ssum {
+  margin-bottom: 12px;
+  padding: 14px 16px;
+  border: 1px solid var(--zk-divider);
+  border-radius: 14px;
+  background: var(--zk-chip);
+}
+.issue-progress .ssd {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  flex: none;
+  place-items: center;
+  border-radius: 50%;
+}
+.issue-progress .ssd .i { width: 13px; height: 13px; }
+.issue-progress .ssd.done { background: var(--zk-ok-bg); color: var(--zk-ok-fg); }
+.issue-progress .ssd.warn { background: var(--zk-warn-bg); color: var(--zk-warn-fg); }
+.issue-progress .ssd.now { background: var(--zk-accent); color: #fff; }
+.issue-progress .ssd.todo {
+  border: 1.5px dashed var(--zk-border);
+  background: var(--zk-surface);
+  color: var(--zk-muted);
+}
+.issue-progress .spd {
+  width: 12px;
+  height: 12px;
+  flex: none;
+  margin-top: 3px;
+  border: 1.5px dashed var(--zk-muted);
+  border-radius: 50%;
+  animation: spd-spin 6s linear infinite;
+}
+
+/* A decision or comment card, and the dashed empty box. */
+.issue-progress .cm {
+  margin-top: 10px;
+  padding: 14px 16px;
+  border: 1px solid var(--zk-divider);
+  border-radius: 14px;
+}
+.issue-progress .cmh {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--zk-muted);
+}
+.issue-progress .cmh b { font-size: 13px; color: var(--zk-text); }
+.issue-progress .cmh .dt { margin-left: auto; }
+.issue-progress .av {
+  display: grid;
+  width: 22px;
+  height: 22px;
+  flex: none;
+  place-items: center;
+  border-radius: 50%;
+}
+.issue-progress .av .i { width: 12px; height: 12px; }
+.issue-progress .cmb { margin: 10px 0 0; font-size: 13.5px; line-height: 1.6; color: var(--zk-text2); }
+.issue-progress .emp {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 12px;
+  padding: 12px 14px;
+  border: 1px dashed var(--zk-border);
+  border-radius: 12px;
+}
+.issue-progress .emp-icon {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  flex: none;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--zk-chip);
+  color: var(--zk-muted);
+}
+.issue-progress .emp-icon .i { width: 14px; height: 14px; }
+.issue-progress .lg { animation: zk-rise 0.35s ease both; }
+
+/* Conversation tabs. */
+.issue-progress .ctab {
+  display: inline-flex;
+  height: 28px;
+  align-items: center;
+  gap: 6px;
+  padding: 0 11px;
+  border: 1px solid var(--zk-border);
+  border-radius: 999px;
+  background: var(--zk-surface);
+  color: var(--zk-text2);
+  font-size: 12.5px;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+.issue-progress .ctab:focus-visible { outline: 2px solid var(--zk-accent); outline-offset: 2px; }
+.issue-progress .ctab .n {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 11px;
+  color: var(--zk-muted);
+}
+.issue-progress .ctab.cur { border-color: var(--zk-accent); background: var(--zk-accent); color: #fff; }
+.issue-progress .ctab.cur .n { padding: 0 5px; border-radius: 5px; background: rgba(255, 255, 255, 0.25); color: #fff; }
+
+@media (max-width: 720px) {
+  .issue-progress .cm { padding: 12px; }
+  .issue-progress .cmh .dt { flex-basis: 100%; margin-left: 0; }
+  .issue-progress .pgs { gap: 5px; padding: 6px 1px 8px; }
+  .issue-progress .pgd { width: 26px; height: 26px; }
+  .issue-progress .pgd .i { width: 12px; height: 12px; }
+  .issue-progress .pg-track { top: 18px; height: 3px; }
+  .issue-progress .pgl { font-size: 11px; }
+  .issue-progress .pgn,
+  .issue-progress .pgc { font-size: 10px; }
+  .issue-progress.ssum { padding: 12px; }
+}
+
+@media (max-width: 400px) {
+  .issue-progress .pgc { display: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .issue-progress *,
+  .issue-progress { animation: none !important; transition: none !important; }
+}
+
+@keyframes zk-rise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+@keyframes spd-spin { to { transform: rotate(360deg); } }
+@keyframes zk-pop { from { opacity: 0; transform: scale(0.7); } to { opacity: 1; transform: none; } }
+@keyframes pg-grow { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+@keyframes pg-flow { from { background-position: 200% 0; } to { background-position: 0 0; } }
+@keyframes pg-ring {
+  0% { box-shadow: 0 0 0 0 rgba(47, 107, 234, 0.45); }
+  70% { box-shadow: 0 0 0 9px rgba(47, 107, 234, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(47, 107, 234, 0); }
+}
+@keyframes pg-ring-a {
+  0% { box-shadow: 0 0 0 0 rgba(217, 119, 6, 0.45); }
+  70% { box-shadow: 0 0 0 9px rgba(217, 119, 6, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(217, 119, 6, 0); }
+}

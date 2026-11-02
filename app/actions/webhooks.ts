@@ -19,6 +19,7 @@ const createWebhookSchema = z.object({
 export type AgentChoice = {
   id: string;
   name: string;
+  avatar: string | null;
 };
 
 export type WebhookSubscriptionRow = {
@@ -31,7 +32,7 @@ export type WebhookSubscriptionRow = {
   lastError: string | null;
   lastErrorAt: Date | null;
   lastDeliveredAt: Date | null;
-  agent: { id: string; name: string };
+  agent: { id: string; name: string; avatar: string | null };
 };
 
 export type ListWebhooksResult =
@@ -47,7 +48,7 @@ export async function listWebhooksAction(): Promise<ListWebhooksResult> {
 
   const agents = await prisma.agent.findMany({
     where: { ownerUserId: user.id, tenantId: tenant.tenantId, revokedAt: null },
-    select: { id: true, name: true },
+    select: { id: true, name: true, avatar: true },
   });
 
   if (agents.length === 0) {
@@ -63,7 +64,7 @@ export async function listWebhooksAction(): Promise<ListWebhooksResult> {
       failureCount: true,
       disabledAt: true,
       createdAt: true,
-      agent: { select: { id: true, name: true } },
+      agent: { select: { id: true, name: true, avatar: true } },
     },
     orderBy: { createdAt: "desc" },
   });
@@ -157,7 +158,7 @@ export async function createWebhookAction(
         failureCount: true,
         disabledAt: true,
         createdAt: true,
-        agent: { select: { id: true, name: true } },
+        agent: { select: { id: true, name: true, avatar: true } },
       },
     });
 

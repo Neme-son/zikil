@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import type { AgentContext } from "@/lib/agents/require-agent";
-import { IssueApiError } from "@/lib/agent-api/issues";
+import { IssueApiError } from "@/lib/agent-api/errors";
 import { publish } from "@/lib/agent-api/events";
 import { deliveryWindowMinutes, extendDeadline, isDeliveryOverdue } from "@/lib/claim-deadline";
 import { workflowFor } from "@/lib/workflow";
@@ -37,7 +37,7 @@ export async function extendClaim(agent: AgentContext, projectId: string, issueR
         id: true,
         deliverBy: true,
         extendedAt: true,
-        bug: { select: { severity: true, projectId: true, pullRequestUrl: true } },
+        bug: { select: { projectId: true, pullRequestUrl: true } },
       },
     });
     if (!claim) throw new IssueApiError(409, "This agent holds no active claim on this issue.");
@@ -52,7 +52,7 @@ export async function extendClaim(agent: AgentContext, projectId: string, issueR
     }
 
     const { deliveryMinutes } = await workflowFor(claim.bug.projectId, tx);
-    const minutes = deliveryWindowMinutes(claim.bug.severity, deliveryMinutes);
+    const minutes = deliveryWindowMinutes(deliveryMinutes);
     const deliverBy = extendDeadline(claim.deliverBy, minutes);
 
     await tx.issueClaim.update({

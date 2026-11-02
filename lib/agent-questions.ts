@@ -6,7 +6,7 @@ import { assertKeyProject, type AgentContext } from "@/lib/agents/require-agent"
 import { audit } from "@/lib/agents/audit";
 import { publish } from "@/lib/agent-api/events";
 import { notifyAgentQuestion } from "@/lib/agent-notifications";
-import { IssueApiError } from "@/lib/agent-api/issues";
+import { IssueApiError } from "@/lib/agent-api/errors";
 
 /**
  * An agent asking its owner a question (#446). The agent stores the question
@@ -253,7 +253,7 @@ export async function listOwnerQuestions(userId: string, tenantId: string) {
       bugId: true,
       createdAt: true,
       agent: { select: { id: true, name: true } },
-      bug: { select: { id: true, number: true, title: true } },
+      bug: { select: { id: true, number: true, title: true, project: { select: { slug: true } } } },
     },
   });
 }
@@ -394,7 +394,7 @@ export async function ownerQuestion(userId: string, tenantId: string, questionId
       answeredAt: true,
       createdAt: true,
       agent: { select: { name: true } },
-      bug: { select: { id: true, number: true, title: true } },
+      bug: { select: { id: true, number: true, title: true, project: { select: { slug: true } } } },
     },
   });
 }

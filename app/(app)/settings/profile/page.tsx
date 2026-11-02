@@ -1,6 +1,7 @@
 import "../settings-design.css";
 import Link from "next/link";
 import { DisplayNameForm } from "@/components/display-name-form";
+import { ProfileAvatarUpload } from "@/components/profile-avatar-upload";
 import { requireUser } from "@/lib/auth-helpers";
 
 export const metadata = { title: "Profile" };
@@ -22,11 +23,11 @@ export default async function ProfilePage() {
         </Link>
         <h1 className="m-0 text-[28px] font-extrabold tracking-[-0.02em] text-zk-text">Profile</h1>
         <p className="m-0 text-sm text-zk-muted">
-          Manage how your name appears on issues and comments.
+          Manage how your name and avatar appear on issues and comments.
         </p>
       </div>
 
-      <section className="flex flex-col gap-4 rounded-[20px] border border-zk-border bg-zk-surface p-6">
+      <section className="flex flex-col gap-5 rounded-[20px] border border-zk-border bg-zk-surface p-6">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex flex-col gap-1">
             <h2 className="m-0 text-lg font-bold text-zk-text">Your profile</h2>
@@ -43,7 +44,13 @@ export default async function ProfilePage() {
             See how others see you
           </Link>
         </div>
-        <DisplayNameForm initialName={user.name ?? ""} />
+
+        <ProfileAvatarUpload initialImage={user.image} name={user.name} />
+
+        <div className="border-t border-zk-divider pt-4">
+          <DisplayNameForm initialName={user.name ?? ""} initialImage={user.image} showAvatar={false} />
+        </div>
+
         <div className="space-y-1 border-t border-zk-divider pt-4">
           <p className="text-sm font-bold text-zk-text">Email</p>
           <p className="break-words text-sm text-zk-text2">{user.email}</p>

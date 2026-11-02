@@ -13,16 +13,14 @@ import {
 } from "@/lib/similar-issues";
 
 /**
- * What happens when an agent creates an issue (#441). The create route (#429)
- * calls `createIssueWithPolicy` and maps its result to a response; it does not
- * repeat any of these rules:
+ * What happens when an agent files a report (#441). Every report is an idea
+ * (#idea-table): the create route calls `createIdeaWithPolicy` and maps its
+ * result to a response; it does not repeat any of these rules:
  *
  * - `Idempotency-Key` is required. The same agent and key within 24 hours
- *   returns the issue it already made instead of inserting another.
+ *   returns the idea it already made instead of inserting another.
  * - Open issues with a similar title in the same project are a `409` with the
  *   matches, until the agent repeats the same key with `acknowledgeSimilar`.
- * - Any severity the client sends is ignored: the issue is stored `medium`
- *   until an independent reviewer sets it (#433).
  * - `typeId`, when given, must be an active issue type.
  *
  * It also exports the `(createdAt, id)` cursor #429 pages lists with.
@@ -31,12 +29,9 @@ import {
 type Db = PrismaClient | Prisma.TransactionClient;
 
 export const IDEMPOTENCY_HEADER = "Idempotency-Key";
-/** How long a key keeps returning the issue it made. */
+/** How long a key keeps returning the idea it made. */
 export const IDEMPOTENCY_WINDOW_MS = 24 * 60 * 60 * 1000;
 export const IDEMPOTENCY_KEY_MAX = 255;
-
-/** Agents never choose severity on create (#441, #433). */
-export const AGENT_CREATE_SEVERITY = "medium" as const;
 
 /** Stable JSON serialization so equivalent request objects hash consistently. */
 function stableJson(value: unknown): string {
@@ -82,14 +77,24 @@ export async function findSimilarIssues(
   const query = normalizeQuery(title);
   if (!shouldSearch(query)) return [];
   try {
+    // Open ideas count too (#idea-table): a second report of the same idea is a duplicate as well.
     const rows = await db.$queryRaw<ScoredIssue[]>`
-      SELECT "id", "number", "title", "status", "voteCount",
+      SELECT "id", "number", "title", "status"::text AS "status", "voteCount", 'issue' AS "kind",
              GREATEST(similarity("title", ${query}), word_similarity(${query}, "title")) AS "score"
       FROM "Bug"
       WHERE "isDeleted" = false
         AND "tenantId" = ${scope.tenantId}
         AND "projectId" = ${scope.projectId}
         AND "status"::text = ANY(${SIMILAR_STATUSES as string[]})
+        AND ("title" % ${query} OR ${query} <% "title")
+      UNION ALL
+      SELECT "id", "number", "title", 'open' AS "status", "score" AS "voteCount", 'idea' AS "kind",
+             GREATEST(similarity("title", ${query}), word_similarity(${query}, "title")) AS "score"
+      FROM "Idea"
+      WHERE "isDeleted" = false
+        AND "tenantId" = ${scope.tenantId}
+        AND "projectId" = ${scope.projectId}
+        AND "status" = 'open'
         AND ("title" % ${query} OR ${query} <% "title")
       ORDER BY "score" DESC
       LIMIT ${CANDIDATES}`;
@@ -99,18 +104,25 @@ export async function findSimilarIssues(
   }
   const terms = fallbackTerms(query);
   if (terms.length < 1) return [];
-  return db.bug.findMany({
-    where: {
-      tenantId: scope.tenantId,
-      projectId: scope.projectId,
-      isDeleted: false,
-      status: { in: [...SIMILAR_STATUSES] },
-      AND: terms.map((t) => ({ title: { contains: t, mode: "insensitive" as const } })),
-    },
-    select: { id: true, number: true, title: true, status: true, voteCount: true },
-    orderBy: [{ voteCount: "desc" }, { updatedAt: "desc" }],
-    take: SIMILAR_LIMIT,
-  });
+  const titleMatch = terms.map((t) => ({ title: { contains: t, mode: "insensitive" as const } }));
+  const [issues, ideas] = await Promise.all([
+    db.bug.findMany({
+      where: { tenantId: scope.tenantId, projectId: scope.projectId, isDeleted: false, status: { in: [...SIMILAR_STATUSES] }, AND: titleMatch },
+      select: { id: true, number: true, title: true, status: true, voteCount: true },
+      orderBy: [{ voteCount: "desc" }, { updatedAt: "desc" }],
+      take: SIMILAR_LIMIT,
+    }),
+    db.idea.findMany({
+      where: { tenantId: scope.tenantId, projectId: scope.projectId, isDeleted: false, status: "open", AND: titleMatch },
+      select: { id: true, number: true, title: true, score: true },
+      orderBy: [{ score: "desc" }, { updatedAt: "desc" }],
+      take: SIMILAR_LIMIT,
+    }),
+  ]);
+  return [
+    ...issues.map((issue) => ({ ...issue, kind: "issue" as const })),
+    ...ideas.map(({ score, ...idea }) => ({ ...idea, status: "open" as const, voteCount: score, kind: "idea" as const })),
+  ].slice(0, SIMILAR_LIMIT);
 }
 
 // ---------------------------------------------------------------------------
@@ -118,7 +130,7 @@ export async function findSimilarIssues(
 // ---------------------------------------------------------------------------
 
 /** The fields the policy decides; the route adds title, description and the rest. */
-export type PolicyFields = { severity: typeof AGENT_CREATE_SEVERITY; typeId: string | null };
+export type PolicyFields = { typeId: string | null };
 
 export type CreatePolicyInput = {
   agent: { agentId: string; tenantId: string };
@@ -130,17 +142,15 @@ export type CreatePolicyInput = {
   /** Already validated by the route; used for the similar-issue check. */
   title: string;
   typeId?: unknown;
-  /** Read and ignored, so a client can't pick severity. */
-  severity?: unknown;
   acknowledgeSimilar?: unknown;
-  /** Inserts the issue inside the policy's transaction and returns its id. */
+  /** Inserts the idea inside the policy's transaction and returns its id. */
   insert: (tx: Prisma.TransactionClient, fields: PolicyFields) => Promise<{ id: string }>;
   now?: Date;
 };
 
 export type CreatePolicyResult =
-  | { status: 201; bugId: string; replayed: false }
-  | { status: 200; bugId: string; replayed: true }
+  | { status: 201; ideaId: string; replayed: false }
+  | { status: 200; ideaId: string; replayed: true }
   | { status: 400; error: "missing_idempotency_key" | "invalid_idempotency_key"; message: string }
   | { status: 422; error: "invalid_type"; message: string }
   | { status: 409; error: "similar_issues"; message: string; matches: SimilarIssue[] }
@@ -161,18 +171,18 @@ async function resolveTypeId(
   return type?.isActive ? typeId : undefined;
 }
 
-/** The issue an unexpired key already made, or `null`. */
+/** The idea an unexpired key already made, or `null`. */
 async function replayFor(db: Db, agentId: string, key: string, cutoff: Date) {
   const existing = await db.idempotencyKey.findUnique({
     where: { agentId_key: { agentId, key } },
-    select: { bugId: true, createdAt: true, requestHash: true },
+    select: { ideaId: true, createdAt: true, requestHash: true },
   });
   if (!existing || existing.createdAt <= cutoff) return null;
   return existing;
 }
 
 function replayOrConflict(
-  existing: { bugId: string | null; requestHash: string | null },
+  existing: { ideaId: string | null; requestHash: string | null },
   requestHash: string,
 ): CreatePolicyResult {
   if (existing.requestHash !== requestHash) {
@@ -182,7 +192,7 @@ function replayOrConflict(
       message: "This Idempotency-Key was already used with a different request body.",
     };
   }
-  if (existing.bugId) return { status: 200, bugId: existing.bugId, replayed: true };
+  if (existing.ideaId) return { status: 200, ideaId: existing.ideaId, replayed: true };
   return {
     status: 409,
     error: "idempotency_conflict",
@@ -194,7 +204,7 @@ function isUniqueViolation(error: unknown): boolean {
   return error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002";
 }
 
-export async function createIssueWithPolicy(input: CreatePolicyInput): Promise<CreatePolicyResult> {
+export async function createIdeaWithPolicy(input: CreatePolicyInput): Promise<CreatePolicyResult> {
   const { agent, projectId } = input;
   const now = input.now ?? new Date();
   const cutoff = new Date(now.getTime() - IDEMPOTENCY_WINDOW_MS);
@@ -203,7 +213,7 @@ export async function createIssueWithPolicy(input: CreatePolicyInput): Promise<C
     return {
       status: 400,
       error: "missing_idempotency_key",
-      message: `Send an ${IDEMPOTENCY_HEADER} header so a retry can't create the issue twice.`,
+      message: `Send an ${IDEMPOTENCY_HEADER} header so a retry can't create the idea twice.`,
     };
   }
   const key = parseIdempotencyKey(input.idempotencyKey);
@@ -227,8 +237,8 @@ export async function createIssueWithPolicy(input: CreatePolicyInput): Promise<C
   if (!isAcknowledged(input.acknowledgeSimilar)) {
     const matches = await findSimilarIssues(prisma, { tenantId: agent.tenantId, projectId }, input.title);
     if (matches.length > 0) {
-      // A concurrent retry may have just created the issue, which then looks
-      // "similar" to itself: replay it instead.
+      // A concurrent retry may have just created the idea, whose issue-free title
+      // match is still this request's: replay it instead.
       const justMade = await replayFor(prisma, agent.agentId, key, cutoff);
       if (justMade) return replayOrConflict(justMade, input.requestHash);
       return {
@@ -242,22 +252,22 @@ export async function createIssueWithPolicy(input: CreatePolicyInput): Promise<C
   }
 
   try {
-    const bugId = await prisma.$transaction(async (tx) => {
+    const ideaId = await prisma.$transaction(async (tx) => {
       // A key older than the window is free to reuse.
       await tx.idempotencyKey.deleteMany({
         where: { agentId: agent.agentId, key, createdAt: { lte: cutoff } },
       });
       // Taking the key first means a concurrent retry waits on it, then fails
-      // the unique check and replays this issue below.
+      // the unique check and replays this idea below.
       const held = await tx.idempotencyKey.create({
         data: { agentId: agent.agentId, key, requestHash: input.requestHash, createdAt: now },
         select: { id: true },
       });
-      const bug = await input.insert(tx, { severity: AGENT_CREATE_SEVERITY, typeId });
-      await tx.idempotencyKey.update({ where: { id: held.id }, data: { bugId: bug.id } });
-      return bug.id;
+      const idea = await input.insert(tx, { typeId });
+      await tx.idempotencyKey.update({ where: { id: held.id }, data: { ideaId: idea.id } });
+      return idea.id;
     });
-    return { status: 201, bugId, replayed: false };
+    return { status: 201, ideaId, replayed: false };
   } catch (error) {
     if (!isUniqueViolation(error)) throw error;
     const winner = await replayFor(prisma, agent.agentId, key, cutoff);

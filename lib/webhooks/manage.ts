@@ -1,4 +1,4 @@
-import type { Prisma, PrismaClient } from "@prisma/client";
+import { Prisma, type PrismaClient } from "@prisma/client";
 
 /**
  * Webhook subscription limits (#512).
@@ -39,32 +39,57 @@ export async function createSubscriptionRecord(
     signingSecretEncrypted: string;
   },
 ): Promise<CreateSubscriptionResult> {
-  const [existingCount, duplicate] = await Promise.all([
-    db.webhookSubscription.count({ where: { agentId: params.agentId } }),
-    db.webhookSubscription.findFirst({
-      where: { agentId: params.agentId, url: params.url },
-      select: { id: true },
-    }),
-  ]);
-  if (duplicate) {
-    return { ok: false, status: 409, error: "That URL is already subscribed for this agent." };
-  }
-  if (existingCount >= MAX_SUBSCRIPTIONS_PER_AGENT) {
-    return {
-      ok: false,
-      status: 409,
-      error: `An agent can have at most ${MAX_SUBSCRIPTIONS_PER_AGENT} webhook subscriptions. Delete one first.`,
-    };
-  }
+  const executeInTransaction = async (tx: Db): Promise<CreateSubscriptionResult> => {
+    // #498: lock agent row to serialize parallel subscription creations for the agent
+    if ("$queryRaw" in tx && typeof tx.$queryRaw === "function") {
+      await tx.$queryRaw`SELECT "id" FROM "Agent" WHERE "id" = ${params.agentId} FOR UPDATE`;
+    }
 
-  const subscription = await db.webhookSubscription.create({
-    data: {
-      agentId: params.agentId,
-      url: params.url,
-      events: params.events,
-      signingSecretEncrypted: params.signingSecretEncrypted,
-    },
-    select: { id: true, url: true, enabled: true, createdAt: true, events: true },
-  });
-  return { ok: true, subscription };
+    const [existingCount, duplicate] = await Promise.all([
+      tx.webhookSubscription.count({ where: { agentId: params.agentId } }),
+      tx.webhookSubscription.findFirst({
+        where: { agentId: params.agentId, url: params.url },
+        select: { id: true },
+      }),
+    ]);
+    if (duplicate) {
+      return { ok: false, status: 409, error: "That URL is already subscribed for this agent." };
+    }
+    if (existingCount >= MAX_SUBSCRIPTIONS_PER_AGENT) {
+      return {
+        ok: false,
+        status: 409,
+        error: `An agent can have at most ${MAX_SUBSCRIPTIONS_PER_AGENT} webhook subscriptions. Delete one first.`,
+      };
+    }
+
+    try {
+      const subscription = await tx.webhookSubscription.create({
+        data: {
+          agentId: params.agentId,
+          url: params.url,
+          events: params.events,
+          signingSecretEncrypted: params.signingSecretEncrypted,
+        },
+        select: { id: true, url: true, enabled: true, createdAt: true, events: true },
+      });
+      return { ok: true, subscription };
+    } catch (error) {
+      if (
+        (error instanceof Prisma.PrismaClientKnownRequestError ||
+          (typeof error === "object" && error !== null && "code" in error)) &&
+        (error as { code: unknown }).code === "P2002"
+      ) {
+        return { ok: false, status: 409, error: "That URL is already subscribed for this agent." };
+      }
+      throw error;
+    }
+  };
+
+  if ("$transaction" in db && typeof db.$transaction === "function") {
+    return (db.$transaction as (fn: (tx: Db) => Promise<CreateSubscriptionResult>) => Promise<CreateSubscriptionResult>)(
+      executeInTransaction,
+    );
+  }
+  return executeInTransaction(db);
 }

@@ -85,7 +85,7 @@ export function AgentControls({
     startTransition(async () => {
       const result = await setAgentLevelAction(agentId, next);
       if (result.ok) {
-        toast(`${agentName} is now ${AGENT_LEVEL_LABELS[next].toLowerCase()}.`, "success");
+        toast(`${agentName} is now a ${AGENT_LEVEL_LABELS[next].toLowerCase()}.`, "success");
       } else {
         setCurrent(previous);
         toast(result.error, "error");
@@ -192,10 +192,10 @@ export function AgentControls({
         }
         toast(
           !next
-            ? `${agentName} is back to 30 writes an hour.`
+            ? `${agentName} is back to 600 reads an hour.`
             : until
               ? `${agentName} has the high-volume budget until ${new Date(until).toLocaleString()}.`
-              : `${agentName} can now make 400 writes an hour, with no expiry.`,
+              : `${agentName} can now make 4000 reads an hour, with no expiry.`,
           "success",
         );
       } else {
@@ -227,7 +227,7 @@ export function AgentControls({
     <div className="flex flex-col gap-3">
       <div className="flex flex-wrap items-center gap-2">
         <label htmlFor={`level-${agentId}`} className="sr-only">
-          Level for {agentName}
+          Agent class for {agentName}
         </label>
         <Select
           id={`level-${agentId}`}
@@ -319,15 +319,15 @@ export function AgentControls({
       {canSetBurst || burstOn ? (
         <p className="text-xs text-zk-muted" suppressHydrationWarning>
           {!burstOn ? (
-            "Standard budget: 30 writes an hour."
+            "Standard budget: 600 reads an hour."
           ) : burstExpired ? (
-            "High-volume expired; standard budget: 30 writes an hour."
+            "High-volume expired; standard budget: 600 reads an hour."
           ) : savedUntil ? (
             <>
-              High-volume until <LocalTime date={savedUntil} /> (400 writes an hour).
+              High-volume (4000 reads an hour), ends <LocalTime date={savedUntil} />.
             </>
           ) : (
-            "High-volume active with no expiry (400 writes an hour)."
+            "High-volume active with no expiry (4000 reads an hour)."
           )}
         </p>
       ) : null}

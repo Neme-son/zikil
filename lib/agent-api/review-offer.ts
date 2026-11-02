@@ -1,11 +1,10 @@
 import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import type { AgentContext } from "@/lib/agents/require-agent";
-import { IssueApiError } from "@/lib/agent-api/issues";
+import { IssueApiError } from "@/lib/agent-api/errors";
 import { publish } from "@/lib/agent-api/events";
 import {
   reviewerConflict,
-  reviewerCreditConflict,
   ReviewerNotIndependentError,
   type ReviewedBug,
 } from "@/lib/agents/independence";
@@ -96,7 +95,7 @@ async function findEligibleReviewerCandidates(
   bug: LoadedBug,
   excludeUserIds: Set<string> = new Set(),
 ): Promise<ReviewOfferCandidate[]> {
-  // Reviewers must be members of the tenant with an active agent having level 'reviewer' or 'merger'.
+  // Reviewers: members of the tenant with an active agent. Every agent class may review.
   const memberships = await db.membership.findMany({
     where: {
       tenantId,
@@ -105,7 +104,6 @@ async function findEligibleReviewerCandidates(
           some: {
             tenantId,
             revokedAt: null,
-            level: { in: ["reviewer", "dispatcher", "merger"] },
           },
         },
       },
@@ -118,7 +116,6 @@ async function findEligibleReviewerCandidates(
             where: {
               tenantId,
               revokedAt: null,
-              level: { in: ["reviewer", "dispatcher", "merger"] },
             },
             orderBy: { createdAt: "asc" },
             take: 1,
@@ -348,7 +345,7 @@ export async function acceptReviewOffer(agent: AgentContext, offerId: string) {
       throw new IssueApiError(409, `This review offer is already ${offer.status}.`);
     }
 
-    const conflict = reviewerConflict({ id: agent.agentId, ownerUserId: agent.ownerId }, offer.bug) ?? reviewerCreditConflict(offer.beneficiaryUserId, offer.bug);
+    const conflict = reviewerConflict({ id: agent.agentId, ownerUserId: agent.ownerId }, offer.bug);
     if (conflict) throw new IssueApiError(403, "not_independent", { message: new ReviewerNotIndependentError(conflict).message });
 
     const deadlineAt = new Date(now.getTime() + REVIEW_DEADLINE_MS);

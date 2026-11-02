@@ -2,11 +2,10 @@
 
 import { useEffect, useRef, useState, useTransition } from "react";
 import { unstable_rethrow } from "next/navigation";
+import { newIssuePath } from "@/lib/project-paths";
 import { createBugAction, type ActionResult } from "@/app/actions/issues";
 import { submitFailureMessage } from "@/lib/submit-error";
 import { ErrorSummary, FieldError, useFieldErrors } from "@/components/ui/field-errors";
-import { severities } from "@/lib/validations/issue";
-import { severityLabels } from "@/lib/labels";
 import type { AppRole } from "@/lib/roles";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -21,7 +20,6 @@ import { useFormDraft } from "@/components/use-form-draft";
 import { buildDraftKey, saveDraftToStorage } from "@/lib/form-drafts";
 import { reportedFromLine } from "@/lib/reported-from";
 import { DraftBanner } from "@/components/draft-banner";
-import { AssigneeCombobox } from "@/components/assignee-combobox";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import { initialDescription, templateSwitch } from "@/lib/issue-templates";
 
@@ -45,18 +43,15 @@ const FIELD_LABELS: Record<string, string> = {
   categoryId: "Platform",
   description: "Description",
   proofLinks: "GitHub PR",
-  severity: "Severity",
-  assigneeId: "Assignee",
 };
 
 export function CreateIssueForm({
   users,
-  assigneeUsers = users,
   categories = [],
   types = [],
-  isAdmin,
   currentUserId,
   projectId,
+  projectSlug,
   variant = "page",
   reportedFrom = null,
   onCancel,
@@ -69,6 +64,8 @@ export function CreateIssueForm({
   isAdmin: boolean;
   currentUserId?: string;
   projectId?: string | null;
+  /** The project the form was opened in, for the full report page link. */
+  projectSlug: string;
   /**
    * "page": the full report page (detailed by default, with a link to a
    * quick report). "modal": the quick report opened over the current page.
@@ -122,9 +119,6 @@ export function CreateIssueForm({
       description: initialDescription(templateOf(defaultTypeId)),
       categoryId: "",
       proofLinks: "",
-      severity: "medium" as (typeof severities)[number],
-      assigneeId: "",
-      assignToMe: false,
     },
   );
   const [attachmentIds, setAttachmentIds] = useState<string[]>([]);
@@ -154,7 +148,7 @@ export function CreateIssueForm({
   const similarQuery =
     values.title.trim() || (mode === "report" ? values.description.trim().slice(0, 160) : "");
   const sideHasFields =
-    !inModal && (mode === "detailed" || isAdmin || Boolean(currentUserId));
+    !inModal && mode === "detailed";
 
   return (
     <form
@@ -176,16 +170,12 @@ export function CreateIssueForm({
         );
         formData.set("attachmentIds", attachmentIds.join(","));
         formData.set("isReport", mode === "report" ? "true" : "false");
+        // The project the form was opened in (#project-urls); the action checks it is in the workspace.
+        if (projectId) formData.set("projectId", projectId);
         if (mode === "detailed") {
           formData.set("typeId", values.typeId);
           formData.set("categoryId", values.categoryId);
           formData.set("proofLinks", values.proofLinks);
-        }
-        if (isAdmin) {
-          formData.set("severity", values.severity);
-          formData.set("assigneeId", values.assigneeId);
-        } else if (values.assignToMe && currentUserId) {
-          formData.set("assigneeId", currentUserId);
         }
         startTransition(async () => {
           try {
@@ -407,65 +397,6 @@ export function CreateIssueForm({
             </div>
           ) : null}
 
-          {isAdmin ? (
-            <div className="grid gap-4 sm:grid-cols-2">
-              <div className="space-y-1.5">
-                <label
-                  htmlFor="severity"
-                  className="text-sm font-medium text-slate-700"
-                >
-                  Severity
-                </label>
-                <Select
-                  id="severity"
-                  name="severity"
-                  value={values.severity}
-                  onChange={(event) =>
-                    setValue("severity", event.target.value as (typeof severities)[number])
-                  }
-                  {...errs.attrs("severity")}
-                >
-                  {severities.map((value) => (
-                    <option key={value} value={value}>
-                      {severityLabels[value]}
-                    </option>
-                  ))}
-                </Select>
-              </div>
-              <div className="space-y-1.5">
-                <label
-                  htmlFor="assigneeId"
-                  className="text-sm font-medium text-slate-700"
-                >
-                  Assignee
-                </label>
-                <AssigneeCombobox
-                  id="assigneeId"
-                  name="assigneeId"
-                  people={assigneeUsers}
-                  value={values.assigneeId}
-                  onChange={(val) => setValue("assigneeId", val)}
-                />
-                <FieldError formId={errs.formId} field="assigneeId" errors={errs.fieldErrors} />
-              </div>
-            </div>
-          ) : currentUserId ? (
-            <div className="create-self-assignment flex items-center gap-2 pt-1">
-              <input
-                type="checkbox"
-                id="assignToMe"
-                checked={values.assignToMe}
-                onChange={(e) => setValue("assignToMe", e.target.checked)}
-                className="h-4 w-4 rounded border-slate-300 text-teal-600 focus:ring-teal-500"
-              />
-              <label
-                htmlFor="assignToMe"
-                className="text-sm font-medium text-slate-700 cursor-pointer"
-              >
-                Assign this issue to myself
-              </label>
-            </div>
-          ) : null}
           </aside>
         ) : null}
       </div>
@@ -490,9 +421,8 @@ export function CreateIssueForm({
               intercepted again and keep the modal open. The draft is saved
               first (it normally saves after a pause), so the full form opens
               with what was typed. */}
-          {/* eslint-disable-next-line @next/next/no-html-link-for-pages */}
           <a
-            href="/issues/new"
+            href={newIssuePath(projectSlug)}
             className="create-mode-link create-more-detail"
             onClick={() => saveDraftToStorage(draftKey, values)}
           >

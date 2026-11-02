@@ -27,6 +27,8 @@ export type ManageAgentItem = {
   createdAt: string;
   revokedAt: string | null;
   personal: boolean;
+  /** The owner's avatar pick; null wears the automatic robot. */
+  avatar: string | null;
   currentProjectId: string | null;
   recent: boolean;
   apiKeys: {
@@ -134,7 +136,7 @@ export function ManageAgentsList({
               >
                 <div className="flex min-w-0 items-start gap-3">
                   <div className="relative shrink-0">
-                    <AgentAvatar agentId={agent.id} size={56} />
+                    <AgentAvatar agentId={agent.id} avatar={agent.avatar} size={56} />
                     {!agent.revokedAt ? (
                       <span
                         className={`absolute bottom-0 right-0 h-3.5 w-3.5 rounded-full border-2 border-zk-surface ${

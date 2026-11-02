@@ -1,9 +1,9 @@
 import { prisma } from "@/lib/prisma";
 import type { AgentContext } from "@/lib/agents/require-agent";
 import { requireLevel } from "@/lib/agents/levels";
-import { WORK_READINESS_VOTE_THRESHOLD } from "@/lib/ticket-assignment";
 import { workflowFor } from "@/lib/workflow";
-import { isConfirmed } from "@/lib/agent-api/validation";
+import { liveHoldWhere } from "@/lib/issue-holders";
+import { openIssueConfirmations, type ConfirmationState } from "@/lib/issue-stage";
 
 export type ClaimableIssue = {
   id: string;
@@ -11,67 +11,43 @@ export type ClaimableIssue = {
   title: string;
   projectId: string;
   voteCount: number;
-  severity: string;
   createdAt: Date;
 };
 
 /**
- * Scan for issues ready to be claimed or bid on by contributors.
+ * Confirmed issues free to be bid on: no active claim and no live offer. An
+ * issue whose earlier awards were released, or whose offer expired, is free
+ * again (#bids-only-offers). Readiness comes from one bulk read (`openIssueConfirmations`), so the
+ * database returns only ready rows and `limit` is never eaten by unconfirmed
+ * ones (#714). Pass `confirmations` to reuse a read the caller already made.
  */
 export async function findClaimableIssues(
   agent: AgentContext,
   projectId: string,
-  limit = 50,
+  confirmations?: Map<string, ConfirmationState>,
 ): Promise<ClaimableIssue[]> {
-  requireLevel(agent, "contributor");
+  requireLevel(agent, "working");
   const workflow = await workflowFor(projectId);
-  const offerCutoff = new Date(Date.now() - workflow.offerWindowSeconds * 1000);
+  const stages = confirmations ?? await openIssueConfirmations(prisma, { tenantId: agent.tenantId, projectId });
+  const readyIds = [...stages].filter(([, confirmation]) => confirmation.stage === "ready").map(([id]) => id);
+  if (readyIds.length === 0) return [];
 
-  const candidates = await prisma.bug.findMany({
+  return prisma.bug.findMany({
     where: {
+      id: { in: readyIds },
       tenantId: agent.tenantId,
       projectId,
-      isDeleted: false,
-      status: "open",
-      voteCount: { gte: WORK_READINESS_VOTE_THRESHOLD },
-      claims: {
-        none: {
-          releasedAt: null,
-          OR: [
-            { status: "active" },
-            { status: "offered", offeredAt: { gt: offerCutoff } },
-          ],
-        },
-      },
+      // Nothing holds it (liveHoldWhere); a stale assignee does not (#stale-assignee).
+      claims: { none: liveHoldWhere(workflow.offerWindowSeconds) },
     },
-    take: limit * 2,
-    orderBy: { createdAt: "asc" },
+    orderBy: [{ createdAt: "asc" }, { id: "asc" }],
     select: {
       id: true,
       number: true,
       title: true,
       projectId: true,
       voteCount: true,
-      severity: true,
       createdAt: true,
     },
   });
-
-  const claimable: ClaimableIssue[] = [];
-  for (const bug of candidates) {
-    if (claimable.length >= limit) break;
-    if (!(await isConfirmed(bug.id))) continue;
-
-    claimable.push({
-      id: bug.id,
-      number: bug.number,
-      title: bug.title,
-      projectId: bug.projectId,
-      voteCount: bug.voteCount,
-      severity: bug.severity,
-      createdAt: bug.createdAt,
-    });
-  }
-
-  return claimable;
 }

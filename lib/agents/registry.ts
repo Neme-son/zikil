@@ -6,13 +6,12 @@ import { audit } from "@/lib/agents/audit";
 import { generateApiKey } from "@/lib/agents/keys";
 import { sealSecret } from "@/lib/secret-box";
 import { CREATION_LEVELS, DEFAULT_AGENT_LEVEL, canSetLevel } from "@/lib/agents/levels";
+import { isAgentAvatar } from "@/lib/agents/avatars";
 import { isTenantAdmin } from "@/lib/agents/membership";
 import { currentTenantIdFor } from "@/lib/tenant-context";
 import type { AgentContext } from "@/lib/agents/require-agent";
 import { AGENT_LIMIT_MESSAGE, AGENT_MODEL_MAX, AGENT_NAME_MAX, MAX_ACTIVE_AGENTS_PER_OWNER } from "@/lib/agents/registry-limits";
 import { releaseWorkOfRevokedAgent } from "@/lib/agent-api/revoke-release";
-import { notifyClaimOffered } from "@/lib/agent-notifications";
-import { scheduleOfferExpiry } from "@/lib/agent-api/offer";
 
 /**
  * Registering agents and managing their keys (#427). A person creates agents
@@ -92,7 +91,7 @@ export async function createAgent(owner: Actor, input: unknown): Promise<CreateA
     return { ok: false, error: "Join or create a team before you register agents." };
   }
   if (!canSetLevel({ isOwner: true, isTenantAdmin: await isTenantAdmin(owner, tenantId) }, parsed.data.level)) {
-    return { ok: false, error: "Only a team admin can assign dispatcher or merger roles.", field: "level" };
+    return { ok: false, error: "Only a team admin can make an agent a manager or merger agent.", field: "level" };
   }
   const project = await projectInTenant(tenantId, parsed.data.projectId);
   if (!project) return { ok: false, error: "Choose a project in this workspace.", field: "projectId" };
@@ -167,18 +166,16 @@ export async function revokeAgent(actor: Actor, agentId: string, now = new Date(
   const managed = await managedAgent(actor, agentId);
   if (!managed) return { ok: false, error: NOT_FOUND };
   if (managed.agent.revokedAt) return { ok: true };
-  let offers: Awaited<ReturnType<typeof releaseWorkOfRevokedAgent>>["offers"] = [];
   await prisma.$transaction(async (tx) => {
     await tx.agent.update({ where: { id: agentId }, data: { revokedAt: now } });
     await tx.agentApiKey.updateMany({ where: { agentId, revokedAt: null }, data: { revokedAt: now } });
     // #523: a dead key can't deliver, so its claims and bids go back to the team.
-    const { offers: releasedOffers, ...handedBack } = await releaseWorkOfRevokedAgent(tx, {
+    const handedBack = await releaseWorkOfRevokedAgent(tx, {
       agentId,
       tenantId: managed.agent.tenantId,
       actorUserId: actor.id,
       now,
     });
-    offers = releasedOffers;
     await audit(
       { agentId, tenantId: managed.agent.tenantId },
       "agent.revoked",
@@ -187,10 +184,6 @@ export async function revokeAgent(actor: Actor, agentId: string, now = new Date(
       { actorUserId: actor.id, db: tx },
     );
   });
-  for (const offer of offers) {
-    notifyClaimOffered(offer);
-    scheduleOfferExpiry(offer.id);
-  }
   return { ok: true };
 }
 
@@ -201,21 +194,15 @@ export async function revokeAgent(actor: Actor, agentId: string, now = new Date(
 export async function deleteAgent(actor: Actor, agentId: string, now = new Date()): Promise<ManageResult> {
   const managed = await managedAgent(actor, agentId);
   if (!managed) return { ok: false, error: NOT_FOUND };
-  let offers: Awaited<ReturnType<typeof releaseWorkOfRevokedAgent>>["offers"] = [];
   await prisma.$transaction(async (tx) => {
-    const released = await releaseWorkOfRevokedAgent(tx, {
+    await releaseWorkOfRevokedAgent(tx, {
       agentId,
       tenantId: managed.agent.tenantId,
       actorUserId: actor.id,
       now,
     });
-    offers = released.offers;
     await tx.agent.delete({ where: { id: agentId } });
   });
-  for (const offer of offers) {
-    notifyClaimOffered(offer);
-    scheduleOfferExpiry(offer.id);
-  }
   return { ok: true };
 }
 
@@ -225,7 +212,7 @@ export async function setAgentLevel(actor: Actor, agentId: string, level: AgentL
   if (!managed) return { ok: false, error: NOT_FOUND };
   if (managed.agent.revokedAt) return { ok: false, error: "That agent is revoked." };
   if (!canSetLevel(managed, level)) {
-    return { ok: false, error: "Only a team admin can assign dispatcher or merger roles." };
+    return { ok: false, error: "Only a team admin can make an agent a manager or merger agent." };
   }
   const before = await prisma.agent.findUniqueOrThrow({ where: { id: agentId }, select: { level: true } });
   if (before.level === level) return { ok: true };
@@ -281,6 +268,30 @@ export async function renameAgent(actor: Actor, agentId: string, input: unknown)
   return { ok: true, name };
 }
 
+/**
+ * Pick the agent's robot avatar, as its owner or a team admin. Null goes back
+ * to the automatic one drawn from its id.
+ */
+export async function setAgentAvatar(actor: Actor, agentId: string, avatar: unknown): Promise<ManageResult> {
+  if (avatar !== null && !isAgentAvatar(avatar)) return { ok: false, error: "Pick one of the avatars." };
+  const managed = await managedAgent(actor, agentId);
+  if (!managed) return { ok: false, error: NOT_FOUND };
+  if (managed.agent.revokedAt) return { ok: false, error: "That agent is revoked." };
+  const before = await prisma.agent.findUniqueOrThrow({ where: { id: agentId }, select: { avatar: true } });
+  if (before.avatar === avatar) return { ok: true };
+  await prisma.$transaction(async (tx) => {
+    await tx.agent.update({ where: { id: agentId }, data: { avatar } });
+    await audit(
+      { agentId, tenantId: managed.agent.tenantId },
+      "agent.avatar_changed",
+      `agent:${agentId}`,
+      { from: before.avatar, to: avatar, by: managed.isOwner ? "owner" : "tenant_admin" },
+      { actorUserId: actor.id, db: tx },
+    );
+  });
+  return { ok: true };
+}
+
 /** Save an agent's preferred areas for one project (#609). */
 export async function setAgentAreaPreferences(
   actor: Actor,
@@ -329,7 +340,7 @@ export async function setAgentAreaPreferences(
 }
 
 /**
- * Turns the higher write budget on or off (#440), optionally until a time
+ * Turns the higher read budget on or off (#440; writes have no hourly cap since #699), optionally until a time
  * (#596). A workspace admin or a site admin may do this. An owner who is not
  * an admin cannot.
  *
@@ -348,7 +359,7 @@ export async function setAgentBurst(
   const managed = await managedAgent(actor, agentId);
   if (!managed) return { ok: false, error: NOT_FOUND };
   if (!managed.isTenantAdmin && !isAdmin(actor.role)) {
-    return { ok: false, error: "Only an admin can change an agent's write budget." };
+    return { ok: false, error: "Only an admin can change an agent's read budget." };
   }
   if (managed.agent.revokedAt) return { ok: false, error: "That agent is revoked." };
 
@@ -386,7 +397,7 @@ export async function setAgentBurst(
   } catch {
     // The transaction rolled back, so the old budget still applies. Never
     // report success when the change was not persisted.
-    return { ok: false, error: "Couldn't change the write budget. Try again." };
+    return { ok: false, error: "Couldn't change the read budget. Try again." };
   }
   return { ok: true };
 }

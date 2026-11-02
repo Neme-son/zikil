@@ -23,6 +23,31 @@ export const FINISHED_STATUS_FILTER = "finished";
 export const FINISHED_STATUS_VALUES = ["resolved", "closed"] as const;
 
 /**
+ * What the issues page calls each `?status=` value, on its tabs and in the
+ * Active filters chip, so the two always read the same ("Live", not "Resolved").
+ */
+const STATUS_FILTER_LABELS: Record<string, string> = {
+  escalated: "Inbox",
+  ideas: "Ideas",
+  open: "Open",
+  in_progress: "In progress",
+  done: "Done",
+  merge: "Merge",
+  resolved: "Live",
+  error: "Error",
+  possibly_delivered: "Possibly delivered",
+  all: "All",
+  closed: "Closed",
+  rejected: "Rejected",
+  duplicate: "Duplicates",
+  [FINISHED_STATUS_FILTER]: "Closed (incl. resolved)",
+};
+
+export function statusFilterLabel(value: string): string {
+  return STATUS_FILTER_LABELS[value] ?? (statusLabel as Record<string, string>)[value] ?? value;
+}
+
+/**
  * The status filter a `?status=` value stands for: our own `finished` token,
  * or a real status. `null` when the value filters nothing.
  */
@@ -62,7 +87,7 @@ export function resultCountText(count: number, status: string | null): string {
  */
 export const SHOW_RESOLVED_PARAM = "resolved";
 export const SHOW_RESOLVED = "1";
-export const LIVE_STATUS_VALUES = ["open", "in_progress"] as const;
+export const LIVE_STATUS_VALUES = ["open", "in_progress", "done", "merge"] as const;
 
 export function parseShowResolved(raw: string | string[] | null | undefined): boolean {
   return (Array.isArray(raw) ? raw[0] : raw) === SHOW_RESOLVED;

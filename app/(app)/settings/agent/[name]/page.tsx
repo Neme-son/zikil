@@ -9,9 +9,11 @@ import { isTenantAdmin } from "@/lib/agents/membership";
 import { settableLevels } from "@/lib/agents/levels";
 import { currentTenantIdFor } from "@/lib/tenant-context";
 import { LocalTime } from "@/components/local-time";
+import { issueHref } from "@/lib/issue-ref";
 import { InstructionsForm, SendMessageForm } from "./message-forms";
 import { AgentActivity, AgentProfileCard, type AgentActivityItem, type AgentProfileData } from "./agent-profile";
 import { AgentSettingsForm } from "./agent-settings-form";
+import { AgentAvatarPicker } from "./agent-avatar-picker";
 import { agentsLink, agentsMutedClass, agentsSurface } from "@/app/(app)/settings/agents/agents-ui";
 
 export const metadata = { title: "Agent" };
@@ -70,6 +72,7 @@ async function loadAgentProfile(
       tenantId: true,
       name: true,
       model: true,
+      avatar: true,
       level: true,
       revokedAt: true,
       createdAt: true,
@@ -94,7 +97,7 @@ async function loadAgentProfile(
         action: true,
         target: true,
         undoneAt: true,
-        bug: { select: { id: true, number: true, title: true } },
+        bug: { select: { id: true, number: true, title: true, project: { select: { slug: true } } } },
       },
     }),
   ]);
@@ -112,6 +115,7 @@ async function loadAgentProfile(
       id: agent.id,
       name: agent.name,
       model: agent.model,
+      avatar: agent.avatar,
       level: agent.level,
       revokedAt: agent.revokedAt,
       createdAt: agent.createdAt,
@@ -157,6 +161,11 @@ export default async function AgentPage({ params }: { params: Promise<{ name: st
         agent={profile.agent}
         title={
           <h1 className="break-words text-3xl font-extrabold tracking-tight text-zk-text">{thread.agent.name}</h1>
+        }
+        avatarControl={
+          thread.agent.revoked ? null : (
+            <AgentAvatarPicker agentId={agentId} agentName={profile.agent.name} avatar={profile.agent.avatar} />
+          )
         }
         settings={
           thread.agent.revoked ? null : (
@@ -213,7 +222,7 @@ export default async function AgentPage({ params }: { params: Promise<{ name: st
                       {entry.bug ? (
                         <>
                           {" "}about{" "}
-                          <Link href={`/issues/${entry.bug.id}`} className={agentsLink}>
+                          <Link href={issueHref(entry.bug)} className={agentsLink}>
                             {entry.bug.title}
                           </Link>
                         </>
@@ -230,7 +239,7 @@ export default async function AgentPage({ params }: { params: Promise<{ name: st
                       <p className="mt-1 whitespace-pre-wrap break-words text-sm text-zk-text">{entry.answer}</p>
                     </div>
                   ) : (
-                    <Link href={`/escalations/${entry.id}`} className={`mt-2 inline-block text-sm ${agentsLink}`}>
+                    <Link href={`/inbox/escalations/${entry.id}`} className={`mt-2 inline-block text-sm ${agentsLink}`}>
                       Answer →
                     </Link>
                   )}

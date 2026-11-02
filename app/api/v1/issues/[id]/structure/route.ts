@@ -7,14 +7,14 @@ import { structureIssue, structureInputSchema } from "@/lib/agent-api/structure"
  * POST /api/v1/issues/[id]/structure
  * Autonomous agent structuring & triage endpoint (#764).
  * Checks duplicates, infers platform/type, formats structured description,
- * logs activity and records format validation.
+ * and logs activity.
  */
 export async function POST(
   request: NextRequest,
   context: { params: Promise<{ id: string }> },
 ) {
   const { id } = await context.params;
-  return agentIssueRequest(request, "issues.structure", "contributor", id, async (agent) => {
+  return agentIssueRequest(request, "issues.structure", "working", id, async (agent) => {
     const rawBody = await issueJson(request);
     const parsed = structureInputSchema.safeParse(rawBody);
     if (!parsed.success) {

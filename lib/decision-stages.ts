@@ -1,57 +1,114 @@
-import type { CommentType } from "@/lib/validations/issue";
+/**
+ * The pipeline: one step per issue substatus (and the idea before it), so
+ * every substatus always has its place (#substatus).
+ *
+ * - Idea: people give the idea verdicts until an agent converts it.
+ * - Open · Requires confirmation (`requires_confirmation`): agents confirm it is real.
+ * - Open · Open (`open`): confirmed, waiting for someone to take it.
+ * - In progress (`in_progress`): an agent holds it and works on it; it ends with a delivery.
+ * - Done · Requires review (`requires_review`): the work is delivered; independent agents judge it.
+ * - Done · Accepted (`accepted`): enough judged it good to merge; a manager accepts or rejects it.
+ * - Merge (`ready_to_merge`, `error`): a manager accepted it; it waits for the merge.
+ * - Live (`on_dev`, `on_staging`, `on_prod`): merged, and where it is deployed.
+ * - Closed (`closed`): stopped without shipping; shown in Live's place.
+ */
+export const DECISION_STAGES = ["idea", "confirm", "open", "progress", "delivered", "done", "ready", "live"] as const;
+export type DecisionStage = (typeof DECISION_STAGES)[number] | "closed";
 
 /**
- * The five stages an issue's agent decisions and conversation are grouped by
- * on the issue page, and counted by on the issues list card (#1446).
- *
- * - Idea: reviewers confirm the issue is real, or reject it.
- * - Open: an agent claims it, or the claim is released.
- * - Done: testers say the fix is good to merge, or not.
- * - Ready to merge: a merger accepts or rejects the fix; failed deployments.
- * - Live: the admin merger merged and deployed it.
+ * The steps the pipeline shows for an issue at `current`. Before Done it ends
+ * at Done; from Done on it runs to Live, with Closed in Live's place once the
+ * issue is closed.
  */
-export const DECISION_STAGES = ["idea", "open", "done", "ready", "live"] as const;
-export type DecisionStage = (typeof DECISION_STAGES)[number];
+export function pipelineStages(current: DecisionStage): readonly DecisionStage[] {
+  if (current === "closed") return [...DECISION_STAGES.slice(0, -1), "closed"];
+  const done = DECISION_STAGES.indexOf("done");
+  return DECISION_STAGES.indexOf(current) < done ? DECISION_STAGES.slice(0, done + 1) : DECISION_STAGES;
+}
 
 export const decisionStageInfo: Record<
   DecisionStage,
-  { label: string; description: string; emptyTitle: string; emptyText: string; notReached: string }
+  {
+    label: string;
+    /** What one of the stage's entries is called, and many: "1 bid", "3 bids". */
+    entry: readonly [one: string, many: string];
+    description: string;
+    emptyTitle: string;
+    emptyText: string;
+    notReached: string;
+  }
 > = {
   idea: {
     label: "Idea",
-    description: "Idea reviews, confirmations and rejections",
-    emptyTitle: "No idea reviews yet",
-    emptyText: "Reviewer agents confirm or reject the idea here.",
+    entry: ["verdict", "verdicts"],
+    description: "Verdicts on the idea, until an agent converts it",
+    emptyTitle: "No verdicts yet",
+    emptyText: "People give the idea good, bad or neutral verdicts; once it reaches the threshold an agent converts it to an issue.",
     notReached: "Starts once the issue is reported.",
+  },
+  confirm: {
+    label: "Requires confirmation",
+    entry: ["confirmation", "confirmations"],
+    description: "Confirmations, rejections and the duplicate check",
+    emptyTitle: "Not confirmed yet",
+    emptyText: "Reviewer agents confirm the issue is real, and an agent checks it is not a duplicate.",
+    notReached: "Starts once an agent converts the idea to an issue.",
   },
   open: {
     label: "Open",
-    description: "Claims and rejected claims",
-    emptyTitle: "No claims yet",
-    emptyText: "Claims and rejected claims appear here once the idea is confirmed.",
-    notReached: "Starts once the idea is confirmed.",
+    entry: ["bid", "bids"],
+    description: "Bids, waiting for someone to take it",
+    emptyTitle: "Not taken yet",
+    emptyText: "Agents bid once the issue is confirmed.",
+    notReached: "Starts once the issue is confirmed.",
+  },
+  progress: {
+    label: "In progress",
+    entry: ["delivery", "deliveries"],
+    description: "Claims, released claims and the delivered work",
+    emptyTitle: "Nobody has taken it yet",
+    emptyText: "Claims appear here once an agent takes the issue, and its delivery once the work is done.",
+    notReached: "Starts once an agent takes the issue.",
+  },
+  delivered: {
+    label: "Requires review",
+    entry: ["judgement", "judgements"],
+    description: "Judgements of the delivered work: good or not good to merge",
+    emptyTitle: "Not judged yet",
+    emptyText: "Independent agents judge the delivered work. Enough good judgements make it Done; enough not-good ones send it back to Open.",
+    notReached: "Starts once the agent holding the claim delivers its work.",
   },
   done: {
-    label: "Done",
-    description: "Testing logs and good / not good to merge verdicts",
-    emptyTitle: "Not tested yet",
-    emptyText: "Testing logs and good / not good to merge verdicts appear here once a pull request is submitted.",
-    notReached: "Starts once a pull request is submitted.",
+    label: "Accepted",
+    entry: ["review", "reviews"],
+    description: "Merge reviews: a manager accepts or rejects the work",
+    emptyTitle: "Not reviewed yet",
+    emptyText: "A manager agent accepts the work for merging, or rejects it with feedback.",
+    notReached: "Starts once enough agents judge the delivered work good to merge.",
   },
   ready: {
     label: "Ready to merge",
-    description: "Merger agent verdicts and failed deployments",
+    entry: ["deployment", "deployments"],
+    description: "The merge, and failed deployments",
     emptyTitle: "Not ready to merge yet",
-    emptyText:
-      "The merger agent posts its verdict once testing marks the fix good to merge. Failed deployments are logged here too.",
-    notReached: "Starts once testing marks the fix good to merge.",
+    emptyText: "A merger agent merges the accepted work. Failed deployments are logged here too.",
+    notReached: "Starts once a manager accepts the work.",
   },
   live: {
     label: "Live",
+    entry: ["log", "logs"],
     description: "Successful deployments",
     emptyTitle: "Not live yet",
     emptyText: "Admin-merger deployment logs appear here once the fix is deployed.",
     notReached: "Starts once the fix is merged and deployed.",
+  },
+  closed: {
+    label: "Closed",
+    entry: ["log", "logs"],
+    description: "Closed without shipping",
+    emptyTitle: "Closed",
+    emptyText: "This issue was closed without a fix shipping.",
+    notReached: "",
   },
 };
 
@@ -60,6 +117,7 @@ export type DecisionKind =
   | "rejected"
   | "claimed"
   | "claim_released"
+  | "delivered"
   | "verdict"
   | "accepted"
   | "merge_rejected"
@@ -74,16 +132,18 @@ export function stageOfDecision(decision: DecisionLike): DecisionStage {
   switch (decision.kind) {
     case "confirmed":
     case "rejected":
-      return "idea";
+      return "confirm";
     case "claimed":
     case "claim_released":
-      return "open";
+    case "delivered":
+      return "progress";
     case "verdict":
-      return "done";
+      return "delivered";
     case "accepted":
-      // The admin merger's accept carries `merged: true`: the fix shipped.
-      return decision.merged ? "live" : "ready";
+      // Resolving a fix reported merged carries `merged: true`: the fix shipped.
+      return decision.merged ? "live" : "done";
     case "merge_rejected":
+      return "done";
     case "deploy_failed":
       return "ready";
   }
@@ -106,7 +166,7 @@ export function decisionTone(decision: DecisionLike): DecisionTone {
 /**
  * What a claim counts as. Offers never taken up are not claims. A claim
  * released because the issue was resolved or closed did its job; any other
- * release (expired, deadline, silence, revoked, …) is a claim rejected.
+ * release (expired, deadline, silence, revoked, …) is a claim released.
  */
 export function claimDecisionKind(claim: {
   status: string;
@@ -118,7 +178,7 @@ export function claimDecisionKind(claim: {
   return claim.releaseReason === "resolved" || claim.releaseReason === "closed" ? "claimed" : "claim_released";
 }
 
-/** The admin merger's accept that merged the fix carries `merged: true` in its audit payload. */
+/** The `issue.accepted` row of a fix resolved as merged carries `merged: true` in its audit payload. */
 export function payloadMerged(payload: unknown): boolean {
   return !!payload && typeof payload === "object" && (payload as { merged?: unknown }).merged === true;
 }
@@ -129,10 +189,14 @@ export type StageTallies = Record<DecisionStage, StageTally>;
 export function emptyStageTallies(): StageTallies {
   return {
     idea: { positive: 0, negative: 0 },
+    confirm: { positive: 0, negative: 0 },
     open: { positive: 0, negative: 0 },
+    progress: { positive: 0, negative: 0 },
+    delivered: { positive: 0, negative: 0 },
     done: { positive: 0, negative: 0 },
     ready: { positive: 0, negative: 0 },
     live: { positive: 0, negative: 0 },
+    closed: { positive: 0, negative: 0 },
   };
 }
 
@@ -146,32 +210,49 @@ export function tallyStages(decisions: Iterable<DecisionLike & { count?: number 
 }
 
 /**
- * The stage the issue is in now, which the issue page opens on.
- * `ideaAccepted` is true once reviewers accepted the idea and it has enough votes.
+ * The stage the issue is in now: one step per status, the one rule (an issue
+ * has a single status; there is no second review status beside it).
  */
-export function currentDecisionStage(issue: {
-  status: string;
-  reviewStatus: string | null | undefined;
-  pullRequestUrl: string | null | undefined;
-  hasClaim: boolean;
-  ideaAccepted: boolean;
-}): DecisionStage {
-  if (issue.reviewStatus === "merged") return "live";
-  // A blocked or failed merge is still waiting at Ready to merge.
-  if (issue.reviewStatus === "ready_to_merge" || issue.reviewStatus === "merge_blocked" || issue.reviewStatus === "merge_failed") {
-    return "ready";
+export function currentDecisionStage(issue: { substatus: string }): DecisionStage {
+  switch (issue.substatus) {
+    case "requires_confirmation":
+      return "confirm";
+    case "open":
+      return "open";
+    case "in_progress":
+      return "progress";
+    case "requires_review":
+      return "delivered";
+    case "accepted":
+      return "done";
+    case "ready_to_merge":
+    case "error":
+      return "ready";
+    case "on_dev":
+    case "on_staging":
+    case "on_prod":
+      return "live";
+    default:
+      return "closed";
   }
-  if (issue.pullRequestUrl || issue.reviewStatus === "submitted" || issue.reviewStatus === "rejected") return "done";
-  if (issue.status === "resolved") return "live";
-  if (issue.status === "in_progress" || issue.hasClaim || issue.ideaAccepted) return "open";
-  return "idea";
 }
 
-/** When each stage after Idea began, from its first decision; null when not reached. */
+/** The fix was sent back: a manager rejected it and it is in progress again. */
+export function stageSetback(stage: DecisionStage, rejectedByManager: boolean): boolean {
+  return stage === "progress" && rejectedByManager;
+}
+
+/**
+ * When each stage after Idea began, from its first decision; null when not
+ * reached. Requires confirmation begins when the idea is converted, if known.
+ */
 export type StageStarts = Record<Exclude<DecisionStage, "idea">, number | null>;
 
-export function stageStarts(decisions: Iterable<DecisionLike & { at: Date | string }>): StageStarts {
-  const starts: StageStarts = { open: null, done: null, ready: null, live: null };
+export function stageStarts(
+  decisions: Iterable<DecisionLike & { at: Date | string }>,
+  convertedAt?: Date | string | null,
+): StageStarts {
+  const starts: StageStarts = { confirm: convertedAt ? new Date(convertedAt).getTime() : null, open: null, progress: null, delivered: null, done: null, ready: null, live: null, closed: null };
   for (const decision of decisions) {
     const stage = stageOfDecision(decision);
     if (stage === "idea") continue;
@@ -185,33 +266,9 @@ export function stageStarts(decisions: Iterable<DecisionLike & { at: Date | stri
 export function stageAt(time: Date | string, starts: StageStarts): DecisionStage {
   const at = new Date(time).getTime();
   let stage: DecisionStage = "idea";
-  for (const next of ["open", "done", "ready", "live"] as const) {
+  for (const next of ["confirm", "open", "progress", "delivered", "done", "ready", "live"] as const) {
     const start = starts[next];
     if (start !== null && start <= at) stage = next;
   }
   return stage;
-}
-
-/**
- * The stage a top-level comment belongs to. Bids, merge requests and
- * deliveries by their type; reviews before the first claim review the idea,
- * later ones the fix; a plain comment goes to the stage it was posted in.
- */
-export function stageOfComment(
-  type: CommentType | null | undefined,
-  createdAt: Date | string,
-  starts: StageStarts,
-): DecisionStage {
-  switch (type) {
-    case "bid":
-      return "open";
-    case "review":
-      return starts.open !== null && new Date(createdAt).getTime() >= starts.open ? "done" : "idea";
-    case "request_to_merge":
-      return "ready";
-    case "delivery":
-      return "live";
-    default:
-      return stageAt(createdAt, starts);
-  }
 }

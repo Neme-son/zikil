@@ -25,6 +25,7 @@ export async function GET(
       size: true,
       data: true,
       bug: { select: { isDeleted: true, tenantId: true } },
+      idea: { select: { isDeleted: true, tenantId: true } },
       comment: { select: { bug: { select: { tenantId: true, isDeleted: true } } } },
       redesignProposal: { select: { tenantId: true } },
     },
@@ -32,7 +33,7 @@ export async function GET(
 
   const notFound = () => NextResponse.json({ error: "File not found" }, { status: 404 });
   if (!attachment) return notFound();
-  const bug = attachment.bug ?? attachment.comment?.bug;
+  const bug = attachment.bug ?? attachment.idea ?? attachment.comment?.bug;
   if (!bug && !attachment.redesignProposal && attachment.uploaderId !== user.id) return notFound();
   if (attachment.redesignProposal) {
     const membership = await prisma.membership.findUnique({
@@ -80,6 +81,7 @@ export async function DELETE(
       commentId: true,
       redesignProposalId: true,
       bug: { select: { tenantId: true } },
+      idea: { select: { tenantId: true } },
       comment: { select: { bug: { select: { tenantId: true } } } },
       redesignProposal: { select: { tenantId: true } },
     },
@@ -94,6 +96,7 @@ export async function DELETE(
   if (!allowed) {
     const tenantId =
       attachment.bug?.tenantId ??
+      attachment.idea?.tenantId ??
       attachment.comment?.bug?.tenantId ??
       attachment.redesignProposal?.tenantId;
     if (tenantId) {

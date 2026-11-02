@@ -4,7 +4,7 @@ import { revalidatePath } from "next/cache";
 import { requireUser } from "@/lib/auth-helpers";
 import { isAgentPlatformEnabled } from "@/lib/feature-flags";
 import { sendAgentMessage, setAgentInstructions } from "@/lib/agent-messages";
-import { renameAgent } from "@/lib/agents/registry";
+import { renameAgent, setAgentAvatar } from "@/lib/agents/registry";
 
 /** Messages and standing instructions for an agent (#605). The lib checks who may send them. */
 export type AgentMessageActionResult = { ok: true } | { ok: false; error: string };
@@ -58,5 +58,16 @@ export async function renameAgentAction(agentId: unknown, name: unknown): Promis
   if (!result.ok) return result;
   // The name shows in the header's Agents menu on every page.
   revalidatePath("/", "layout");
+  return result;
+}
+
+/** Pick the agent's avatar from its page; null goes back to the automatic one. */
+export async function setAgentAvatarAction(agentId: unknown, avatar: unknown): Promise<AgentMessageActionResult> {
+  if (!isAgentPlatformEnabled()) return { ok: false, error: PLATFORM_OFF };
+  if (typeof agentId !== "string" || !agentId) return { ok: false, error: "Invalid agent." };
+  const user = await requireUser();
+  const result = await setAgentAvatar(user, agentId, avatar ?? null);
+  // The avatar shows wherever the agent does, starting with the header's Agents menu.
+  if (result.ok) revalidatePath("/", "layout");
   return result;
 }

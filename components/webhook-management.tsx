@@ -86,7 +86,7 @@ export function WebhookManagement() {
   const agentLabelId = useId();
 
   const [subscriptions, setSubscriptions] = useState<WebhookSubscriptionRow[]>([]);
-  const [agents, setAgents] = useState<{ id: string; name: string }[]>([]);
+  const [agents, setAgents] = useState<{ id: string; name: string; avatar: string | null }[]>([]);
   const [listError, setListError] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
 
@@ -293,7 +293,7 @@ export function WebhookManagement() {
                     key={sub.id}
                     className="flex flex-wrap items-center gap-3.5 rounded-2xl border border-zk-border px-4 py-3.5"
                   >
-                    <AgentAvatar agentId={sub.agent.id} size={40} />
+                    <AgentAvatar agentId={sub.agent.id} avatar={sub.agent.avatar} size={40} />
                     <div className="flex min-w-0 flex-[1_1_260px] flex-col gap-1">
                       <span className="text-sm font-bold text-zk-text">
                         {sub.agent.name}
@@ -485,7 +485,7 @@ export function WebhookManagement() {
                             : "m-px border border-zk-border bg-zk-surface"
                         }`}
                       >
-                        <AgentAvatar agentId={agent.id} size={34} />
+                        <AgentAvatar agentId={agent.id} avatar={agent.avatar} size={34} />
                         <span className="flex min-w-0 flex-1 flex-col gap-0.5">
                           <span className="truncate text-[13px] font-bold text-zk-text">
                             {agent.name}

@@ -6,18 +6,27 @@
     "dev": "next dev --port 3001",
     "build": "prisma generate && next build --webpack",
     "start": "next start -p ${PORT:-3000}",
-    "lint": "eslint",
+    "lint": "eslint --cache --cache-location node_modules/.cache/eslint/",
     "typecheck": "tsc --noEmit",
-    "check": "pnpm lint && pnpm typecheck && pnpm test",
+    "check": "node scripts/verify.mjs ready",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
     "test:watch": "vitest",
+    "verify:quick": "node scripts/verify.mjs quick",
+    "verify:ready": "node scripts/verify.mjs ready",
+    "verify:recheck": "node scripts/verify.mjs recheck",
+    "verify:status": "node scripts/verify.mjs status",
     "db:migrate": "prisma migrate dev",
+    "db:scenario:open-bids": "tsx --env-file=.env scripts/dev/scenario-open-bids.ts",
+    "db:fixtures": "tsx --env-file=.env scripts/dev/fixtures/run.ts",
+    "db:fixtures:generate": "tsx scripts/dev/fixtures/generate.ts",
     "db:seed": "prisma db seed",
     "db:reset": "prisma migrate reset",
     "postinstall": "prisma generate",
     "e2e": "playwright test",
-    "e2e:seed": "tsx e2e/seed.ts"
+    "e2e:seed": "tsx e2e/seed.ts",
+    "ziki": "tsx --tsconfig cli/tsconfig.json cli/ziki.ts",
+    "test:cli": "node scripts/cli-tests.mjs"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"
@@ -46,7 +55,7 @@
     "@types/qrcode": "^1.5.6",
     "@types/react": "^19",
     "@types/react-dom": "^19",
-    "@vitest/coverage-v8": "^3.2.7",
+    "@vitest/coverage-v8": "^5.0.5",
     "axe-core": "^4.14.0",
     "eslint": "^9",
     "eslint-config-next": "16.4.1",
@@ -58,7 +67,7 @@
     "tailwindcss": "^4",
     "tsx": "^4.23.15",
     "typescript": "^5",
-    "vitest": "^3.2.7"
+    "vitest": "^5.0.5"
   },
   "engines": {
     "node": "22.x"

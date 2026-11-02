@@ -65,7 +65,7 @@ export type Deps = {
   fetchImpl: FetchFn;
 };
 
-export type StructureOutcome = "structured" | "structured_comment_failed" | "skipped_already_structured";
+export type StructureOutcome = "structured" | "skipped_already_structured";
 
 /**
  * A short line with no sentence punctuation is almost certainly a field
@@ -141,14 +141,14 @@ async function zikiFetch(deps: Deps, path: string, init: RequestInit = {}) {
   return response.json();
 }
 
-/** List every open, reported-stage draft idea (human-created, unstructured). */
+/** List every open draft idea (human-created, unstructured). Ideas have their own endpoint (#idea-table). */
 export async function listDrafts(deps: Deps): Promise<DraftIssue[]> {
   const drafts: DraftIssue[] = [];
   let cursor: string | null = null;
   do {
-    const qs = new URLSearchParams({ stage: "reported", status: "open", limit: "100" });
+    const qs = new URLSearchParams({ status: "open", limit: "100" });
     if (cursor) qs.set("cursor", cursor);
-    const page: { items: DraftIssue[]; nextCursor: string | null } = await zikiFetch(deps, `/api/v1/issues?${qs}`);
+    const page: { items: DraftIssue[]; nextCursor: string | null } = await zikiFetch(deps, `/api/v1/ideas?${qs}`);
     for (const issue of page.items) {
       if (issue.createdByAgentId !== null) continue; // agent-authored, not a human draft
       if (!isUnstructuredDraft(issue)) continue; // already has the standard headings
@@ -159,9 +159,9 @@ export async function listDrafts(deps: Deps): Promise<DraftIssue[]> {
   return drafts;
 }
 
-/** Re-fetch a single issue by id — used to re-check state right before writing. */
+/** Re-fetch a single idea by id — used to re-check state right before writing. */
 export async function fetchIssue(deps: Deps, id: string): Promise<DraftIssue> {
-  return zikiFetch(deps, `/api/v1/issues/${id}`);
+  return (await zikiFetch(deps, `/api/v1/ideas/${id}`)).idea;
 }
 
 /** Ask Claude to pull the four structured fields out of raw draft text. */
@@ -189,15 +189,12 @@ export async function extractFields(deps: Deps, issue: DraftIssue): Promise<Extr
 }
 
 /**
- * Write the structured fields and post a transparency comment.
+ * Write the structured fields. Ideas take no comments, so the audit trail
+ * (`idea.structured`, with the description before) is the record of it.
  *
  * Re-checks the draft's current state right before writing (another sweep,
  * or a human, may have structured or edited it since it was listed) and
- * skips rather than overwrites if it's no longer an unstructured draft. The
- * /structure write and the comment are reported separately: a comment
- * failure after a successful /structure call does not get treated as a
- * failed structuring, since the structuring itself already happened and
- * does not need retrying.
+ * skips rather than overwrites if it's no longer an unstructured draft.
  */
 export async function structureDraft(deps: Deps, issue: DraftIssue, fields: Extraction): Promise<StructureOutcome> {
   const fresh = await fetchIssue(deps, issue.id);
@@ -209,34 +206,12 @@ export async function structureDraft(deps: Deps, issue: DraftIssue, fields: Extr
     method: "POST",
     body: JSON.stringify(fields),
   });
-
-  try {
-    await zikiFetch(deps, `/api/v1/issues/${issue.id}/comments`, {
-      method: "POST",
-      body: JSON.stringify({
-        body: "Structured from a raw draft by the draft-idea conversion agent — summary, problem statement, proposed solution and acceptance criteria were extracted from the original text. Please correct anything that doesn't match your intent.",
-        type: "comment",
-      }),
-    });
-  } catch (error) {
-    console.error(
-      `#${issue.number} structured, but the transparency comment failed (not retrying — the structuring itself already succeeded):`,
-      error instanceof Error ? error.message : error,
-    );
-    return "structured_comment_failed";
-  }
-
   return "structured";
 }
 
-export async function flagTooThin(deps: Deps, issue: DraftIssue) {
-  await zikiFetch(deps, `/api/v1/issues/${issue.id}/comments`, {
-    method: "POST",
-    body: JSON.stringify({
-      body: "This draft doesn't have enough detail to structure responsibly yet (looks like an unfilled template or a one-liner). Could you add what you'd expect to happen, what actually happens, and any context — then it can be picked up for structuring?",
-      type: "comment",
-    }),
-  });
+/** A draft too thin to structure is left as it is; ideas take no comments to ask for more. */
+export function flagTooThin(_deps: Deps, issue: DraftIssue) {
+  console.log(`Idea #${issue.number} "${issue.title}" is too thin to structure; left as it is.`);
 }
 
 export async function run(deps: Deps, options: { dryRun: boolean } = { dryRun: false }) {
@@ -249,8 +224,7 @@ export async function run(deps: Deps, options: { dryRun: boolean } = { dryRun: f
   for (const issue of drafts) {
     try {
       if (isTooThinToStructure(issue.description)) {
-        console.log(`#${issue.number} "${issue.title}" — too thin, flagging for more detail.`);
-        if (!options.dryRun) await flagTooThin(deps, issue);
+        if (!options.dryRun) flagTooThin(deps, issue);
         flagged++;
         continue;
       }
@@ -267,9 +241,7 @@ export async function run(deps: Deps, options: { dryRun: boolean } = { dryRun: f
         console.log(`#${issue.number} "${issue.title}" — already structured since listing, skipped.`);
         skipped++;
       } else {
-        console.log(
-          `#${issue.number} "${issue.title}" — structured${outcome === "structured_comment_failed" ? " (comment failed, not retried)" : ""}.`,
-        );
+        console.log(`#${issue.number} "${issue.title}" — structured.`);
         structured++;
       }
     } catch (error) {

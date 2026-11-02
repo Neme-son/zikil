@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { expireTag, TAGS } from "@/lib/lookups";
+import { expireTag, TAGS } from "@/lib/cache-tags";
 import { prisma } from "@/lib/prisma";
 import { requireUser } from "@/lib/auth-helpers";
 import { canDeleteIssueType, issueTypeInputSchema, issueTypeScopeFor } from "@/lib/issue-types";
@@ -82,8 +82,8 @@ export async function createIssueTypeAction(
   }
 
   expireTag(TAGS.issueTypes);
-  revalidatePath("/admin/types");
-  revalidatePath("/issues/new");
+  revalidatePath("/[project]/org", "layout");
+  revalidatePath("/[project]", "layout");
   revalidatePath("/bugs/new");
   return { ok: true };
 }
@@ -206,9 +206,8 @@ export async function updateIssueTypeAction(
   }
 
   expireTag(TAGS.issueTypes);
-  revalidatePath("/admin/types");
-  revalidatePath("/issues/new");
-  revalidatePath("/issues");
+  revalidatePath("/[project]/org", "layout");
+  revalidatePath("/[project]", "layout");
   revalidatePath("/bugs/new");
   revalidatePath("/bugs");
   for (const bugId of linkedBugIds) {
@@ -242,8 +241,8 @@ export async function toggleIssueTypeActiveAction(
   });
 
   expireTag(TAGS.issueTypes);
-  revalidatePath("/admin/types");
-  revalidatePath("/issues/new");
+  revalidatePath("/[project]/org", "layout");
+  revalidatePath("/[project]", "layout");
   revalidatePath("/bugs/new");
   return { ok: true };
 }
@@ -288,8 +287,8 @@ export async function deleteIssueTypeAction(
   }
 
   expireTag(TAGS.issueTypes);
-  revalidatePath("/admin/types");
-  revalidatePath("/issues/new");
+  revalidatePath("/[project]/org", "layout");
+  revalidatePath("/[project]", "layout");
   revalidatePath("/bugs/new");
   return { ok: true };
 }

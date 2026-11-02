@@ -1,4 +1,5 @@
-import { revalidateTag, unstable_cache, updateTag } from "next/cache";
+import { unstable_cache } from "next/cache";
+import { TAGS } from "@/lib/cache-tags";
 import { prisma } from "@/lib/prisma";
 import { currentTenantIdFor, notificationInTenant } from "@/lib/tenant-context";
 import {
@@ -26,11 +27,7 @@ import { ensureDefaultIssueTypes } from "@/lib/issue-types";
  * instances, where each instance keeps its own cache.
  */
 
-export const TAGS = {
-  issueTypes: "lookup:issue-types",
-  platforms: "lookup:platforms",
-  unread: (userId: string) => `notifications:unread:${userId}`,
-} as const;
+export { TAGS, expireTag, expireUnreadCounts } from "@/lib/cache-tags";
 
 const LOOKUP_TTL_SECONDS = 300;
 const UNREAD_TTL_SECONDS = 60;
@@ -43,25 +40,6 @@ export type IssueTypeLookup = {
   isActive: boolean;
 };
 export type PlatformLookup = { id: string; name: string; isActive: boolean };
-
-/**
- * Expires a cache tag. In a server action this is `updateTag`, which also
- * makes the action's own re-render read fresh data; anywhere else (a route
- * handler, an `after()` callback) `updateTag` throws, so it falls back to
- * expiring the tag immediately for the next request.
- */
-export function expireTag(tag: string): void {
-  try {
-    updateTag(tag);
-  } catch {
-    try {
-      revalidateTag(tag, { expire: 0 });
-    } catch (error) {
-      // Outside any request (a script, a test). Nothing to expire.
-      console.warn("[lookups] could not expire", tag, error);
-    }
-  }
-}
 
 /**
  * True when Postgres is behind the migration that added this column.
@@ -195,8 +173,4 @@ export async function getUnreadCount(userId: string): Promise<number> {
     ["notifications", "unread", userId, tenantId ?? "none"],
     { tags: [TAGS.unread(userId)], revalidate: UNREAD_TTL_SECONDS },
   )();
-}
-
-export function expireUnreadCounts(userIds: Iterable<string>): void {
-  for (const id of new Set(userIds)) expireTag(TAGS.unread(id));
 }

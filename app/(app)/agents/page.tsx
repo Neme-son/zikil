@@ -14,7 +14,6 @@ import { ManageAgentsList, type ManageAgentItem } from "@/app/(app)/settings/age
 import {
   agentsMutedClass,
   agentsPrimaryBtn,
-  agentsSecondaryBtn,
   agentsSurface,
 } from "@/app/(app)/settings/agents/agents-ui";
 
@@ -80,6 +79,7 @@ export default async function AgentsPage() {
         select: {
           id: true,
           name: true,
+          avatar: true,
           model: true,
           level: true,
           burst: true,
@@ -112,6 +112,7 @@ export default async function AgentsPage() {
     return {
       id: agent.id,
       name: agent.name,
+      avatar: agent.avatar,
       model: agent.model,
       level: agent.level,
       burst: agent.burst,
@@ -143,9 +144,6 @@ export default async function AgentsPage() {
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <Link href="/activity" className={agentsSecondaryBtn}>
-              Activity &amp; Approvals
-            </Link>
             <Link href={CREATE_AGENT_HREF} className={agentsPrimaryBtn}>
               Create agent
             </Link>

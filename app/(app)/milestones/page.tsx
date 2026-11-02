@@ -1,15 +1,16 @@
 import Link from "next/link";
 import { requireUser } from "@/lib/auth-helpers";
-import { isAdmin } from "@/lib/roles";
-import { currentTenantIdFor } from "@/lib/tenant-context";
+import { currentTenantAccess } from "@/lib/tenant-access";
 import { loadMilestoneSummaries, type MilestoneSummary } from "@/lib/milestone-stats";
 import { dueDateValue, milestoneIssuesHref } from "@/lib/milestones";
+import { firstProjectSlugFor } from "@/lib/project-route";
+import { orgPath } from "@/lib/project-paths";
 import { MilestoneProgressBar } from "@/components/milestone-progress";
 import { MilestoneDue } from "@/components/milestone-due";
 
 export const metadata = { title: "Milestones" };
 
-function MilestoneCard({ m }: { m: MilestoneSummary }) {
+function MilestoneCard({ m, slug }: { m: MilestoneSummary; slug: string | null }) {
   const left = m.progress.total - m.progress.done;
   return (
     <li className="rounded-[20px] border border-zk-border bg-zk-surface p-4 sm:p-5">
@@ -22,9 +23,11 @@ function MilestoneCard({ m }: { m: MilestoneSummary }) {
         <MilestoneProgressBar progress={m.progress} label={m.title} />
       </div>
       <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-sm">
-        <Link href={milestoneIssuesHref(m.id)} className="font-medium text-zk-accent hover:underline">
-          All {m.progress.total} issue{m.progress.total === 1 ? "" : "s"}
-        </Link>
+        {slug ? (
+          <Link href={milestoneIssuesHref(slug, m.id)} className="font-medium text-zk-accent hover:underline">
+            All {m.progress.total} issue{m.progress.total === 1 ? "" : "s"}
+          </Link>
+        ) : null}
         {/* No link: "left" spans open and in progress, which no single
             status filter covers, and a link to half of it would mislead. */}
         {m.progress.total > 0 ? (
@@ -38,8 +41,9 @@ function MilestoneCard({ m }: { m: MilestoneSummary }) {
 /** Every milestone with its progress (#289): "what's left for this release?" */
 export default async function MilestonesPage() {
   const user = await requireUser();
-  const tenantId = await currentTenantIdFor(user.id);
+  const { tenantId, admin } = await currentTenantAccess(user.id, user.role);
   const all = tenantId ? await loadMilestoneSummaries({ tenantId }) : [];
+  const slug = await firstProjectSlugFor(user.id);
   const open = all.filter((m) => !m.isClosed);
   const closed = all.filter((m) => m.isClosed);
 
@@ -50,9 +54,9 @@ export default async function MilestonesPage() {
           <h1 className="text-2xl font-extrabold tracking-tight text-zk-text">Milestones</h1>
           <p className="text-sm text-zk-text2">Releases and sprints, soonest due first.</p>
         </div>
-        {isAdmin(user.role) ? (
+        {admin && slug ? (
           <Link
-            href="/admin/milestones"
+            href={orgPath(slug, "milestones")}
             className="inline-flex items-center rounded-full border border-zk-border bg-zk-surface px-3.5 py-2 text-sm font-medium text-zk-text hover:bg-zk-chip"
           >
             Manage milestones
@@ -67,7 +71,7 @@ export default async function MilestonesPage() {
       ) : (
         <ul className="space-y-3">
           {open.map((m) => (
-            <MilestoneCard key={m.id} m={m} />
+            <MilestoneCard key={m.id} m={m} slug={slug} />
           ))}
         </ul>
       )}
@@ -79,7 +83,7 @@ export default async function MilestonesPage() {
           </summary>
           <ul className="mt-3 space-y-3">
             {closed.map((m) => (
-              <MilestoneCard key={m.id} m={m} />
+              <MilestoneCard key={m.id} m={m} slug={slug} />
             ))}
           </ul>
         </details>

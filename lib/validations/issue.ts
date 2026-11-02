@@ -4,11 +4,14 @@ import { BCRYPT_MAX_PASSWORD_BYTES } from "@/lib/password";
 import { isGitHubUrl, splitProofLinkLines } from "@/lib/proof-links";
 import { stripGitHubMarkup } from "@/lib/github-paste";
 
-export const severities = ["low", "medium", "high", "critical"] as const;
-export const statuses = ["open", "in_progress", "resolved", "closed"] as const;
+export const statuses = ["open", "in_progress", "done", "merge", "resolved", "closed"] as const;
 
-export const severitySchema = z.enum(severities);
 export const statusSchema = z.enum(statuses);
+
+/** The step within a main status (#substatus, lib/issue-substatus.ts). */
+export const substatuses = ["requires_confirmation", "open", "in_progress", "requires_review", "accepted", "ready_to_merge", "error", "on_dev", "on_staging", "on_prod", "closed"] as const;
+
+export const substatusSchema = z.enum(substatuses);
 
 const MAX_PROOF_LINKS = 20;
 
@@ -73,7 +76,6 @@ export const createBugSchema = z
       .refine((val) => val.length <= 5000, {
         message: "Description cannot exceed 5000 characters",
       }),
-    severity: severitySchema.default("medium"),
     typeId: z.string().optional().nullable().or(z.literal("")),
     assigneeId: userIdSchema.optional().or(z.literal("")),
     categoryId: z.string().optional().or(z.literal("")),
@@ -86,7 +88,6 @@ export const updateBugSchema = z.object({
   status: statusSchema.optional(),
   typeId: z.string().nullable().optional().or(z.literal("")),
   assigneeId: userIdSchema.nullable().optional().or(z.literal("")),
-  severity: severitySchema.optional(),
   categoryId: z.string().nullable().optional().or(z.literal("")),
   areaId: z.string().nullable().optional().or(z.literal("")),
 });
@@ -129,17 +130,21 @@ export const categorySchema = z.object({
 /** Alias for categorySchema matching the user-facing Platform domain terminology (#355). */
 export const platformSchema = categorySchema;
 
-export const commentTypeValues = [
-  "comment",
-  "bid",
-  "review",
-  "delivery",
-  "request_to_merge",
-] as const;
+/**
+ * A comment (#entry-replies-only): a plain reply to exactly one stage entry,
+ * named by one of the ids below. It has no type, no metadata and no parent.
+ */
+/** Comments hold detailed investigations, so they can be long. */
+export const COMMENT_MAX_CHARS = 10_000;
 
-export type CommentType = (typeof commentTypeValues)[number];
-
-export const commentTypeSchema = z.enum(commentTypeValues);
+/** The longest comment label: under 30 characters. */
+export const COMMENT_LABEL_MAX_CHARS = 29;
+/** A comment's freeform label, e.g. "Blocker" or "Root cause", shown in its title. */
+export const commentLabel = z
+  .string()
+  .trim()
+  .min(1, "A label can't be empty")
+  .max(COMMENT_LABEL_MAX_CHARS, `A label is under ${COMMENT_LABEL_MAX_CHARS + 1} characters`);
 
 export const commentSchema = z.object({
   body: z
@@ -149,20 +154,51 @@ export const commentSchema = z.object({
     .refine((val) => val.length >= 1, {
       message: "Comment cannot be empty",
     })
-    .refine((val) => val.length <= 2000, {
-      message: "Comment cannot exceed 2000 characters",
+    .refine((val) => val.length <= COMMENT_MAX_CHARS, {
+      message: `Comment cannot exceed ${COMMENT_MAX_CHARS.toLocaleString("en-US")} characters`,
     }),
+  /** A reply to a confirmation entry (#issue-confirmations) names it here. */
+  confirmationId: z
+    .string()
+    .trim()
+    .max(191)
+    .optional()
+    .transform((value) => (value && value.length > 0 ? value : undefined)),
+  /** A reply to a bid (#issue-bids) names it here. */
+  bidId: z
+    .string()
+    .trim()
+    .max(191)
+    .optional()
+    .transform((value) => (value && value.length > 0 ? value : undefined)),
+  /** A reply to a delivery (#delivered-step) names it here. */
+  deliveryId: z
+    .string()
+    .trim()
+    .max(191)
+    .optional()
+    .transform((value) => (value && value.length > 0 ? value : undefined)),
+  /** A reply to a test verdict (#review-entries) names it here. */
+  testVerdictId: z
+    .string()
+    .trim()
+    .max(191)
+    .optional()
+    .transform((value) => (value && value.length > 0 ? value : undefined)),
+  /** A reply to a merge review (#review-entries) names it here. */
+  mergeReviewId: z
+    .string()
+    .trim()
+    .max(191)
+    .optional()
+    .transform((value) => (value && value.length > 0 ? value : undefined)),
+  /** A reply to a comment on the issue itself names it here (lib/comment-placement.ts). */
   parentId: z
     .string()
-    .cuid()
+    .trim()
+    .max(191)
     .optional()
-    .or(z.literal(""))
     .transform((value) => (value && value.length > 0 ? value : undefined)),
-  type: commentTypeSchema.optional().default("comment"),
-  metadata: z.object({
-    confidence: z.number().int().min(0).max(100).optional(),
-    confidenceReason: z.string().trim().min(1).max(500).optional(),
-  }).catchall(z.unknown()).optional(),
 });
 
 export const loginSchema = z.object({

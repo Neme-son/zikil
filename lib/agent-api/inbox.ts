@@ -4,6 +4,7 @@ import { prisma } from "@/lib/prisma";
 import type { AgentContext } from "@/lib/agents/require-agent";
 import { extractMentionedAgentIds, extractMentionedUserIds } from "@/lib/mentions";
 import { commentPermalinkPath } from "@/lib/comment-window";
+import { issueHref } from "@/lib/issue-ref";
 import { absoluteUrl } from "@/lib/site-url";
 import { markMessagesRead } from "@/lib/agent-messages";
 import {
@@ -111,19 +112,35 @@ export async function inboxRecipients(db: Db, event: InboxEvent): Promise<InboxD
       if (!commentId) return [];
       const comment = await db.comment.findUnique({
         where: { id: commentId },
-        select: { agentId: true, body: true, parent: { select: { agentId: true } } },
+        select: {
+          agentId: true,
+          body: true,
+          parent: { select: { agentId: true } },
+          // #entry-replies-only: a reply answers the agent whose entry it is under.
+          confirmation: { select: { agentId: true } },
+          bid: { select: { agentId: true } },
+          testVerdict: { select: { agentId: true } },
+          mergeReview: { select: { agentId: true } },
+        },
       });
       if (!comment) return [];
-      const parentAgentId = comment.parent?.agentId ?? null;
+      const parentAgentId =
+        comment.parent?.agentId ??
+        comment.confirmation?.agentId ??
+        comment.bid?.agentId ??
+        comment.testVerdict?.agentId ??
+        comment.mergeReview?.agentId ??
+        null;
       const reply: InboxDelivery[] = parentAgentId && parentAgentId !== comment.agentId
         ? [{ agentId: parentAgentId, kind: "reply", commentId }]
         : [];
       return [...reply, ...await mentionDeliveries(db, event.tenantId, comment.body, comment.agentId, commentId)];
     }
-    case "issue.created": {
-      if (!event.bugId) return [];
-      const bug = await db.bug.findUnique({ where: { id: event.bugId }, select: { description: true } });
-      return bug ? mentionDeliveries(db, event.tenantId, bug.description, event.actorAgentId ?? null, null) : [];
+    case "idea.created": {
+      const ideaId = text(payload.ideaId);
+      if (!ideaId) return [];
+      const idea = await db.idea.findUnique({ where: { id: ideaId }, select: { description: true } });
+      return idea ? mentionDeliveries(db, event.tenantId, idea.description, event.actorAgentId ?? null, null) : [];
     }
     default: {
       if (!REDESIGN_DECISIONS.has(event.type)) return [];
@@ -224,10 +241,25 @@ export async function pollInbox(
   }
 }
 
-/** The JSON shape of one item. `url` links to the comment when there is one, else the issue. */
-export function serializeInboxItem(item: InboxItemRow) {
-  const url = item.bugId
-    ? absoluteUrl(item.commentId ? commentPermalinkPath(item.bugId, item.commentId) : `/issues/${item.bugId}`)
+/** The address of each item's issue, `/<project-slug>/<number>` (#project-urls), by issue id. */
+export async function inboxIssuePaths(items: readonly InboxItemRow[]): Promise<Map<string, string>> {
+  const ids = [...new Set(items.map((item) => item.bugId).filter((id): id is string => Boolean(id)))];
+  if (ids.length === 0) return new Map();
+  const bugs = await prisma.bug.findMany({
+    where: { id: { in: ids } },
+    select: { id: true, number: true, project: { select: { slug: true } } },
+  });
+  return new Map(bugs.map((bug) => [bug.id, issueHref(bug)]));
+}
+
+/**
+ * The JSON shape of one item. `url` links to the comment when there is one,
+ * else the issue; `issuePaths` comes from `inboxIssuePaths`.
+ */
+export function serializeInboxItem(item: InboxItemRow, issuePaths: ReadonlyMap<string, string>) {
+  const issuePath = item.bugId ? issuePaths.get(item.bugId) : undefined;
+  const url = issuePath
+    ? absoluteUrl(item.commentId ? commentPermalinkPath(issuePath, item.commentId) : issuePath)
     : null;
   return {
     id: item.id,
