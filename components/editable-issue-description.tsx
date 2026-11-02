@@ -16,9 +16,13 @@ export type EditableIssueDescriptionProps = {
   bugId: string;
   initialTitle: string;
   initialDescription: string;
+  /** The report's short summary (#report-summary): shown first, the full description opens under it. */
+  summary?: string | null;
   canEdit: boolean;
   users: { id: string; name: string }[];
   children?: ReactNode;
+  /** Small tags (the issue's area) shown at the right of the summary. */
+  tags?: ReactNode;
   /** When the title or description was last edited (#303); null if never. */
   lastEditedAt?: Date | null;
   historyHref?: string;
@@ -28,14 +32,17 @@ export function EditableIssueDescription({
   bugId,
   initialTitle,
   initialDescription,
+  summary = null,
   canEdit,
   users,
   children,
+  tags = null,
   lastEditedAt = null,
   historyHref,
 }: EditableIssueDescriptionProps) {
   const router = useRouter();
   const [isEditing, setIsEditing] = useState(false);
+  const [showFull, setShowFull] = useState(false);
   const [title, setTitle] = useState(initialTitle);
   const [description, setDescription] = useState(initialDescription);
   const [editorUploading, setEditorUploading] = useState(false);
@@ -83,7 +90,7 @@ export function EditableIssueDescription({
       <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
         <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
           <h2 className="text-xs font-bold uppercase tracking-[0.08em] text-zk-muted">
-            {isEditing ? "Edit issue" : "Description"}
+            {isEditing ? "Edit issue" : summary ? "Summary" : "Description"}
           </h2>
           {!isEditing && lastEditedAt && historyHref ? (
             <p className="text-xs text-zk-muted">
@@ -187,7 +194,38 @@ export function EditableIssueDescription({
             </Button>
           </div>
         </form>
+      ) : summary ? (
+        // One card: the summary, and the full description opened beneath it.
+        <div>
+          <div className="flex items-start justify-between gap-3">
+            <RichText className="mt-0! max-w-3xl text-[15px] font-medium leading-relaxed text-zk-text" content={summary} />
+            {tags ? <div className="flex shrink-0 flex-wrap justify-end gap-1.5 pt-0.5">{tags}</div> : null}
+          </div>
+          <button
+            type="button"
+            aria-expanded={showFull}
+            aria-controls={`${bugId}-full-description`}
+            onClick={() => setShowFull((open) => !open)}
+            className="mt-2 inline-flex items-center gap-1 text-sm font-semibold text-zk-accent hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-electric-blue-strong"
+          >
+            {showFull ? "Hide full description" : "Show full description"}
+            <svg aria-hidden="true" viewBox="0 0 16 16" className={`h-3.5 w-3.5 transition-transform ${showFull ? "rotate-180" : ""}`} fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M4 6l4 4 4-4" />
+            </svg>
+          </button>
+          {showFull ? (
+            <div id={`${bugId}-full-description`} className="mt-3 border-t border-zk-divider pt-3 text-[15px] leading-relaxed text-zk-text2">
+              {/* Section headings at the text's own size, so the description doesn't read larger than the summary. */}
+              <RichText
+                className="mt-0! [&_h1]:!text-[15px] [&_h2]:!text-[15px] [&_h3]:!text-[15px] [&_h1]:!font-bold [&_h2]:!font-bold [&_h3]:!font-bold"
+                content={initialDescription}
+                renderMentions={(text) => <MentionText text={text} users={users} />}
+              />
+            </div>
+          ) : null}
+        </div>
       ) : (
+        <div className="flex items-start justify-between gap-3">
         <div className="max-w-3xl text-[15px] leading-relaxed text-zk-text2">
           <ExpandableText maxLines={6} expandText="View more" collapseText="View less">
             <RichText
@@ -196,6 +234,8 @@ export function EditableIssueDescription({
               renderMentions={(text) => <MentionText text={text} users={users} />}
             />
           </ExpandableText>
+        </div>
+          {tags ? <div className="flex shrink-0 flex-wrap justify-end gap-1.5 pt-0.5">{tags}</div> : null}
         </div>
       )}
 

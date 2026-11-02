@@ -1,6 +1,8 @@
 import { EntrySummary } from "@/components/entry-summary";
+import { BASE_PATH } from "@/lib/base-path";
 import Link from "next/link";
 import { LocalTime } from "@/components/local-time";
+import { StepDate, StepTitle } from "@/components/issue-timeline";
 import { AddConfirmationDialog } from "@/components/add-confirmation-dialog";
 import { EntryReplyForm } from "@/components/entry-reply-form";
 import { EntryReplies, type EntryReplyView } from "@/components/entry-replies";
@@ -14,13 +16,17 @@ export type ConfirmationEntryView = {
   verdict: ConfirmationVerdictName;
   summary: string;
   description: string;
-  duplicateOf: { id: string; number: number } | null;
+  duplicateOf: { id: string; number: number; projectSlug: string } | null;
   onBehalfOfUserId: string;
   by: string;
   agentName: string | null;
   counted: boolean;
+  /** What it counts for: a manager agent's the project's managerVoteWeight, others 1 (#confirmation-weights). */
+  weight?: number;
   undone: boolean;
   updatedAt: Date | string;
+  /** Evidence: screenshots and other files, served at /api/attachments/{id}. */
+  attachments?: { id: string; filename: string; contentType: string }[];
   replies: ConfirmationReplyView[];
 };
 
@@ -31,10 +37,9 @@ export type ConfirmationsData = {
 };
 
 /** Why the viewer can't give an entry, or null when they can. */
-export type ConfirmationBlock = "own" | "deleted" | null;
+export type ConfirmationBlock = "deleted" | null;
 
 const BLOCK_REASON: Record<Exclude<ConfirmationBlock, null>, string> = {
-  own: "This is your own issue, so you can't confirm it.",
   deleted: "This issue is deleted.",
 };
 
@@ -110,6 +115,7 @@ export function IssueConfirmationsPanel({
   summaryMaxChars,
   history = false,
   confirmed,
+  at,
 }: {
   bugId: string;
   data: ConfirmationsData;
@@ -120,6 +126,8 @@ export function IssueConfirmationsPanel({
   history?: boolean;
   /** The issue is past Requires confirmation (its status says so). */
   confirmed: boolean;
+  /** When this step started, at the far right of its title (#issue-timeline). */
+  at?: Date | string | null;
 }) {
   const mine = viewerId ? data.entries.find((entry) => entry.onBehalfOfUserId === viewerId) ?? null : null;
 
@@ -149,7 +157,7 @@ export function IssueConfirmationsPanel({
                 {entry.duplicateOf ? (
                   <span className="text-zk-muted">
                     · duplicate of{" "}
-                    <Link href={issuePath(entry.duplicateOf.number)} className="font-bold text-zk-accent hover:underline">
+                    <Link href={issuePath(entry.duplicateOf.projectSlug, entry.duplicateOf.number)} className="font-bold text-zk-accent hover:underline">
                       #{entry.duplicateOf.number}
                     </Link>
                   </span>
@@ -157,13 +165,34 @@ export function IssueConfirmationsPanel({
                 <span className="whitespace-nowrap text-xs text-zk-muted">
                   · <LocalTime date={entry.updatedAt} />
                 </span>
+                {entry.counted && entry.weight && entry.weight > 1 ? (
+                  <span className="whitespace-nowrap text-xs text-zk-muted" data-testid="confirmation-weight">
+                    · counts {entry.weight}
+                  </span>
+                ) : null}
               </p>
               <EntrySummary summary={entry.summary} description={entry.description} />
+              {entry.attachments?.length ? (
+                <ul className="m-0 mt-2 flex list-none flex-wrap gap-2 p-0" data-testid="confirmation-attachments">
+                  {entry.attachments.map((file) => (
+                    <li key={file.id}>
+                      <a href={`${BASE_PATH}/api/attachments/${file.id}`} target="_blank" rel="noreferrer" className="block overflow-hidden rounded-lg border border-zk-border hover:border-zk-accent">
+                        {file.contentType.startsWith("image/") ? (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img src={`${BASE_PATH}/api/attachments/${file.id}`} alt={file.filename} className="h-20 w-28 object-cover" />
+                        ) : (
+                          <span className="block px-2 py-1 text-xs text-zk-accent">{file.filename}</span>
+                        )}
+                      </a>
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
               {entry.verdict !== "neutral" && !entry.counted ? (
                 <p className="mb-0 mt-1 text-xs text-zk-muted" data-testid="confirmation-not-counted">
                   {entry.undone
                     ? "Undone by a workspace admin, so it doesn't count."
-                    : "Doesn't count: given before the latest edit, or not independent of this issue."}
+                    : "Doesn't count: given before the latest edit."}
                 </p>
               ) : null}
               <EntryReplies replies={entry.replies} />
@@ -182,31 +211,13 @@ export function IssueConfirmationsPanel({
     // Past Requires confirmation: one compact card, the full entries behind it.
     const { confirms, deciding } = countedConfirms(data);
     return (
-      <details id="confirmations" className="group/conf mb-4 scroll-mt-24 rounded-xl border border-zk-divider bg-zk-surface" data-testid="confirmations-collapsed">
-        <summary className="flex cursor-pointer list-none flex-wrap items-center gap-x-2 gap-y-0.5 px-3 py-2.5 text-[13px] text-zk-text2 [&::-webkit-details-marker]:hidden">
-          <svg
-            aria-hidden="true"
-            data-testid="confirmations-collapsed-icon"
-            viewBox="0 0 24 24"
-            className="h-4 w-4 shrink-0 text-zk-muted"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          >
-            <rect x="3.5" y="3.5" width="17" height="17" rx="4" />
-            <path d="M8 12.5l2.75 2.75L16 9.5" />
-          </svg>
-          <span aria-hidden="true" className="inline-block text-zk-muted transition-transform group-open/conf:rotate-90">
-            ›
-          </span>
-          <span id="confirmations-heading" className="text-xs font-bold uppercase tracking-[0.08em] text-zk-muted">
-            Confirmations
-          </span>
-          <span className="font-mono text-xs text-zk-muted">{data.entries.length}</span>
-          <span>
-            · {confirmed ? "Confirmed" : "Not confirmed"}
+      <section id="confirmations" aria-labelledby="confirmations-heading" className="mb-4 scroll-mt-24" data-testid="confirmations-collapsed">
+        <StepTitle id="confirmations-heading" title="Confirmations" count={data.entries.length} at={at} />
+        <details className="group/conf rounded-xl border border-zk-divider bg-zk-surface">
+          <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-2.5 text-[13px] text-zk-text2 [&::-webkit-details-marker]:hidden">
+            <span aria-hidden="true" className="inline-block text-zk-muted transition-transform group-open/conf:rotate-90">›</span>
+            <span>
+            {confirmed ? "Confirmed" : "Not confirmed"}
             {confirms.length > 0 ? ` by ${confirms.map((entry) => entry.by).join(", ")}` : ""}
             {deciding ? (
               <>
@@ -214,9 +225,10 @@ export function IssueConfirmationsPanel({
               </>
             ) : null}
           </span>
-        </summary>
-        <div className="px-3 pb-3">{list}</div>
-      </details>
+          </summary>
+          <div className="px-3 pb-3">{list}</div>
+        </details>
+      </section>
     );
   }
 
@@ -246,6 +258,7 @@ export function IssueConfirmationsPanel({
               }
             />
           )}
+          <StepDate at={at} />
         </div>
       </div>
       {block && !history ? (

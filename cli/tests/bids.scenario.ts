@@ -4,12 +4,13 @@ import { confirm, fileIssue, offeredTo, ok, refused, type Agent } from "./helper
 type Item = { kind: string; key: string; canAct: boolean; blockedReason?: string; issue?: { id: string }; actions: { name: string; cli: string }[] };
 
 /**
- * Offers only through bids, awarded by managers (#bids-only-offers, #bid-votes).
- * ada files the issue; bob and cara bid; eli votes for bob's bid; dana (the
- * sandbox manager agent, owned by someone else) awards it as an offer, and bob
- * accepts. Nothing offers the issue on its own.
+ * Offers only through bids, and any agent may award any bid (#bids-only-offers,
+ * #open-award). ada files the issue; bob and cara bid; ada and cara vote for
+ * bob's bid as guidance. Every agent sees the issue as an award_bid item with
+ * both bids, whatever their votes; ada, a working agent, awards bob's as an
+ * offer and bob accepts. Nothing offers the issue on its own.
  */
-describe("bids, votes and a manager's award", () => {
+describe("bids, votes as guidance, and an award by any agent", () => {
   let id: string;
   let bobBid: string;
   let caraBid: string;
@@ -31,41 +32,42 @@ describe("bids, votes and a manager's award", () => {
     expect((await ok("ada", "get-issue", { id })).issue).toMatchObject({ status: "open", holder: null });
   });
 
-  it("asks other agents to vote for each bid, and drops the item once they have", async () => {
-    const item = await byKey("eli", `review_bid:${bobBid}`);
+  it("asks agents to vote for each bid, and drops the item once they have", async () => {
+    const item = await byKey("ada", `review_bid:${bobBid}`);
     expect(item).toMatchObject({ kind: "review_bid", canAct: true, issue: { id } });
     expect(item!.actions.map((action) => action.cli)).toEqual([`vote-bid --id ${bobBid}`]);
-    expect(await ok("eli", "vote-bid", { id: bobBid })).toEqual({ bidId: bobBid, votes: 1 });
+    expect(await ok("ada", "vote-bid", { id: bobBid })).toMatchObject({ bidId: bobBid, votes: 1, threshold: 3, awarded: false });
     // Voting again is fine and counts once.
-    expect(await ok("eli", "vote-bid", { id: bobBid })).toEqual({ bidId: bobBid, votes: 1 });
-    expect(await byKey("eli", `review_bid:${bobBid}`)).toBeUndefined();
-    expect(await byKey("eli", `review_bid:${caraBid}`)).toBeTruthy();
+    expect(await ok("ada", "vote-bid", { id: bobBid })).toMatchObject({ bidId: bobBid, votes: 1, awarded: false });
+    expect(await byKey("ada", `review_bid:${bobBid}`)).toBeUndefined();
+    expect(await byKey("ada", `review_bid:${caraBid}`)).toBeTruthy();
+    // cara bids too, and may still vote for bob's bid.
+    expect(await ok("cara", "vote-bid", { id: bobBid })).toMatchObject({ bidId: bobBid, votes: 2, threshold: 3, awarded: false });
     const listed = (await ok("ada", "list-bids", { id })).bids as { id: string; votes: number }[];
-    expect(listed.find((bid) => bid.id === bobBid)?.votes).toBe(1);
+    expect(listed.find((bid) => bid.id === bobBid)?.votes).toBe(2);
   });
 
-  it("refuses a vote for the voter's own bid", async () => {
+  it("refuses a working agent's vote for its own owner's bid", async () => {
     expect((await refused("bob", "vote-bid", { id: bobBid }, 403)).error).toBe("own_bid");
     expect(await byKey("bob", `review_bid:${bobBid}`)).toBeUndefined();
   });
 
-  it("lists the award for managers, and shows it to working agents without letting them act", async () => {
-    const forDana = await byKey("dana", `award_bid:${id}`);
-    expect(forDana).toMatchObject({ kind: "award_bid", canAct: true });
-    // The most voted bid first.
-    expect(forDana!.actions.map((action) => action.cli)).toEqual([`award-bid --id ${bobBid}`, `award-bid --id ${caraBid}`]);
-    expect(await byKey("ada", `award_bid:${id}`)).toMatchObject({ canAct: false, blockedReason: "Needs a manager agent." });
-    // eli is a merger agent, so it may award too.
-    expect(await byKey("eli", `award_bid:${id}`)).toMatchObject({ canAct: true });
+  it("counts a manager's vote 3, still only guidance", async () => {
+    expect(await byKey("dana", `review_bid:${bobBid}`)).toMatchObject({ kind: "review_bid", canAct: true });
+    expect(await ok("dana", "vote-bid", { id: bobBid })).toMatchObject({ bidId: bobBid, votes: 5, awarded: false });
   });
 
-  it("refuses an award from a working agent", async () => {
-    await refused("cara", "award-bid", { id: bobBid }, 403);
+  it("lists the award for every agent, with every bid, the most voted first", async () => {
+    for (const agent of ["ada", "cara", "dana", "eli"] as const) {
+      const item = await byKey(agent, `award_bid:${id}`);
+      expect(item, `${agent} sees the award`).toMatchObject({ kind: "award_bid", canAct: true, minimumRole: "working" });
+      expect(item!.actions.map((action) => action.cli)).toEqual([`award-bid --id ${bobBid}`, `award-bid --id ${caraBid}`]);
+    }
     expect(await offeredTo(id)).toBeNull();
   });
 
-  it("is awarded by dana as an offer: the issue stays Open until bob accepts", async () => {
-    const awarded = await ok("dana", "award-bid", { id: bobBid });
+  it("is awarded by ada, a working agent, as an offer: the issue stays Open until bob accepts", async () => {
+    const awarded = await ok("ada", "award-bid", { id: bobBid });
     expect(awarded).toMatchObject({ bidId: bobBid, bugId: id, status: "offered" });
     expect((await ok("ada", "get-issue", { id })).issue).toMatchObject({
       status: "open",
@@ -88,5 +90,28 @@ describe("bids, votes and a manager's award", () => {
     expect(await byKey("eli", `review_bid:${caraBid}`)).toBeUndefined();
     // bob is done with it, so it goes back to Open for bids.
     expect(await ok("bob", "release-claim", { id, reason: "Done testing bids." })).toMatchObject({ reopened: true });
+  });
+});
+
+/**
+ * An agent may award its own owner's bid, an offer to itself (#open-award):
+ * dana bids and awards it with no votes on it, then accepts it.
+ */
+describe("an agent awards its own owner's bid", () => {
+  let id: string;
+  let danaBid: string;
+
+  beforeAll(async () => {
+    id = await fileIssue("ada", "CLI bids: a manager's own bid", ["bob", "cara", "eli"]);
+    await confirm(id, ["bob", "cara"]);
+    danaBid = (await ok("dana", "bid", { id, summary: "I will fix it myself.", description: "A one-line fix to the export handler, with a test." })).bid_id;
+  });
+
+  it("is awarded with no votes on it, and accepted", async () => {
+    const awarded = await ok("dana", "award-bid", { id: danaBid });
+    expect(awarded).toMatchObject({ bidId: danaBid, bugId: id, status: "offered" });
+    const accepted = await ok("dana", "accept-offer", { id: awarded.claimId });
+    expect(accepted.claim.status).toBe("active");
+    expect(await ok("dana", "release-claim", { id, reason: "Done testing a manager's own award." })).toMatchObject({ reopened: true });
   });
 });

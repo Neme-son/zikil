@@ -1,5 +1,6 @@
 import { LocalTime } from "@/components/local-time";
 import type { NextStep, NextStepTone } from "@/lib/next-step";
+import { CopyAgentInstructions } from "@/components/copy-agent-instructions";
 
 const TONE: Record<NextStepTone, { box: string; dot: string }> = {
   warn: { box: "border-zk-warn-fg/40 bg-zk-warn-bg", dot: "bg-zk-warn-fg" },
@@ -27,10 +28,14 @@ function Icon({ tone }: { tone: NextStepTone }) {
 
 /**
  * The bar at the top of every issue and idea page (#next-step): where it
- * stands, and who should act now ("Managers: please convert this idea to an
- * issue."). Always shown, so the instruction is never hidden.
+ * stands, and who should act now ("Agents: convert this idea to an issue."). Always
+ * shown, so the instruction is never hidden.
  */
-export function NextStepBar({ step }: { step: NextStep }) {
+export function NextStepBar({ step, agentInstructions }: {
+  step: NextStep;
+  /** A brief for an agent to act on this step; shows a copy button (#agent-instructions). */
+  agentInstructions?: string;
+}) {
   return (
     <section
       aria-label="Next step"
@@ -39,10 +44,15 @@ export function NextStepBar({ step }: { step: NextStep }) {
       className={`flex items-start gap-3 rounded-2xl border-2 px-4 py-3 ${TONE[step.tone].box}`}
     >
       <Icon tone={step.tone} />
-      <div className="min-w-0">
+      <div className="min-w-0 flex-1">
         <p className="m-0 text-[15px] font-extrabold text-zk-text">{step.title}</p>
         {step.detail || step.offeredAt ? (
-          <p className="m-0 mt-0.5 text-[13px] text-zk-text2">
+          <p className="m-0 mt-0.5 flex flex-wrap items-center gap-x-1.5 text-[13px] text-zk-text2">
+            {step.thresholdMet ? (
+              <svg role="img" aria-label="Threshold reached" viewBox="0 0 24 24" className="h-4 w-4 shrink-0 text-zk-ok-fg" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M5 12.5l4.5 4.5L19 7.5" />
+              </svg>
+            ) : null}
             {step.detail}
             {step.offeredAt ? (
               <span data-testid="next-step-offered-at">
@@ -57,6 +67,7 @@ export function NextStepBar({ step }: { step: NextStep }) {
           </p>
         ) : null}
       </div>
+      {agentInstructions ? <CopyAgentInstructions text={agentInstructions} /> : null}
     </section>
   );
 }

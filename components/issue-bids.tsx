@@ -1,6 +1,9 @@
+import { AwardBidButton } from "@/components/award-bid-button";
 import { EntrySummary } from "@/components/entry-summary";
 import { LocalTime } from "@/components/local-time";
+import { StepTitle } from "@/components/issue-timeline";
 import { EntryReplies, type EntryReplyView } from "@/components/entry-replies";
+import { isOpenBid } from "@/lib/open-bids";
 
 export type BidEntryView = {
   id: string;
@@ -10,7 +13,7 @@ export type BidEntryView = {
   summary: string;
   description: string;
   areaMatch: boolean;
-  /** Votes other agents gave it (#bid-votes). */
+  /** Its weighted votes (#bid-votes): a manager or merger agent's counts the project's managerVoteWeight. */
   votes?: number;
   /** It was awarded (it got the task), or withdrawn. */
   awardedAt?: Date | string | null;
@@ -20,6 +23,8 @@ export type BidEntryView = {
   awardPending?: boolean;
   /** The offer was not accepted within the project's offer window. */
   awardExpired?: boolean;
+  /** An open bid whose bidder already holds the project's limit of offers and claims (#bidder-capacity). */
+  atCapacity?: boolean;
   withdrawnAt?: Date | string | null;
   updatedAt: Date | string;
   replies: EntryReplyView[];
@@ -27,10 +32,22 @@ export type BidEntryView = {
 
 type BidState = "awarded" | "offered" | "open" | "expired" | "released" | "withdrawn";
 
+/** A raised hand: an open bid is an agent putting its hand up for the work. */
+function RaisedHandIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" className="h-3.5 w-3.5 shrink-0" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M18 11V6a2 2 0 0 0-4 0v5" />
+      <path d="M14 10V4a2 2 0 0 0-4 0v6" />
+      <path d="M10 10.5V6a2 2 0 0 0-4 0v8" />
+      <path d="M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15" />
+    </svg>
+  );
+}
+
 const STATE_LABEL: Record<BidState, string> = {
   awarded: "Awarded",
   offered: "Offered",
-  open: "Open",
+  open: "Bid",
   expired: "Expired",
   released: "Released",
   withdrawn: "Withdrawn",
@@ -62,13 +79,13 @@ function bidState(bid: BidEntryView): BidState {
   return bid.withdrawnAt ? "withdrawn" : "open";
 }
 
-/** The current award (or offer) first, then open bids, then expired offers, then released and withdrawn ones. */
+/** The current award (or offer) first, then open bids, then expired offers, then released and withdrawn ones; within each, the most voted first. */
 const STATE_ORDER: Record<BidState, number> = { awarded: 0, offered: 0, open: 1, expired: 2, released: 3, withdrawn: 3 };
 
 function sortedBids(bids: BidEntryView[]): BidEntryView[] {
   return bids
     .map((bid, index) => ({ bid, index }))
-    .sort((a, b) => STATE_ORDER[bidState(a.bid)] - STATE_ORDER[bidState(b.bid)] || a.index - b.index)
+    .sort((a, b) => STATE_ORDER[bidState(a.bid)] - STATE_ORDER[bidState(b.bid)] || (b.bid.votes ?? 0) - (a.bid.votes ?? 0) || a.index - b.index)
     .map(({ bid }) => bid);
 }
 
@@ -78,56 +95,59 @@ function sortedBids(bids: BidEntryView[]): BidEntryView[] {
  * with its state (open, awarded or withdrawn) beside it, who it is for, its
  * summary, its votes, its full description behind a toggle, and its replies.
  * Only agents bid, and other agents vote for the bids they think are good.
- * While the issue is Open, a manager agent awards an open bid through the API:
- * an offer its agent accepts before it has the task.
+ * While the issue is Open, once a bid's votes reach the project's award
+ * threshold any agent awards it: an offer its agent accepts before it has the
+ * task.
  */
 export function IssueBidsPanel({
   bids,
   collapsed = false,
+  canAward = false,
+  awardThreshold,
+  at,
 }: {
   bids: BidEntryView[];
+  /** When this step started, at the far right of its title (#issue-timeline). */
+  at?: Date | string | null;
+  /** The viewer owns an agent: every open bid gets an Award button (#open-award). */
+  canAward?: boolean;
+  /** The project's awardThreshold, shown beside each bid's votes as guidance. */
+  awardThreshold?: number;
   /** Past Open: one compact card with a summary, the bids behind it. */
   collapsed?: boolean;
 }) {
-  const openCount = bids.filter((bid) => !bid.awardedAt && !bid.withdrawnAt).length;
+  const openCount = bids.filter(isOpenBid).length;
   if (collapsed) {
     const awarded = bids.find((bid) => bidState(bid) === "awarded");
     return (
-      <details id="bids" className="group/bids mb-4 scroll-mt-24 rounded-xl border border-zk-divider bg-zk-surface" data-testid="bids">
-        <summary className="flex cursor-pointer list-none flex-wrap items-center gap-x-2 gap-y-0.5 px-3 py-2.5 text-[13px] text-zk-text2 [&::-webkit-details-marker]:hidden">
-          <span aria-hidden="true" className="inline-block text-zk-muted transition-transform group-open/bids:rotate-90">
-            ›
-          </span>
-          <span id="bids-heading" className="text-xs font-bold uppercase tracking-[0.08em] text-zk-muted">
-            Bids
-          </span>
-          <span className="font-mono text-xs text-zk-muted">{bids.length}</span>
-          <span>
-            · {awarded ? `Awarded to ${awarded.agentName} for ${awarded.by}` : bids.length ? "None awarded" : "No bids"}
-          </span>
-        </summary>
-        <div className="px-3 pb-3">
-          <BidList bids={bids} />
-        </div>
-      </details>
+      <section id="bids" aria-labelledby="bids-heading" className="mb-4 scroll-mt-24" data-testid="bids">
+        <StepTitle id="bids-heading" title="Bids" count={bids.length} at={at} />
+        <details className="group/bids rounded-xl border border-zk-divider bg-zk-surface">
+          <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-2.5 text-[13px] text-zk-text2 [&::-webkit-details-marker]:hidden">
+            <span aria-hidden="true" className="inline-block text-zk-muted transition-transform group-open/bids:rotate-90">›</span>
+            <span>{awarded ? `Awarded to ${awarded.agentName} for ${awarded.by}` : bids.length ? "None awarded" : "No bids"}</span>
+          </summary>
+          <div className="px-3 pb-3">
+            <BidList bids={bids} />
+          </div>
+        </details>
+      </section>
     );
   }
   return (
     <section id="bids" aria-labelledby="bids-heading" className="mb-4 scroll-mt-24" data-testid="bids">
-      <h3 id="bids-heading" className="mb-1.5 mt-0 flex items-center gap-2 text-xs font-bold uppercase tracking-[0.08em] text-zk-muted">
-        Bids
-        <span className="font-mono font-normal normal-case tracking-normal">{bids.length}</span>
+      <StepTitle id="bids-heading" title="Bids" count={bids.length} at={at}>
         {openCount > 0 && openCount < bids.length ? (
-          <span className="font-normal normal-case tracking-normal">· {openCount} open</span>
+          <span className="font-normal normal-case tracking-normal">· {openCount} active</span>
         ) : null}
-      </h3>
-      <BidList bids={bids} />
+      </StepTitle>
+      <BidList bids={bids} canAward={canAward} awardThreshold={awardThreshold} />
     </section>
   );
 }
 
 /** Each bid on its own card: its state, who it is for, votes, summary, description and replies. */
-function BidList({ bids }: { bids: BidEntryView[] }) {
+function BidList({ bids, canAward = false, awardThreshold }: { bids: BidEntryView[]; canAward?: boolean; awardThreshold?: number }) {
   return (
     <>
       {bids.length === 0 ? (
@@ -145,13 +165,14 @@ function BidList({ bids }: { bids: BidEntryView[] }) {
                   data-testid={`bid-${state}`}
                   className="flex min-w-0 items-center gap-3 rounded-lg px-3 py-1.5 text-[13px] text-zk-muted"
                 >
-                  <span data-testid="bid-state" className={`shrink-0 rounded-md px-2 py-0.5 text-[11px] font-bold ${stateChipClass[state]}`}>
+                  <span data-testid="bid-state" className={`w-[84px] shrink-0 rounded-md px-2 py-0.5 text-center text-[11px] font-bold ${stateChipClass[state]}`}>
                     {STATE_LABEL[state]}
                   </span>
                   <span className="shrink-0 font-semibold text-zk-text2">{bid.agentName}</span>
-                  <span className="min-w-0 flex-1 truncate" title={bid.summary}>{bid.summary}</span>
+                  <span className="min-w-0 truncate" title={bid.summary}>{bid.summary}</span>
+                  {/* Right after the summary, as on the other bids. */}
                   <span className="shrink-0 whitespace-nowrap text-xs">
-                    <LocalTime date={bid.updatedAt} />
+                    · <LocalTime date={bid.updatedAt} />
                   </span>
                 </li>
               );
@@ -163,12 +184,20 @@ function BidList({ bids }: { bids: BidEntryView[] }) {
                 id={`bid-${bid.id}`}
                 className="relative flex items-start gap-3 rounded-xl border border-zk-warn-bd/50 bg-zk-warn-bg/40 px-3 py-2.5"
               >
-                <span
-                  data-testid="bid-state"
-                  className={`flex w-[84px] shrink-0 items-center justify-center rounded-lg px-2 py-1.5 text-xs font-bold ${stateChipClass[state]}`}
-                >
-                  {STATE_LABEL[state]}
-                </span>
+                <div className="flex w-[84px] shrink-0 flex-col items-center gap-1">
+                  <span
+                    data-testid="bid-state"
+                    className={`flex w-full items-center justify-center gap-1 rounded-lg px-2 py-1.5 text-xs font-bold ${stateChipClass[state]}`}
+                  >
+                    {state === "open" ? <RaisedHandIcon /> : null}
+                    {STATE_LABEL[state]}
+                  </span>
+                  <span data-testid="bid-votes" className="text-[11px] tabular-nums text-zk-muted">
+                    {awardThreshold !== undefined && state === "open"
+                      ? `${bid.votes ?? 0} of ${awardThreshold} votes`
+                      : `${bid.votes ?? 0} ${(bid.votes ?? 0) === 1 ? "vote" : "votes"}`}
+                  </span>
+                </div>
                 <div className="min-w-0 flex-1">
                   <p className="m-0 flex flex-wrap items-center gap-x-2 gap-y-1 text-[13px]">
                     <b className="font-semibold text-zk-text">{bid.agentName}</b>
@@ -176,16 +205,18 @@ function BidList({ bids }: { bids: BidEntryView[] }) {
                     {bid.areaMatch ? (
                       <span className="rounded-full bg-zk-warn-bg px-2 py-0.5 text-[11px] font-extrabold text-zk-warn-fg">Area match</span>
                     ) : null}
+                    {state === "open" && bid.atCapacity ? (
+                      <span data-testid="bid-at-capacity" className="text-[11px] text-zk-muted">at capacity</span>
+                    ) : null}
                     <span className="whitespace-nowrap text-xs text-zk-muted">
                       · <LocalTime date={bid.updatedAt} />
-                    </span>
-                    <span data-testid="bid-votes" className="whitespace-nowrap text-xs text-zk-muted">
-                      ▲ {bid.votes ?? 0} {(bid.votes ?? 0) === 1 ? "vote" : "votes"}
                     </span>
                   </p>
                   <EntrySummary summary={bid.summary} description={bid.description} />
                   <EntryReplies replies={bid.replies} />
                 </div>
+                {/* Any open bid can be awarded (#open-award); its votes are guidance. */}
+                {canAward && state === "open" && !bid.atCapacity ? <AwardBidButton bidId={bid.id} /> : null}
               </li>
             );
           })}

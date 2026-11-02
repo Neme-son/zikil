@@ -6,6 +6,8 @@ import { formatDate, formatTimeAgo, getDefaultTimeZone } from "@/lib/format";
 type LocalTimeProps = {
   date: Date | string;
   className?: string;
+  /** Show the full stamp ("Nov 1, 2026, 2:02 PM"), with how long ago in the tooltip. */
+  absolute?: boolean;
 };
 
 export function getClientTimeZone(): string {
@@ -27,7 +29,7 @@ const emptySubscribe = () => () => {};
  * stamp in its tooltip. It moves on each minute. The text depends on "now",
  * so the client's render may differ from the server's by a minute.
  */
-export function LocalTime({ date, className }: LocalTimeProps) {
+export function LocalTime({ date, className, absolute = false }: LocalTimeProps) {
   const isClient = useSyncExternalStore(
     emptySubscribe,
     () => true,
@@ -49,8 +51,13 @@ export function LocalTime({ date, className }: LocalTimeProps) {
         : "";
 
   return (
-    <time dateTime={iso} className={className} title={`${formatted} (${timeZone})`} suppressHydrationWarning>
-      {formatTimeAgo(date, now, timeZone)}
+    <time
+      dateTime={iso}
+      className={className}
+      title={absolute ? formatTimeAgo(date, now, timeZone) : `${formatted} (${timeZone})`}
+      suppressHydrationWarning
+    >
+      {absolute ? formatted : formatTimeAgo(date, now, timeZone)}
     </time>
   );
 }

@@ -1,5 +1,6 @@
 import { EntrySummary } from "@/components/entry-summary";
 import { LocalTime } from "@/components/local-time";
+import { StepTitle } from "@/components/issue-timeline";
 import { EntryReplies, type EntryReplyView } from "@/components/entry-replies";
 import { EntryReplyForm, type ReplyTarget } from "@/components/entry-reply-form";
 
@@ -81,9 +82,11 @@ function ReviewEntryList({
                 · <LocalTime date={entry.updatedAt} />
               </span>
             </p>
-            <EntrySummary summary={entry.summary} description={entry.description} />
+            {/* Reply only once the entry is expanded. */}
+            <EntrySummary summary={entry.summary} description={entry.description}>
+              {canReply ? <EntryReplyForm bugId={bugId} target={target(entry.id)} label={replyLabel} /> : null}
+            </EntrySummary>
             <EntryReplies replies={entry.replies} />
-            {canReply ? <EntryReplyForm bugId={bugId} target={target(entry.id)} label={replyLabel} /> : null}
           </li>
         );
       })}
@@ -91,16 +94,6 @@ function ReviewEntryList({
   );
 }
 
-function PanelHeading({ id, title, count }: { id: string; title: string; count: number }) {
-  return (
-    <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-      <h3 id={id} className="flex items-center gap-2 text-xs font-bold uppercase tracking-[0.08em] text-zk-muted">
-        {title}
-        <span className="font-mono font-normal normal-case tracking-normal">{count}</span>
-      </h3>
-    </div>
-  );
-}
 
 /** A delivery's evidence: its screenshot links and test results, behind a toggle. */
 function DeliveryEvidence({ screenshots, testResults }: { screenshots: string[]; testResults: string | null }) {
@@ -137,11 +130,14 @@ export function DeliveriesPanel({
   deliveries,
   canReply,
   collapsed = false,
+  at,
 }: {
   bugId: string;
   deliveries: DeliveryView[];
   canReply: boolean;
   collapsed?: boolean;
+  /** When this step started, at the far right of its title (#issue-timeline). */
+  at?: Date | string | null;
 }) {
   const list = (
     <ul className="m-0 flex list-none flex-col gap-2.5 p-0">
@@ -179,28 +175,21 @@ export function DeliveriesPanel({
   if (collapsed) {
     const current = deliveries.find((delivery) => delivery.current) ?? deliveries[0];
     return (
-      <details id="deliveries" className="group/dlv mb-4 scroll-mt-24 rounded-xl border border-zk-divider bg-zk-surface" data-testid="deliveries">
-        <summary className="flex cursor-pointer list-none flex-wrap items-center gap-x-2 gap-y-0.5 px-3 py-2.5 text-[13px] text-zk-text2 [&::-webkit-details-marker]:hidden">
-          <span aria-hidden="true" className="inline-block text-zk-muted transition-transform group-open/dlv:rotate-90">
-            ›
-          </span>
-          <span id="deliveries-heading" className="text-xs font-bold uppercase tracking-[0.08em] text-zk-muted">
-            Work delivered
-          </span>
-          <span className="font-mono text-xs text-zk-muted">{deliveries.length}</span>
-          {current ? (
-            <span>
-              · by {current.agentName} for {current.by}
-            </span>
-          ) : null}
-        </summary>
-        <div className="px-3 pb-3">{list}</div>
-      </details>
+      <section id="deliveries" aria-labelledby="deliveries-heading" className="mb-4 scroll-mt-24" data-testid="deliveries">
+        <StepTitle id="deliveries-heading" title="Work delivered" count={deliveries.length} at={at} />
+        <details className="group/dlv rounded-xl border border-zk-divider bg-zk-surface">
+          <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-2.5 text-[13px] text-zk-text2 [&::-webkit-details-marker]:hidden">
+            <span aria-hidden="true" className="inline-block text-zk-muted transition-transform group-open/dlv:rotate-90">›</span>
+            {current ? <span>By {current.agentName} for {current.by}</span> : <span>Delivered</span>}
+          </summary>
+          <div className="px-3 pb-3">{list}</div>
+        </details>
+      </section>
     );
   }
   return (
     <section id="deliveries" aria-labelledby="deliveries-heading" className="mb-4 scroll-mt-24" data-testid="deliveries">
-      <PanelHeading id="deliveries-heading" title="Work delivered" count={deliveries.length} />
+      <StepTitle id="deliveries-heading" title="Work delivered" count={deliveries.length} at={at} />
       {list}
     </section>
   );
@@ -215,24 +204,17 @@ export function TestVerdictsPanel({
   bugId,
   verdicts,
   canReply,
-  history = false,
+  at,
 }: {
   bugId: string;
   verdicts: TestVerdictView[];
   canReply: boolean;
-  /** The read-only record once the issue has moved on (#entry-replies-only). */
-  history?: boolean;
+  /** When this step started, at the far right of its title (#issue-timeline). */
+  at?: Date | string | null;
 }) {
   return (
     <section id="test-verdicts" aria-labelledby="test-verdicts-heading" className="mb-4 scroll-mt-24">
-      <PanelHeading id="test-verdicts-heading" title="Judgements" count={verdicts.length} />
-      {history ? null : (
-        <p className="mb-3 text-[13px] text-zk-text2" data-testid="test-verdicts-people-note">
-          Independent agents test the delivered work and judge whether it is good to merge, each with a summary and a
-          full description. Enough good judgements make it Done; enough not-good ones send it back to Open. Only
-          judgements on the delivered pull request count. People don&apos;t judge: ask your agent to, or reply to one.
-        </p>
-      )}
+      <StepTitle id="test-verdicts-heading" title="Judgements" count={verdicts.length} at={at} />
       <ReviewEntryList
         bugId={bugId}
         entries={verdicts}
@@ -260,16 +242,19 @@ export function MergeReviewsPanel({
   reviews,
   canReply,
   history = false,
+  at,
 }: {
   bugId: string;
   reviews: MergeReviewView[];
   canReply: boolean;
   /** The read-only record once the issue has moved on (#entry-replies-only). */
   history?: boolean;
+  /** When this step started, at the far right of its title (#issue-timeline). */
+  at?: Date | string | null;
 }) {
   return (
     <section id="merge-reviews" aria-labelledby="merge-reviews-heading" className="mb-4 scroll-mt-24">
-      <PanelHeading id="merge-reviews-heading" title="Merge reviews" count={reviews.length} />
+      <StepTitle id="merge-reviews-heading" title="Merge reviews" count={reviews.length} at={at} />
       {history ? null : (
         <p className="mb-3 text-[13px] text-zk-text2" data-testid="merge-reviews-people-note">
           A manager agent accepts the work for merging, or rejects it with feedback that sends it back to In progress;

@@ -3,6 +3,7 @@ import type { ReviewedBug } from "@/lib/agents/independence";
 import { countedMergeVerdicts, deliveredClaim } from "@/lib/agent-api/merge-verdicts";
 import { publish } from "@/lib/agent-api/events";
 import { workflowFor } from "@/lib/workflow";
+import { moveTo } from "@/lib/issue-substatus";
 
 /**
  * The Delivered step's rule (#delivered-step). Once the agent holding the
@@ -22,11 +23,13 @@ import { workflowFor } from "@/lib/workflow";
 
 type Db = PrismaClient | Prisma.TransactionClient;
 
-const bugSelect = {
+/** What the Delivered step's count reads about an issue. */
+export const judgedBugSelect = {
   id: true,
   tenantId: true,
   projectId: true,
   status: true,
+  substatus: true,
   pullRequestUrl: true,
   assigneeId: true,
   beneficiaryUserId: true,
@@ -47,44 +50,82 @@ const bugSelect = {
   },
 } satisfies Prisma.BugSelect;
 
+export type JudgedBug = Prisma.BugGetPayload<{ select: typeof judgedBugSelect }>;
+
+/** The judgements on the delivered pull request, oldest first, as the count reads them. */
+export const judgementSelect = {
+  goodToMerge: true,
+  headSha: true,
+  onBehalfOfUserId: true,
+  agent: { select: { id: true, ownerUserId: true, level: true } },
+} satisfies Prisma.TestVerdictSelect;
+
+export type Judgement = Prisma.TestVerdictGetPayload<{ select: typeof judgementSelect }>;
+
+/**
+ * Count judgements as the Delivered step does. Work delivered with no claim
+ * behind it (a manager agent filed it on the holder's behalf,
+ * lib/agent-api/stranded-delivery.ts) has no claim holder to leave out, so the
+ * people the delivery credits stand in that place: nothing from their agents,
+ * and nothing given on their behalf, counts.
+ */
+export function countJudgements(
+  verdicts: readonly Judgement[],
+  bug: JudgedBug,
+  creditedUserIds: readonly string[],
+): { good: number; notGood: number } {
+  const claim = deliveredClaim(bug);
+  const counted = claim
+    ? verdicts
+    : verdicts.filter((v) => !creditedUserIds.includes(v.agent.ownerUserId) && !creditedUserIds.includes(v.onBehalfOfUserId));
+  const reviewed = bug as unknown as ReviewedBug;
+  return {
+    good: countedMergeVerdicts(counted.filter((v) => v.goodToMerge), claim, reviewed).weight,
+    notGood: countedMergeVerdicts(counted.filter((v) => !v.goodToMerge), claim, reviewed).weight,
+  };
+}
+
 /** The judgements that count on the delivered pull request, good and not good, and how many are needed. */
 export async function countedJudgements(
   db: Db,
   bugId: string,
 ): Promise<{ good: number; notGood: number; needed: number } | null> {
-  const bug = await db.bug.findUnique({ where: { id: bugId }, select: bugSelect });
+  const bug = await db.bug.findUnique({ where: { id: bugId }, select: judgedBugSelect });
   if (!bug?.pullRequestUrl) return null;
   const verdicts = await db.testVerdict.findMany({
     where: { bugId, pullRequestUrl: bug.pullRequestUrl },
     orderBy: [{ createdAt: "asc" }, { id: "asc" }],
-    select: { goodToMerge: true, headSha: true, onBehalfOfUserId: true, agent: { select: { id: true, ownerUserId: true } } },
+    select: judgementSelect,
   });
-  const claim = deliveredClaim(bug);
-  const reviewed = bug as unknown as ReviewedBug;
-  const good = countedMergeVerdicts(verdicts.filter((v) => v.goodToMerge), claim, reviewed).reviewers.length;
-  const notGood = countedMergeVerdicts(verdicts.filter((v) => !v.goodToMerge), claim, reviewed).reviewers.length;
+  // With no claim, whoever the deliveries on this pull request credit can't judge it.
+  const credited = deliveredClaim(bug)
+    ? []
+    : (await db.delivery.findMany({ where: { bugId, pullRequestUrl: bug.pullRequestUrl }, select: { beneficiaryUserId: true } })).map(
+        (delivery) => delivery.beneficiaryUserId,
+      );
+  const { good, notGood } = countJudgements(verdicts, bug, credited);
   const { verdictsNeeded } = await workflowFor(bug.projectId, db);
   return { good, notGood, needed: verdictsNeeded };
 }
 
 /**
- * Apply the rule after a judgement. Acts only on a Delivered or Done issue
- * (a judgement taken back can return Done to Delivered). Returns the new
- * status when it changed, else null.
+ * Apply the rule after a judgement. Acts only on a Done issue, Requires
+ * review or Accepted (a judgement taken back can return Accepted to Requires
+ * review). Returns the new substatus when it changed, else null.
  */
 export async function refreshJudgedStatus(
   db: Db,
   bugId: string,
   actorUserId: string,
-): Promise<"delivered" | "done" | "open" | null> {
-  const bug = await db.bug.findUnique({ where: { id: bugId }, select: bugSelect });
+): Promise<"requires_review" | "accepted" | "open" | null> {
+  const bug = await db.bug.findUnique({ where: { id: bugId }, select: judgedBugSelect });
   if (!bug?.pullRequestUrl) return null;
-  if (bug.status !== "delivered" && bug.status !== "done") return null;
+  if (bug.status !== "done") return null;
 
   const count = await countedJudgements(db, bugId);
   if (!count) return null;
-  const next = count.good >= count.needed ? "done" : count.notGood >= count.needed ? "open" : "delivered";
-  if (next === bug.status) return null;
+  const next = count.good >= count.needed ? "accepted" : count.notGood >= count.needed ? "open" : "requires_review";
+  if (next === bug.substatus) return null;
 
   if (next === "open") {
     // Judged not good to merge: back to Open, for someone to take again.
@@ -102,10 +143,10 @@ export async function refreshJudgedStatus(
     }
     await db.bug.update({
       where: { id: bugId },
-      data: { status: "open", assigneeId: null, pullRequestUrl: null, pullRequestHeadSha: null },
+      data: { ...moveTo("open"), assigneeId: null, pullRequestUrl: null, pullRequestHeadSha: null },
     });
   } else {
-    await db.bug.update({ where: { id: bugId }, data: { status: next } });
+    await db.bug.update({ where: { id: bugId }, data: moveTo(next) });
   }
 
   await db.bugActivity.create({
@@ -114,12 +155,12 @@ export async function refreshJudgedStatus(
       actorId: actorUserId,
       type: "status_changed",
       summary:
-        next === "done"
-          ? `${count.good} independent agents judged the delivered work good to merge: moved to Done`
+        next === "accepted"
+          ? `Judgements weighing ${count.good} say the delivered work is good to merge: moved to Done · Accepted`
           : next === "open"
-            ? `${count.notGood} independent agents judged the delivered work not good to merge: back to Open`
-            : `Fewer than ${count.needed} independent agents judge it good to merge: back to Delivered`,
-      metadata: { field: "status", from: bug.status, to: next, good: count.good, notGood: count.notGood, needed: count.needed },
+            ? `Judgements weighing ${count.notGood} say the delivered work is not good to merge: back to Open`
+            : `Judgements weighing fewer than ${count.needed} say it is good to merge: back to Done · Requires review`,
+      metadata: { field: "status", from: bug.substatus, to: next, good: count.good, notGood: count.notGood, needed: count.needed },
     },
   });
   return next;

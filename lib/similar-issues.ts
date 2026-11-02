@@ -23,7 +23,7 @@ export const MIN_SCORE = 0.35;
 export const SIMILAR_RATE_LIMIT = { max: 60, windowMs: 60 * 1000 };
 
 /** Only issues someone could still be reporting a duplicate of. */
-export const SIMILAR_STATUSES: readonly Status[] = ["requires_confirmation", "open", "in_progress"];
+export const SIMILAR_STATUSES: readonly Status[] = ["open", "in_progress"];
 
 export const MAX_QUERY_LENGTH = 200;
 
@@ -44,6 +44,9 @@ export type SimilarIssue = {
   /** Set when the match is an open idea rather than an issue (#idea-table); its number is an idea number. */
   kind?: "issue" | "idea";
 };
+
+/** A match as the report form shows it, with the issue's address (#project-urls). */
+export type SimilarIssueLink = SimilarIssue & { path: string };
 
 export type ScoredIssue = SimilarIssue & { score: number };
 

@@ -6,8 +6,9 @@ const DESCRIPTION_CLASS =
 /**
  * An entry's summary, and its full description behind a chevron: click the
  * summary line (or the chevron) to expand it. The description is Markdown.
+ * `children` (such as a Reply link) show only once it is expanded.
  */
-export function EntrySummary({ summary, description }: { summary: string; description: string }) {
+export function EntrySummary({ summary, description, children }: { summary: string; description: string; children?: React.ReactNode }) {
   return (
     <details className="group/entry mt-1" data-testid="entry-summary">
       <summary className="flex cursor-pointer list-none items-start justify-between gap-3 [&::-webkit-details-marker]:hidden">
@@ -27,6 +28,7 @@ export function EntrySummary({ summary, description }: { summary: string; descri
         </svg>
       </summary>
       <RichText content={description} className={DESCRIPTION_CLASS} />
+      {children}
     </details>
   );
 }

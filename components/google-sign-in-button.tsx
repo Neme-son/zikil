@@ -42,7 +42,7 @@ function SubmitButton() {
 }
 
 export function GoogleSignInButton({
-  callbackUrl = "/dashboard",
+  callbackUrl = "/home",
 }: {
   callbackUrl?: string;
 }) {

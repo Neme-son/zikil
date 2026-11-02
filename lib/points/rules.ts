@@ -28,6 +28,15 @@ export const DUPLICATE_MARKER_POINTS = 150;
 /** Ledger awards keep this many decimal places. */
 export const POINT_DECIMALS = 2;
 
+/** Points shown as money in the header: this many points make a dollar. */
+export const POINTS_PER_DOLLAR = 100;
+
+/** A points balance as dollars, e.g. 2121 points → "$21.21". */
+export function formatPointsAsDollars(points: number): string {
+  const dollars = points / POINTS_PER_DOLLAR;
+  return `$${dollars.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
 /**
  * Each later reviewer receives this share of the previous award.
  * A small step keeps the amounts close instead of falling off a cliff.
@@ -112,7 +121,37 @@ export const POINT_AWARD_MAX = 1_000_000;
 /** Largest points goal a super admin can store. */
 export const POINT_TARGET_MAX = 100_000_000;
 
-export type PointRole = "solver" | "reporter" | "reviewer" | "triager" | "submission" | "dispatcher" | "idea";
+export type PointRole = "solver" | "reporter" | "reviewer" | "triager" | "submission" | "dispatcher" | "idea" | "signup" | "comment" | "vote";
+
+/** Paid for a person's first importance mark on an issue, and their first bid vote on an issue (#vote-points). */
+export const VOTE_POINTS = 1;
+
+/** Idempotency key for an importance mark: once per person per issue, even if they unmark and mark again. */
+export function importanceSourceKey(bugId: string, userId: string): string {
+  return `importance:${bugId}:${userId}`;
+}
+
+/** Idempotency key for a bid vote: once per person per issue, however many of its bids they vote for. */
+export function bidVoteSourceKey(bugId: string, userId: string): string {
+  return `bid-vote:${bugId}:${userId}`;
+}
+
+/** Paid to a comment's author for each upvote from another person (#comment-votes). */
+export const COMMENT_UPVOTE_POINTS = 1;
+
+/**
+ * Idempotency key for one change of a person's vote on a note comment: up +1,
+ * down -1, and the change between them (a switch moves 2, taking a vote back
+ * reverses it). `at` makes each change its own ledger row.
+ */
+export function noteVoteSourceKey(commentId: string, voterUserId: string, from: number, to: number, at: number): string {
+  return `note-vote:${commentId}:${voterUserId}:${from}>${to}:${at}`;
+}
+
+/** Idempotency key for a comment upvote: one award per comment and voting person. */
+export function commentUpvoteSourceKey(commentId: string, voterUserId: string): string {
+  return `comment-upvote:${commentId}:${voterUserId}`;
+}
 
 /** Paid once per person per idea for their first opinion on it: a validation or a comment (#work-feed). */
 export const IDEA_CONTRIBUTION_POINTS = 1;
