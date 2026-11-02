@@ -1,13 +1,12 @@
 "use client";
 
 import type { CSSProperties, ReactNode } from "react";
-import { severityLabel } from "@/lib/labels";
 import { ClaimDeadline } from "@/components/claim-deadline";
 import type { AgentDecision } from "@/components/issue-agent-activity";
 import { useIssueStage } from "@/components/issue-stage-context";
 import {
-  DECISION_STAGES,
   decisionStageInfo,
+  pipelineStages,
   tallyStages,
   type DecisionStage,
 } from "@/lib/decision-stages";
@@ -57,6 +56,12 @@ const ICONS = {
       <circle cx="12" cy="12" r="3" />
     </>
   ),
+  box: (
+    <>
+      <path d="M21 8 12 3 3 8v8l9 5 9-5V8Z" />
+      <path d="m3 8 9 5 9-5M12 13v8" />
+    </>
+  ),
   timer: (
     <>
       <circle cx="12" cy="13" r="8" />
@@ -79,9 +84,12 @@ export const stageIconName: Record<DecisionStage, IconName> = {
   idea: "bulb",
   confirm: "eye",
   open: "bot",
+  progress: "timer",
+  delivered: "box",
   done: "flask",
   ready: "merge",
   live: "rocket",
+  closed: "x",
 };
 
 /** A chip class from the design: cg ok, cr bad, ca warn, cb info, cn neutral, cv violet. */
@@ -104,7 +112,6 @@ export function decisionCard(decision: AgentDecision): DecisionCard {
         text: (
           <>
             Confirmed this issue as real
-            {decision.severity ? ` and set the severity to ${severityLabel[decision.severity]}` : ""}
             {onBehalf(decision.personName)}.
           </>
         ),
@@ -139,9 +146,17 @@ export function decisionCard(decision: AgentDecision): DecisionCard {
         ),
         notes: null,
       };
+    case "delivered":
+      return {
+        label: "Delivered",
+        tone: "cg",
+        icon: "box",
+        text: <>Delivered the work{onBehalf(decision.personName)}.</>,
+        notes: null,
+      };
     case "claim_released":
       return {
-        label: "Claim rejected",
+        label: "Released",
         tone: "cr",
         icon: "x",
         text: <>The claim for {decision.personName} was released.</>,
@@ -178,81 +193,64 @@ export type StepState = "done" | "now" | "warn" | "todo";
 
 /** Where a stage sits against the current one: behind it, at it, or ahead. */
 export function stageState(stage: DecisionStage, currentStage: DecisionStage, setback: boolean): StepState {
-  const index = DECISION_STAGES.indexOf(stage);
-  const currentIndex = DECISION_STAGES.indexOf(currentStage);
+  const steps = pipelineStages(currentStage);
+  const index = steps.indexOf(stage);
+  const currentIndex = steps.indexOf(currentStage);
   return index < currentIndex ? "done" : index > currentIndex ? "todo" : setback ? "warn" : "now";
 }
 
-export function plural(n: number, word: string) {
-  return `${n} ${word}${n === 1 ? "" : "s"}`;
-}
-
-/** The progress header's status chip, as in the design: "Done · testing". */
-function statusChip(stage: DecisionStage, setback: boolean): { label: string; tone: Tone } {
-  const label = decisionStageInfo[stage].label;
-  if (setback) return { label: `${label} · not good to merge`, tone: "ca" };
-  switch (stage) {
-    case "idea":
-      return { label: `${label} · in review`, tone: "cn" };
-    case "confirm":
-      return { label: `${label} · with reviewers`, tone: "ca" };
-    case "open":
-      return { label: `${label} · in progress`, tone: "cb" };
-    case "done":
-      return { label: `${label} · testing`, tone: "cv" };
-    case "ready":
-      return { label, tone: "cv" };
-    case "live":
-      return { label, tone: "cg" };
-  }
+/** "1 bid", "3 bids", "0 confirmations": the count in the stage's own word. */
+function entryCount(n: number, [one, many]: readonly [string, string]) {
+  return `${n} ${n === 1 ? one : many}`;
 }
 
 /**
  * The design's progress report (#1446). The stepper opens on the issue's
  * current stage; picking a stage switches the Conversation card's stage
- * summary and comments (#186).
+ * summary (#186).
  */
 export function IssueProgressReport({
   decisions,
+  entryCounts = {},
   currentStage,
   setback = false,
-  commentCounts,
 }: {
   decisions: ReadonlyArray<AgentDecision>;
+  /**
+   * Each stage's own entries (#595): idea verdicts, confirmations, bids,
+   * deliveries, judgements, merge reviews. A stage left out counts its
+   * decisions instead (deployments, logs).
+   */
+  entryCounts?: Partial<Record<DecisionStage, number>>;
   /** Where the issue is now; marked "now" in the stepper. */
   currentStage: DecisionStage;
   /** The current stage went backwards, e.g. a merger asked for changes. */
   setback?: boolean;
-  /** Top-level comments in each stage. */
-  commentCounts: Record<DecisionStage, number>;
 }) {
   const picked = useIssueStage();
   const selected = picked?.stage ?? currentStage;
-  const currentIndex = DECISION_STAGES.indexOf(currentStage);
+  const steps = pipelineStages(currentStage);
+  const currentIndex = steps.indexOf(currentStage);
   const tallies = tallyStages(decisions);
-  const chip = statusChip(currentStage, setback);
 
   return (
     <section
       aria-labelledby="progress-report-title"
       className="issue-progress rounded-[20px] border border-zk-border bg-zk-surface px-5 py-[18px]"
     >
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <h2 id="progress-report-title" className="cap">
-          Progress report
-        </h2>
-        <span className={`chip ${chip.tone}`}>{chip.label}</span>
-      </div>
+      {/* No status chip: the stepper below already marks where the issue is (one status per issue). */}
+      <h2 id="progress-report-title" className="cap">
+        Progress report
+      </h2>
       <div className="pgw">
         <div className="pg-track" aria-hidden="true">
-          <span className="pg-fill" style={{ width: `${(currentIndex * 100) / (DECISION_STAGES.length - 1)}%` }} />
+          <span className="pg-fill" style={{ width: `${(currentIndex * 100) / (steps.length - 1)}%` }} />
         </div>
-        <ol className="pg" aria-label="Progress report: pick a stage to see its logs">
-          {DECISION_STAGES.map((stage, index) => {
+        <ol className="pg" aria-label="Progress report: pick a stage to see its entries">
+          {steps.map((stage, index) => {
             const state = stageState(stage, currentStage, setback);
             const tally = tallies[stage];
-            const logs = tally.positive + tally.negative;
-            const comments = commentCounts[stage];
+            const logs = entryCounts[stage] ?? tally.positive + tally.negative;
             const on = stage === selected;
             const icon: IconName = state === "done" ? "check" : state === "warn" ? "undo" : stageIconName[stage];
             return (
@@ -270,8 +268,7 @@ export function IssueProgressReport({
                     <StageIcon name={icon} />
                   </span>
                   <span className="pgl">{decisionStageInfo[stage].label}</span>
-                  <span className="pgn">{logs ? plural(logs, "log") : index > currentIndex ? "not yet" : "0 logs"}</span>
-                  {comments ? <span className="pgc">{plural(comments, "comment")}</span> : null}
+                  <span className="pgn">{index > currentIndex && !logs ? null : entryCount(logs, decisionStageInfo[stage].entry)}</span>
                   <span className="sr-only">
                     {decisionStageInfo[stage].label}: {tally.positive} positive, {tally.negative} negative
                   </span>

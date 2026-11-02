@@ -4,7 +4,6 @@ import { prisma } from "@/lib/prisma";
 import { audit } from "@/lib/agents/audit";
 import {
   assertIndependentReviewer,
-  reviewerCreditConflict,
   ReviewerNotIndependentError,
   type ReviewedBug,
 } from "@/lib/agents/independence";
@@ -12,10 +11,14 @@ import { hasLevel } from "@/lib/agents/levels";
 import type { AgentContext } from "@/lib/agents/require-agent";
 import { publish } from "@/lib/agent-api/events";
 import { handleTestVerdictSubmitted } from "@/lib/agent-api/review-offer";
-import { parsePullRequestUrl, type GitHubClient, type PullRequest } from "@/lib/github/merge-pr";
-import { combineProblems, notifyAuthor, readinessClient, readinessProblems } from "@/lib/agent-api/pr-readiness";
-import { recordVerdictBlocked } from "@/lib/merge-status";
-import { refreshTestedStatus } from "@/lib/agent-api/tested-status";
+import { parseGitHubRepoUrl } from "@/lib/github/pull-request-url";
+import { prGate } from "@/lib/agent-api/pr-gate";
+import { gateReport, latestPullRequestReport, notifyAuthor, type StoredPullRequestReport } from "@/lib/agent-api/pull-request-report";
+import { conflictComment } from "@/lib/agent-api/merge-conflict";
+import { refreshJudgedStatus } from "@/lib/agent-api/tested-status";
+import { entryDescription, entryReplySelect, entrySummary, toEntryReplies, type EntryReply } from "@/lib/agent-api/entry-fields";
+import { IssueApiError } from "@/lib/agent-api/errors";
+import { issueIdFor, parseIssueRef } from "@/lib/issue-ref";
 
 /**
  * Reviewer agents reporting whether a fix is good to merge (#434). A verdict
@@ -32,21 +35,30 @@ import { refreshTestedStatus } from "@/lib/agent-api/tested-status";
  *   on its own. Reporting again replaces that agent's verdict (#529), so a
  *   reviewer who finds a regression can take back "good to merge" until the
  *   fix is accepted. The audit log keeps every change.
- * - "Good to merge" is only recorded when the pull request is ready: every check
- *   on its head commit is green, CodeRabbit has no unresolved review threads,
- *   and it doesn't conflict with its base branch (#255). Otherwise nothing is
- *   recorded, a comment lists every reason and what the author has to do, and
- *   the author is told. A "not good to merge" verdict is always recorded.
+ * - A verdict is the Delivered step's entry, a judgement of the delivered work
+ *   (#delivered-step): good or not good to merge, with a summary of at most
+ *   two sentences and a full description (lib/agent-api/entry-fields.ts).
+ *   Nobody gives a bare verdict. Replies are plain comments with
+ *   `testVerdictId`. Enough independent good ones make the issue Done; enough
+ *   not-good ones send it back to Open (lib/agent-api/tested-status.ts).
+ * - "Good to merge" is not recorded while the latest independent report on the
+ *   pull request (#pr-reports: Ziki never asks GitHub) says it is missing,
+ *   closed, linked outside the project's repository, failing its checks or in
+ *   conflict with its base branch (#255). The caller gets the reason and what
+ *   the author has to do, and the author is told. With no report yet the
+ *   tester's own check stands; the accept waits for a report. A "not good to
+ *   merge" verdict is always recorded.
  * - A verdict needs a linked pull request and records which one it tested
  *   (#526), and the head commit it tested (#489). Linking a different PR means
  *   the old verdicts no longer count.
  */
 
-export const TEST_VERDICT_NOTES_MAX = 2000;
-
 export const testVerdictBodySchema = z.object({
   goodToMerge: z.boolean(),
-  notes: z.string().trim().max(TEST_VERDICT_NOTES_MAX).optional(),
+  /** At most two sentences: is it good to merge, and the main reason. */
+  summary: entrySummary,
+  /** What was tested, where, and why it is (or isn't) good to merge. */
+  description: entryDescription,
   /** The person the agent acts for; defaults to its owner. */
   onBehalfOfUserId: z.string().trim().min(1).max(191).optional(),
   /**
@@ -68,15 +80,15 @@ const reviewedBugSelect = {
   title: true,
   tenantId: true,
   status: true,
+  substatus: true,
   pullRequestUrl: true,
   pullRequestHeadSha: true,
-  severity: true,
   beneficiaryUserId: true,
   assigneeId: true,
   reporterId: true,
   createdByAgentId: true,
   createdByAgent: { select: { ownerUserId: true } },
-  project: { select: { githubInstallationId: true } },
+  project: { select: { repoUrl: true } },
   claims: {
     select: {
       status: true,
@@ -100,12 +112,28 @@ function activeClaimAgent(bug: LoadedBug): string | null {
 type StoredVerdict = {
   id: string;
   goodToMerge: boolean;
-  notes: string | null;
+  summary: string;
+  description: string;
   onBehalfOfUserId: string;
   pullRequestUrl: string | null;
   headSha: string | null;
   changedAt: Date | null;
+  createdAt: Date;
+  updatedAt: Date;
 };
+
+/** The 400 for a body that fails the schema, naming the field. */
+function invalidVerdict(error: z.ZodError): { status: 400; error: "invalid_request"; message: string; field?: string } {
+  const issue = error.issues[0];
+  const field = typeof issue?.path[0] === "string" ? issue.path[0] : undefined;
+  const message =
+    field === "summary" && issue?.code === "invalid_type"
+      ? "Add a summary."
+      : field === "description" && issue?.code === "invalid_type"
+        ? "Add a description of what you tested and why it is, or isn't, good to merge."
+        : issue?.message ?? "Invalid test verdict.";
+  return { status: 400, error: "invalid_request", message, ...(field ? { field } : {}) };
+}
 
 export type SubmitTestVerdictResult =
   | { status: 201; verdict: StoredVerdict }
@@ -114,22 +142,21 @@ export type SubmitTestVerdictResult =
   | { status: 400; error: "invalid_request"; message: string; field?: string }
   | { status: 403; error: "insufficient_level" | "fixer_cannot_verdict" | "not_independent"; message: string }
   | { status: 404; error: "not_found"; message: string }
-  | { status: 409; error: "no_pull_request" | "already_accepted" | "already_verdicted"; message: string }
-  /** "Good to merge" was not recorded because the pull request isn't ready (#255). */
+  | { status: 409; error: "not_delivered" | "already_verdicted" | "enough_verdicts"; message: string }
+  /** "Good to merge" was not recorded because the reported pull request isn't ready (#255, #pr-reports). */
   | {
       status: 409;
       error: "not_ready";
-      missing: "github_app" | "pull_request" | "deployment_verification" | "review_threads" | "merge_conflict";
+      missing: "pull_request" | "deployment_verification" | "merge_conflict";
       message: string;
+      /** What the fix's author has to do before a tester reports again. */
+      todo: string;
     };
-
-export type SubmitTestVerdictDeps = { client?: GitHubClient | null };
 
 export async function submitTestVerdict(
   agent: AgentContext,
-  bugId: string,
+  issueRef: string,
   rawBody: unknown,
-  deps: SubmitTestVerdictDeps = {},
 ): Promise<SubmitTestVerdictResult> {
   if (!hasLevel(agent.level, "working")) {
     return {
@@ -140,37 +167,27 @@ export async function submitTestVerdict(
   }
 
   const parsed = testVerdictBodySchema.safeParse(rawBody ?? {});
-  if (!parsed.success) {
-    const issue = parsed.error.issues[0];
-    return {
-      status: 400,
-      error: "invalid_request",
-      message: issue?.message ?? "Invalid test verdict.",
-      field: typeof issue?.path[0] === "string" ? issue.path[0] : undefined,
-    };
-  }
+  if (!parsed.success) return invalidVerdict(parsed.error);
   const body = parsed.data;
 
+  // #457: the path may be the readable number (`123`, `ZE-123`) or the id.
+  const bugId = await issueIdFor(prisma, issueRef, agent.tenantId);
+  if (!bugId) return { status: 404, error: "not_found", message: "No such issue in this agent's tenant." };
   const bug = await prisma.bug.findFirst({
     where: { id: bugId, tenantId: agent.tenantId, isDeleted: false },
     select: reviewedBugSelect,
   });
   if (!bug) return { status: 404, error: "not_found", message: "No such issue in this agent's tenant." };
 
-  // #526: "good to merge" has to be about some code.
-  if (!bug.pullRequestUrl) {
+  // #delivered-step: delivered work is judged at Done · Requires review, and a
+  // judgement can still change at Done · Accepted (#529); before delivery, and
+  // once a manager has accepted it, there is nothing to judge.
+  if (bug.status !== "done" || !bug.pullRequestUrl) {
     return {
       status: 409,
-      error: "no_pull_request",
-      message: "Link the fix's pull request (POST /api/v1/issues/{id}/github) before reporting a test verdict.",
-    };
-  }
-  // #529: verdicts can change until the fix is accepted, not after.
-  if (bug.status === "resolved" || bug.status === "closed") {
-    return {
-      status: 409,
-      error: "already_accepted",
-      message: "This fix has already been accepted, so its verdicts can't change.",
+      error: "not_delivered",
+      message:
+        "Judgements are given on delivered work: the issue must be Done · Requires review (or Done · Accepted, to change a judgement). The agent holding the claim delivers with POST /api/v1/issues/{id}/delivery.",
     };
   }
   const pullRequestUrl = bug.pullRequestUrl;
@@ -207,38 +224,50 @@ export async function submitTestVerdict(
       };
     }
   }
-  if (reviewerCreditConflict(onBehalfOfUserId, bug as ReviewedBug)) {
-    return {
-      status: 403,
-      error: "not_independent",
-      message: "onBehalfOfUserId must be independent of the issue's reporter, solver, and claim beneficiary.",
-    };
+
+  // #727: a Done issue already has the good judgements it needs. A new "good
+  // to merge" changes nothing; "not good to merge" still counts, and a
+  // reviewer may still change their own judgement (#529).
+  if (body.goodToMerge && bug.substatus === "accepted") {
+    const own = await prisma.testVerdict.findFirst({ where: { bugId: bug.id, agentId: agent.agentId }, select: { id: true } });
+    if (!own) {
+      return {
+        status: 409,
+        error: "enough_verdicts",
+        message:
+          "This work is Done: it already has the good-to-merge judgements it needs and waits for a manager's review. Another good-to-merge judgement changes nothing; judge it not good to merge only if you found a real problem.",
+      };
+    }
   }
 
-  // A tester only says "good to merge" about a pull request that is ready.
+  // A tester only says "good to merge" about a pull request that is ready, as reported.
   if (body.goodToMerge) {
-    const block = await readyBlock(bug, deps, headSha);
+    const block = readyBlock(bug, await latestPullRequestReport(bug.id, pullRequestUrl));
     if (block) {
+      // #review-entries: nothing is posted on the issue. The caller gets the
+      // reason and what to do; the author is told.
       const claim = bug.claims.find((c) => c.status === "active" && !c.releasedAt);
-      await recordVerdictBlocked(prisma, { agent, bug, reason: block.message, todo: block.todo });
       notifyAuthor({
         bug,
         recipientId: claim?.beneficiaryUserId ?? bug.assigneeId,
         reason: block.message,
         fromAgentName: agent.name,
       });
-      return { status: 409, error: "not_ready", missing: block.missing, message: block.message };
+      return { status: 409, error: "not_ready", missing: block.missing, message: block.message, todo: block.todo };
     }
   }
 
   const verdictSelect = {
     id: true,
     goodToMerge: true,
-    notes: true,
+    summary: true,
+    description: true,
     onBehalfOfUserId: true,
     pullRequestUrl: true,
     headSha: true,
     changedAt: true,
+    createdAt: true,
+    updatedAt: true,
   } as const;
 
   try {
@@ -255,7 +284,8 @@ export async function submitTestVerdict(
           where: { id: existing.id },
           data: {
             goodToMerge: body.goodToMerge,
-            notes: body.notes || null,
+            summary: body.summary,
+            description: body.description,
             onBehalfOfUserId,
             pullRequestUrl,
             headSha,
@@ -269,8 +299,8 @@ export async function submitTestVerdict(
           `bug:${bug.id}`,
           {
             verdictId: verdict.id,
-            from: { goodToMerge: existing.goodToMerge, pullRequestUrl: existing.pullRequestUrl },
-            to: { goodToMerge: body.goodToMerge, pullRequestUrl, headSha },
+            from: { goodToMerge: existing.goodToMerge, summary: existing.summary, pullRequestUrl: existing.pullRequestUrl },
+            to: { goodToMerge: body.goodToMerge, summary: body.summary, pullRequestUrl, headSha },
             onBehalfOfUserId,
           },
           { bugId: bug.id, db: tx },
@@ -282,6 +312,7 @@ export async function submitTestVerdict(
             issueId: bug.id,
             verdictId: verdict.id,
             goodToMerge: body.goodToMerge,
+            summary: body.summary,
             onBehalfOfUserId,
             pullRequestUrl,
             headSha,
@@ -301,7 +332,8 @@ export async function submitTestVerdict(
           agentId: agent.agentId,
           onBehalfOfUserId,
           goodToMerge: body.goodToMerge,
-          notes: body.notes || null,
+          summary: body.summary,
+          description: body.description,
           pullRequestUrl,
           headSha,
         },
@@ -312,13 +344,13 @@ export async function submitTestVerdict(
         agent,
         "issue.test_verdict",
         `bug:${bug.id}`,
-        { verdictId: verdict.id, goodToMerge: body.goodToMerge, onBehalfOfUserId, pullRequestUrl, headSha },
+        { verdictId: verdict.id, goodToMerge: body.goodToMerge, summary: body.summary, onBehalfOfUserId, pullRequestUrl, headSha },
         { bugId: bug.id, db: tx },
       );
       await publish(tx, {
         tenantId: bug.tenantId,
         type: "issue.test_verdict",
-        payload: { issueId: bug.id, verdictId: verdict.id, goodToMerge: body.goodToMerge, onBehalfOfUserId, pullRequestUrl, headSha },
+        payload: { issueId: bug.id, verdictId: verdict.id, goodToMerge: body.goodToMerge, summary: body.summary, onBehalfOfUserId, pullRequestUrl, headSha },
         actorAgentId: agent.agentId,
         bugId: bug.id,
       });
@@ -326,9 +358,8 @@ export async function submitTestVerdict(
       await handleTestVerdictSubmitted(tx, { bugId: bug.id, agentId: agent.agentId, tenantId: bug.tenantId, pullRequestUrl }).catch(() => null);
       return { status: 201 as const, verdict };
     });
-    // Ziki #713: the required independent good-to-merge verdicts make the fix
-    // tested (the Done tab); a verdict taken back returns it to In progress.
-    await refreshTestedStatus(prisma, bug.id, agent.ownerId);
+    // #delivered-step: enough independent judgements move it to Done, or back to Open.
+    await refreshJudgedStatus(prisma, bug.id, agent.ownerId);
     return result;
   } catch (error) {
     if (
@@ -346,48 +377,114 @@ export async function submitTestVerdict(
 }
 
 /**
- * Why a tester can't say "good to merge" yet: GitHub can't be asked, or the
- * pull request has red checks, open CodeRabbit threads or a merge conflict.
- * Null when it is ready.
+ * Why a tester can't say "good to merge" yet, by the latest independent report
+ * on the pull request: it is missing, closed or linked outside the project's
+ * repository, its checks are failing, or it conflicts with its base branch.
+ * Null when nothing reported stops it (including when nobody reported yet).
  */
-async function readyBlock(
+function readyBlock(
   bug: LoadedBug,
-  deps: SubmitTestVerdictDeps,
-  testedHeadSha: string | null | undefined,
-): Promise<{
-  missing: "github_app" | "pull_request" | "deployment_verification" | "review_threads" | "merge_conflict";
+  report: StoredPullRequestReport | null,
+): {
+  missing: "pull_request" | "deployment_verification" | "merge_conflict";
   message: string;
   todo: string;
-} | null> {
-  const client = deps.client !== undefined ? deps.client : readinessClient(bug.project?.githubInstallationId);
-  if (!client) {
-    return {
-      missing: "github_app",
-      message:
-        "The GitHub App is not set up for this project, so Ziki can't check that the checks are green, CodeRabbit's threads are resolved and there is no merge conflict.",
-      todo: "A tenant admin installs the Ziki GitHub App on this project's repository and sets the repository on the project. Then report again.",
-    };
+} | null {
+  const gate = prGate(gateReport(report), {
+    pullRequestUrl: bug.pullRequestUrl,
+    pullRequestHeadSha: bug.pullRequestHeadSha,
+    repo: parseGitHubRepoUrl(bug.project?.repoUrl),
+  });
+  const reason = gate.reason ?? "";
+  if (gate.broken) {
+    return { missing: "pull_request", message: reason, todo: "The author fixes the pull request (a new one, or a repaired link). Then judge it again." };
   }
-  const ref = parsePullRequestUrl(bug.pullRequestUrl);
-  if (!ref) {
-    return {
-      missing: "pull_request",
-      message: "The linked address is not a GitHub pull request, so Ziki can't check it.",
-      todo: "Link the pull request again with its GitHub address (POST /issues/{id}/github).",
-    };
+  if (report?.state === "open" && !gate.needsReport) {
+    if (report.mergeable === false) {
+      const claim = bug.claims.find((c) => c.status === "active" && !c.releasedAt);
+      const note = conflictComment(claim?.agent.name);
+      return { missing: "merge_conflict", message: note.reason, todo: note.todo };
+    }
+    if (report.checks === "failing") {
+      return {
+        missing: "deployment_verification",
+        message: reason,
+        todo: "The author opens the pull request's Checks tab on GitHub, fixes whatever failed (tests, build, lint or the deployment) and pushes. Then an independent agent reports it again.",
+      };
+    }
   }
-  let pullRequest: PullRequest;
-  try {
-    pullRequest = await client.getPullRequest(ref);
-  } catch {
-    return {
-      missing: "deployment_verification",
-      message: "GitHub could not be reached to check the pull request.",
-      todo: "Nothing is wrong with the fix. Report again in a few minutes.",
-    };
-  }
-  const claim = bug.claims.find((c) => c.status === "active" && !c.releasedAt);
-  return combineProblems(
-    await readinessProblems(client, ref, pullRequest, testedHeadSha || pullRequest.headSha, claim?.agent.name),
-  );
+  return null;
+}
+
+/** One test verdict as the API and the issue page show it, with its replies. */
+export type TestVerdictEntry = {
+  id: string;
+  agentId: string;
+  agentName: string;
+  onBehalfOfUserId: string;
+  /** The agent's owner, for whom it tested. */
+  by: string;
+  goodToMerge: boolean;
+  summary: string;
+  description: string;
+  pullRequestUrl: string | null;
+  headSha: string | null;
+  /** On the pull request linked now (and its head commit, when both are known). Only these count. */
+  current: boolean;
+  createdAt: Date;
+  updatedAt: Date;
+  replies: EntryReply[];
+};
+
+/** Every test verdict on one issue, newest first. */
+export async function testVerdictEntries(
+  bug: { id: string; pullRequestUrl: string | null; pullRequestHeadSha: string | null },
+  db: Prisma.TransactionClient | typeof prisma = prisma,
+): Promise<TestVerdictEntry[]> {
+  const rows = await db.testVerdict.findMany({
+    where: { bugId: bug.id },
+    orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
+    select: {
+      id: true,
+      agentId: true,
+      onBehalfOfUserId: true,
+      goodToMerge: true,
+      summary: true,
+      description: true,
+      pullRequestUrl: true,
+      headSha: true,
+      createdAt: true,
+      updatedAt: true,
+      agent: { select: { name: true } },
+      onBehalfOf: { select: { name: true } },
+      replies: entryReplySelect,
+    },
+  });
+  return rows.map(({ agent, onBehalfOf, replies, ...row }) => ({
+    ...row,
+    agentName: agent.name,
+    by: onBehalfOf.name ?? "A member",
+    current:
+      Boolean(bug.pullRequestUrl) &&
+      row.pullRequestUrl === bug.pullRequestUrl &&
+      (!bug.pullRequestHeadSha || !row.headSha || row.headSha === bug.pullRequestHeadSha),
+    replies: toEntryReplies(replies),
+  }));
+}
+
+/** GET /issues/{id}/test-results: the issue's test verdicts, each with its replies. */
+export async function listTestVerdicts(scope: { tenantId: string; projectId?: string }, issueRef: string) {
+  const ref = parseIssueRef(issueRef);
+  const bug = await prisma.bug.findFirst({
+    where: { ...scope, isDeleted: false, ...(ref.kind === "number" ? { number: ref.number } : { id: ref.id }) },
+    select: { id: true, number: true, pullRequestUrl: true, pullRequestHeadSha: true },
+  });
+  if (!bug) throw new IssueApiError(404, "Issue not found.", { error: "not_found", message: "Issue not found." });
+  return {
+    issueId: bug.id,
+    issueNumber: bug.number,
+    pullRequestUrl: bug.pullRequestUrl,
+    headSha: bug.pullRequestHeadSha,
+    verdicts: await testVerdictEntries(bug),
+  };
 }

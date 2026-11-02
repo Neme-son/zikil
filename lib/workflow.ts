@@ -51,6 +51,13 @@ export async function workflowFor(
         volunteerWindowSeconds: true,
         autoMerge: true,
         ideaThreshold: true,
+        abandonCheckMinutes: true,
+        abandonThreshold: true,
+        closeThreshold: true,
+        governance: true,
+        managerVoteWeight: true,
+        awardThreshold: true,
+        acceptThreshold: true,
       },
     })) as Partial<ProjectWorkflowValues> | null;
   } catch (error) {

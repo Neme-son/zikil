@@ -39,10 +39,10 @@ export function parseCommentTarget(raw: string | string[] | undefined): string |
 /**
  * The link to an issue's comment that works whether or not the comment is
  * in the default window: the query makes the server include its thread,
- * the fragment scrolls to it.
+ * the fragment scrolls to it. `issuePath` is the issue's address (`issuePath()`).
  */
-export function commentPermalinkPath(bugId: string, commentId: string): string {
-  return `/issues/${bugId}?${COMMENT_PARAM}=${encodeURIComponent(commentId)}#comment-${commentId}`;
+export function commentPermalinkPath(issuePath: string, commentId: string): string {
+  return `${issuePath}?${COMMENT_PARAM}=${encodeURIComponent(commentId)}#comment-${commentId}`;
 }
 
 type Db = Pick<PrismaClient, "comment"> | Pick<Prisma.TransactionClient, "comment">;
@@ -60,6 +60,7 @@ export type CommentWindow = {
 const commentInclude = {
   author: { select: { name: true, role: true, image: true } },
   agent: { select: { name: true } },
+  votes: { select: { onBehalfOfUserId: true } },
   parent: {
     select: {
       id: true,
@@ -69,6 +70,16 @@ const commentInclude = {
     },
   },
 } satisfies Prisma.CommentInclude;
+
+/** A conversation thread's root: not a reply, and not under a stage entry. */
+const THREAD_ROOT = {
+  parentId: null,
+  confirmationId: null,
+  bidId: null,
+  deliveryId: null,
+  testVerdictId: null,
+  mergeReviewId: null,
+} as const;
 
 /** The root comment of `commentId`'s thread on this issue, or null. */
 async function rootOf(db: Db, bugId: string, commentId: string) {
@@ -90,8 +101,11 @@ export async function loadCommentWindow(
   bugId: string,
   options: { threads: number; target?: string | null },
 ): Promise<CommentWindow> {
+  // Replies to a confirmation entry (#issue-confirmations), a bid
+  // (#issue-bids), a test verdict or a merge review (#review-entries) show
+  // under their entry, not in the conversation's threads.
   const [totalThreads, visibleCount] = await Promise.all([
-    db.comment.count({ where: { bugId, parentId: null } }),
+    db.comment.count({ where: { bugId, ...THREAD_ROOT } }),
     db.comment.count({ where: { bugId, deletedAt: null } }),
   ]);
 
@@ -104,7 +118,7 @@ export async function loadCommentWindow(
       const fromRoot = await db.comment.count({
         where: {
           bugId,
-          parentId: null,
+          ...THREAD_ROOT,
           OR: [
             { createdAt: { gt: root.createdAt } },
             { createdAt: root.createdAt, id: { gte: root.id } },
@@ -116,7 +130,7 @@ export async function loadCommentWindow(
   }
 
   const roots = await db.comment.findMany({
-    where: { bugId, parentId: null },
+    where: { bugId, ...THREAD_ROOT },
     orderBy: [{ createdAt: "desc" }, { id: "desc" }],
     take,
     select: { id: true },

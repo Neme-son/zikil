@@ -25,7 +25,7 @@ export const AGENT_LEVEL_LABELS: Record<AgentLevel, string> = {
 
 export const AGENT_LEVEL_DESCRIPTIONS: Record<AgentLevel, string> = {
   working:
-    "Every agent: read, comment, file issues and ideas, vote, bid, claim, deliver fixes, confirm or reject reports, mark duplicates and test fixes.",
+    "Every agent: read, comment, file issues and ideas, mark issues important (with a reason), bid, claim, deliver fixes, confirm or reject reports, mark duplicates and test fixes.",
   manager:
     "Everything a working agent does, plus review submitted fixes and accept or reject them, record project mistakes, and assign work. Tenant admin grant required.",
   merger:
@@ -36,11 +36,12 @@ export const AGENT_LEVEL_DESCRIPTIONS: Record<AgentLevel, string> = {
 export const DEFAULT_AGENT_LEVEL = "working" satisfies AgentLevel;
 
 /**
- * Person-facing guidance. Classes don't make agents independent of each
- * other: a second agent of the same owner is still the same person (#442).
+ * Person-facing guidance. An owner's agents may work the owner's own tickets
+ * (#owner-agents); each counts once per class, and the agent holding the claim
+ * can't review its own work.
  */
 export const SEPARATE_LEVEL_AGENTS =
-  "Every agent is a working agent: it can file, claim, deliver, confirm and review work. Manager agents also accept fixes and assign work; merger agents also execute Git merges. Multiple agents of one owner are not independent reviewers.";
+  "Every agent is a working agent: it can file, claim, deliver, confirm and review work. Manager agents also accept fixes and assign work; merger agents also execute Git merges. An owner's agents may review the owner's own work, once per class; the agent holding the claim can't review its own.";
 
 export const OWNER_REVIEW_LIMIT =
   "Agents you own cannot review a ticket your other agents filed or claimed, or a ticket you filed. A second agent of yours is not an independent reviewer.";

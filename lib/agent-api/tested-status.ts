@@ -1,25 +1,35 @@
 import type { Prisma, PrismaClient } from "@prisma/client";
 import type { ReviewedBug } from "@/lib/agents/independence";
-import { countedMergeVerdicts } from "@/lib/agent-api/merge-verdicts";
+import { countedMergeVerdicts, deliveredClaim } from "@/lib/agent-api/merge-verdicts";
+import { publish } from "@/lib/agent-api/events";
 import { workflowFor } from "@/lib/workflow";
+import { moveTo } from "@/lib/issue-substatus";
 
 /**
- * "Tested" is the Done step (Ziki #713): a pull request is linked and the project's
- * required reviewers, each with a different owner and none on the fixer's side,
- * said it is good to merge on that pull request. It sits between `submitted`
- * (In progress) and `ready_to_merge` (a manager accepted it), and it moves on
- * its own: a verdict that brings the count up makes the fix tested, one that
- * takes it back (a reviewer changes their mind) returns it to submitted.
- * Linking a new pull request starts again at submitted.
+ * The Delivered step's rule (#delivered-step). Once the agent holding the
+ * claim delivers its work, independent agents judge it (test verdicts on the
+ * delivered pull request):
+ *
+ * - When the project's required number of them, each with a different owner
+ *   and none on the delivering side, say it is good to merge, it is Done.
+ * - Otherwise, when that many say it is not good to merge, it goes back to
+ *   Open: the claim is released and the pull request is cleared, so someone
+ *   (the same agent or another) can take it again.
+ * - Otherwise it stays Delivered.
+ *
+ * Both counts use the merge gate's rule (`countedMergeVerdicts`), so Done and
+ * the manager's accept always agree.
  */
-export const TESTED = "tested";
 
 type Db = PrismaClient | Prisma.TransactionClient;
 
-const bugSelect = {
+/** What the Delivered step's count reads about an issue. */
+export const judgedBugSelect = {
   id: true,
+  tenantId: true,
   projectId: true,
-  reviewStatus: true,
+  status: true,
+  substatus: true,
   pullRequestUrl: true,
   assigneeId: true,
   beneficiaryUserId: true,
@@ -28,7 +38,9 @@ const bugSelect = {
   createdByAgent: { select: { ownerUserId: true } },
   claims: {
     select: {
+      id: true,
       status: true,
+      claimedAt: true,
       releasedAt: true,
       agentId: true,
       beneficiaryUserId: true,
@@ -38,52 +50,117 @@ const bugSelect = {
   },
 } satisfies Prisma.BugSelect;
 
+export type JudgedBug = Prisma.BugGetPayload<{ select: typeof judgedBugSelect }>;
+
+/** The judgements on the delivered pull request, oldest first, as the count reads them. */
+export const judgementSelect = {
+  goodToMerge: true,
+  headSha: true,
+  onBehalfOfUserId: true,
+  agent: { select: { id: true, ownerUserId: true, level: true } },
+} satisfies Prisma.TestVerdictSelect;
+
+export type Judgement = Prisma.TestVerdictGetPayload<{ select: typeof judgementSelect }>;
+
 /**
- * The good-to-merge verdicts that count, by the same rule the manager's accept
- * and the merge queue use (`countedMergeVerdicts`), so Done and the merge gate
- * always agree.
+ * Count judgements as the Delivered step does. Work delivered with no claim
+ * behind it (a manager agent filed it on the holder's behalf,
+ * lib/agent-api/stranded-delivery.ts) has no claim holder to leave out, so the
+ * people the delivery credits stand in that place: nothing from their agents,
+ * and nothing given on their behalf, counts.
  */
-export async function countedGoodVerdicts(db: Db, bugId: string): Promise<{ counted: number; needed: number } | null> {
-  const bug = await db.bug.findUnique({ where: { id: bugId }, select: bugSelect });
+export function countJudgements(
+  verdicts: readonly Judgement[],
+  bug: JudgedBug,
+  creditedUserIds: readonly string[],
+): { good: number; notGood: number } {
+  const claim = deliveredClaim(bug);
+  const counted = claim
+    ? verdicts
+    : verdicts.filter((v) => !creditedUserIds.includes(v.agent.ownerUserId) && !creditedUserIds.includes(v.onBehalfOfUserId));
+  const reviewed = bug as unknown as ReviewedBug;
+  return {
+    good: countedMergeVerdicts(counted.filter((v) => v.goodToMerge), claim, reviewed).weight,
+    notGood: countedMergeVerdicts(counted.filter((v) => !v.goodToMerge), claim, reviewed).weight,
+  };
+}
+
+/** The judgements that count on the delivered pull request, good and not good, and how many are needed. */
+export async function countedJudgements(
+  db: Db,
+  bugId: string,
+): Promise<{ good: number; notGood: number; needed: number } | null> {
+  const bug = await db.bug.findUnique({ where: { id: bugId }, select: judgedBugSelect });
   if (!bug?.pullRequestUrl) return null;
   const verdicts = await db.testVerdict.findMany({
-    where: { bugId, goodToMerge: true, pullRequestUrl: bug.pullRequestUrl },
+    where: { bugId, pullRequestUrl: bug.pullRequestUrl },
     orderBy: [{ createdAt: "asc" }, { id: "asc" }],
-    select: { headSha: true, onBehalfOfUserId: true, agent: { select: { id: true, ownerUserId: true } } },
+    select: judgementSelect,
   });
-  const claim = bug.claims.find((c) => c.status === "active" && !c.releasedAt) ?? null;
-  const { reviewers } = countedMergeVerdicts(verdicts, claim, bug as unknown as ReviewedBug);
+  // With no claim, whoever the deliveries on this pull request credit can't judge it.
+  const credited = deliveredClaim(bug)
+    ? []
+    : (await db.delivery.findMany({ where: { bugId, pullRequestUrl: bug.pullRequestUrl }, select: { beneficiaryUserId: true } })).map(
+        (delivery) => delivery.beneficiaryUserId,
+      );
+  const { good, notGood } = countJudgements(verdicts, bug, credited);
   const { verdictsNeeded } = await workflowFor(bug.projectId, db);
-  return { counted: reviewers.length, needed: verdictsNeeded };
+  return { good, notGood, needed: verdictsNeeded };
 }
 
 /**
- * Move a fix between In progress (`submitted`) and Done (`tested`) after a
- * verdict. Later steps (ready to merge, merged, rejected, blocked) are left
- * alone. Returns the new review status when it changed, else null.
+ * Apply the rule after a judgement. Acts only on a Done issue, Requires
+ * review or Accepted (a judgement taken back can return Accepted to Requires
+ * review). Returns the new substatus when it changed, else null.
  */
-export async function refreshTestedStatus(db: Db, bugId: string, actorUserId: string): Promise<string | null> {
-  const bug = await db.bug.findUnique({ where: { id: bugId }, select: { reviewStatus: true, pullRequestUrl: true } });
+export async function refreshJudgedStatus(
+  db: Db,
+  bugId: string,
+  actorUserId: string,
+): Promise<"requires_review" | "accepted" | "open" | null> {
+  const bug = await db.bug.findUnique({ where: { id: bugId }, select: judgedBugSelect });
   if (!bug?.pullRequestUrl) return null;
-  const current = bug.reviewStatus ?? "submitted";
-  if (current !== "submitted" && current !== TESTED) return null;
+  if (bug.status !== "done") return null;
 
-  const count = await countedGoodVerdicts(db, bugId);
+  const count = await countedJudgements(db, bugId);
   if (!count) return null;
-  const next = count.counted >= count.needed ? TESTED : "submitted";
-  if (next === current) return null;
+  const next = count.good >= count.needed ? "accepted" : count.notGood >= count.needed ? "open" : "requires_review";
+  if (next === bug.substatus) return null;
 
-  await db.bug.update({ where: { id: bugId }, data: { reviewStatus: next } });
+  if (next === "open") {
+    // Judged not good to merge: back to Open, for someone to take again.
+    const now = new Date();
+    const held = bug.claims.filter((claim) => !claim.releasedAt && (claim.status === "active" || claim.status === "offered"));
+    for (const claim of held) {
+      await db.issueClaim.update({ where: { id: claim.id }, data: { status: "released", releasedAt: now, releaseReason: "judged_not_good" } });
+      await publish(db, {
+        tenantId: bug.tenantId,
+        type: "claim.released",
+        actorAgentId: null,
+        bugId,
+        payload: { claimId: claim.id, issueId: bugId, beneficiaryUserId: claim.beneficiaryUserId, reason: "judged_not_good" },
+      });
+    }
+    await db.bug.update({
+      where: { id: bugId },
+      data: { ...moveTo("open"), assigneeId: null, pullRequestUrl: null, pullRequestHeadSha: null },
+    });
+  } else {
+    await db.bug.update({ where: { id: bugId }, data: moveTo(next) });
+  }
+
   await db.bugActivity.create({
     data: {
       bugId,
       actorId: actorUserId,
       type: "status_changed",
       summary:
-        next === TESTED
-          ? `${count.counted} independent reviewers said good to merge: moved to Done`
-          : `Fewer than ${count.needed} independent reviewers say good to merge: back to In progress`,
-      metadata: { field: "reviewStatus", from: current, to: next, counted: count.counted, needed: count.needed },
+        next === "accepted"
+          ? `Judgements weighing ${count.good} say the delivered work is good to merge: moved to Done · Accepted`
+          : next === "open"
+            ? `Judgements weighing ${count.notGood} say the delivered work is not good to merge: back to Open`
+            : `Judgements weighing fewer than ${count.needed} say it is good to merge: back to Done · Requires review`,
+      metadata: { field: "status", from: bug.substatus, to: next, good: count.good, notGood: count.notGood, needed: count.needed },
     },
   });
   return next;

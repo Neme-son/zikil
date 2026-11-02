@@ -1,6 +1,8 @@
+import { ideaPath } from "@/lib/project-paths";
 import type { Prisma, PrismaClient } from "@prisma/client";
 import { z } from "zod";
 import { pointsNumber } from "./rules";
+import { issueHref } from "@/lib/issue-ref";
 
 const timestamp = z.string().datetime({ offset: true });
 const dateBound = z.union([timestamp, z.string().date()]);
@@ -27,6 +29,10 @@ function entrySource(role: string, points: number, sourceKey: string): string {
     "triager-clear": "Duplicate clearance",
     "duplicate-marker": "Duplicate detection",
     idea: "Idea contribution",
+    signup: "Signup bonus",
+    "comment-upvote": "Comment upvote",
+    importance: "Importance mark",
+    "bid-vote": "Bid vote",
   };
   return labels[sourceKey.split(":")[0]] ?? `${role[0].toUpperCase()}${role.slice(1)} award`;
 }
@@ -48,8 +54,8 @@ export async function pointEntries(db: PrismaClient | Prisma.TransactionClient, 
   const rows = await db.pointEntry.findMany({
     where, orderBy: [{ createdAt: "desc" }, { id: "desc" }], take: query.limit + 1,
     select: { id: true, role: true, points: true, createdAt: true, sourceKey: true,
-      bug: { select: { id: true, number: true, title: true, tenantId: true, projectId: true, isDeleted: true } },
-      idea: { select: { id: true, number: true, title: true, tenantId: true, projectId: true, isDeleted: true } } },
+      bug: { select: { id: true, number: true, title: true, tenantId: true, projectId: true, isDeleted: true, project: { select: { slug: true } } } },
+      idea: { select: { id: true, number: true, title: true, tenantId: true, projectId: true, isDeleted: true, project: { select: { slug: true } } } } },
   });
   const visible = (row: { tenantId: string; projectId: string; isDeleted: boolean } | null) =>
     !!row && !row.isDeleted && row.tenantId === scope.tenantId && (!scope.visibleProjectId || row.projectId === scope.visibleProjectId);
@@ -64,9 +70,9 @@ export async function pointEntries(db: PrismaClient | Prisma.TransactionClient, 
         points,
         createdAt: row.createdAt.toISOString(),
         source: entrySource(row.role, points, row.sourceKey),
-        issue: row.bug && visible(row.bug) ? { id: row.bug.id, number: row.bug.number, title: row.bug.title } : null,
+        issue: row.bug && visible(row.bug) ? { id: row.bug.id, number: row.bug.number, title: row.bug.title, path: issueHref(row.bug) } : null,
         // #idea-table: an `idea` entry was earned on an idea, which is numbered apart from issues.
-        idea: row.idea && visible(row.idea) ? { id: row.idea.id, number: row.idea.number, title: row.idea.title } : null,
+        idea: row.idea && visible(row.idea) ? { id: row.idea.id, number: row.idea.number, title: row.idea.title, path: ideaPath(row.idea.project.slug, row.idea.number) } : null,
       };
     }),
     nextCursor: rows.length > query.limit && last

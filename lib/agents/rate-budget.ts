@@ -25,7 +25,7 @@ const MINUTE = 60 * 1000;
 const HOUR = 60 * MINUTE;
 
 /** The anti-runaway guard on writes (#699): the same for every agent. */
-const WRITE_GUARD = { max: 60, windowMs: MINUTE } as const;
+const WRITE_GUARD = { max: 600, windowMs: MINUTE } as const;
 
 /**
  * What a request costs: writes change the board, reads only look at it.
@@ -38,7 +38,9 @@ export type AgentBudgetKind = "read" | "write" | "heartbeat";
 export const AGENT_RATE_BUDGETS = {
   standard: {
     write: WRITE_GUARD,
-    read: { max: 600, windowMs: HOUR },
+    // Reads only look at the board: 60,000 an hour (owner, 2026-11-01), so agents
+    // polling the work feed and reading issues are never held back.
+    read: { max: 60_000, windowMs: HOUR },
     // Up to 2 concurrent claims (the default active-claims cap) heartbeated
     // every 5 minutes is 24/hr; 120 leaves generous headroom without being
     // effectively unlimited.
@@ -46,7 +48,7 @@ export const AGENT_RATE_BUDGETS = {
   },
   burst: {
     write: WRITE_GUARD,
-    read: { max: 4000, windowMs: HOUR },
+    read: { max: 120_000, windowMs: HOUR },
     heartbeat: { max: 120, windowMs: HOUR },
   },
 } as const satisfies Record<"standard" | "burst", Record<AgentBudgetKind, RateLimitConfig>>;

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { unreservedProjectSlug } from "@/lib/project-slug";
 
 /** Project names are shown in the header, so keep them short and readable. */
 export const PROJECT_NAME_MIN = 2;
@@ -45,9 +46,10 @@ export const projectAreaSchema = z.object({
 
 /**
  * A URL-safe slug from a display name. Kept deterministic so the same name
- * gets the same base; collisions are resolved by `nextProjectSlug`.
+ * gets the same base; collisions are resolved by `nextProjectSlug`. Project
+ * areas use it as is; projects go through `projectSlugBase`.
  */
-export function projectSlugBase(name: string): string {
+export function urlSlugBase(name: string): string {
   const slug = name
     .normalize("NFKD")
     .replace(/[\u0300-\u036f]/g, "")
@@ -56,6 +58,14 @@ export function projectSlugBase(name: string): string {
     .replace(/^-+|-+$/g, "")
     .slice(0, PROJECT_SLUG_MAX);
   return slug || "project";
+}
+
+/**
+ * A project's slug base. Never a top-level route name: an issue's URL is
+ * `/<project-slug>/<number>`, so a project called "Issues" gets `issues-project`.
+ */
+export function projectSlugBase(name: string): string {
+  return unreservedProjectSlug(urlSlugBase(name));
 }
 
 /** `base`, or `base-2`, `base-3`, ... when another project already uses it. */
@@ -76,31 +86,20 @@ export function nextProjectSlug(
 
 export function parseRewardConfigFromFormData(formData: FormData) {
   const hasCustomRewards =
-    formData.has("solverPointsLow") ||
-    formData.has("solverPointsMedium") ||
-    formData.has("solverPointsHigh") ||
-    formData.has("solverPointsCritical") ||
+    formData.has("solverPoints") ||
     formData.has("reporterPoints") ||
     formData.has("reviewerPoints") ||
     formData.has("rewardGuidelines");
 
   if (!hasCustomRewards) return null;
 
-  const low = formData.get("solverPointsLow");
-  const medium = formData.get("solverPointsMedium");
-  const high = formData.get("solverPointsHigh");
-  const critical = formData.get("solverPointsCritical");
+  const solver = formData.get("solverPoints");
   const reporter = formData.get("reporterPoints");
   const reviewer = formData.get("reviewerPoints");
   const guidelines = String(formData.get("rewardGuidelines") ?? "").trim();
 
   return {
-    solver: {
-      low: low ? Number(low) : undefined,
-      medium: medium ? Number(medium) : undefined,
-      high: high ? Number(high) : undefined,
-      critical: critical ? Number(critical) : undefined,
-    },
+    solver: solver ? Number(solver) : undefined,
     reporter: reporter ? Number(reporter) : undefined,
     reviewer: reviewer ? Number(reviewer) : undefined,
     guidelines: guidelines || null,

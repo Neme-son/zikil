@@ -50,7 +50,6 @@ describe("tool table matches the API", () => {
       ...(tool.body ?? []),
       ...Object.values(tool.headers ?? {}),
       ...(tool.file ? [tool.file.filename, tool.file.data] : []),
-      ...(tool.streamSeconds ? [tool.streamSeconds] : []),
     ]);
     if (tool.projectScoped) routed.add("projectId");
     const inputs = Object.keys(tool.input);
@@ -82,14 +81,14 @@ describe("buildRequest", () => {
   });
 
   it("sends only provided query and body fields", () => {
-    const list = buildRequest(tool("ziki_list_issues"), { status: "open", stage: "ready", limit: 5 }, { projectId: null });
-    expect(list.query).toEqual({ status: "open", stage: "ready", limit: 5 });
-    const comment = buildRequest(tool("ziki_comment"), { id: "i", body: "hi" }, { projectId: "p" });
-    expect(comment.body).toEqual({ body: "hi" });
+    const list = buildRequest(tool("ziki_list_issues"), { status: "open", limit: 5 }, { projectId: null });
+    expect(list.query).toEqual({ status: "open", limit: 5 });
+    const comment = buildRequest(tool("ziki_comment"), { id: "i", summary: "Hello.", body: "hi" }, { projectId: "p" });
+    expect(comment.body).toEqual({ summary: "Hello.", body: "hi" });
   });
 
   it("sends the idempotency key as a header, deriving a stable one unless given (#633)", () => {
-    const input = { title: "Bug title", description: "Steps to reproduce" };
+    const input = { title: "Bug title", summary: "Pressing Save does nothing on the page.", description: "Steps to reproduce" };
     const a = buildRequest(tool("ziki_create_idea"), input, { projectId: "p" });
     const b = buildRequest(tool("ziki_create_idea"), input, { projectId: "p" });
     expect(a.headers?.["Idempotency-Key"]).toBeTruthy();
@@ -103,7 +102,7 @@ describe("buildRequest", () => {
   it("lets a caller repeat an identical action on purpose with an explicit key (#633)", () => {
     // The derived key deduplicates retries, so a deliberate repeat — filing the
     // same report twice on purpose — has to opt out by supplying its own key.
-    const input = { title: "Same title", description: "Same description" };
+    const input = { title: "Same title", summary: "Pressing Save does nothing on the page.", description: "Same description" };
     const derived = buildRequest(tool("ziki_create_idea"), input, { projectId: "p" });
     const first = buildRequest(tool("ziki_create_idea"), { ...input, idempotencyKey: "deliberate-1" }, { projectId: "p" });
     const second = buildRequest(tool("ziki_create_idea"), { ...input, idempotencyKey: "deliberate-2" }, { projectId: "p" });
@@ -117,30 +116,33 @@ describe("buildRequest", () => {
   it("derives a different idempotency key for a different call (#633)", () => {
     const key = (input: Record<string, unknown>, projectId: string | null = "p") =>
       buildRequest(tool("ziki_create_idea"), input, { projectId }).headers?.["Idempotency-Key"];
-    const base = { title: "Bug title", description: "Steps to reproduce" };
+    const base = { title: "Bug title", summary: "Pressing Save does nothing on the page.", description: "Steps to reproduce" };
     expect(key(base)).not.toBe(key({ ...base, title: "Another title" }));
     expect(key(base)).not.toBe(key({ ...base, description: "Different steps" }));
     expect(key(base)).not.toBe(key(base, "other-project"));
   });
 
   it("sends an empty JSON body on POSTs with nothing to send, and none on GET/DELETE", () => {
-    expect(buildRequest(tool("ziki_request_offer"), { id: "i" }, { projectId: null }).body).toEqual({});
+    expect(buildRequest(tool("ziki_award_bid"), { id: "b" }, { projectId: null }).body).toEqual({});
     expect(buildRequest(tool("ziki_get_issue"), { id: "i" }, { projectId: null }).body).toBeUndefined();
     expect(buildRequest(tool("ziki_withdraw_bid"), { id: "i" }, { projectId: null }).body).toBeUndefined();
   });
 
   it("sends the tested commit with a test result, and rejects a malformed one before calling the API", () => {
-    const withSha = buildRequest(tool("ziki_submit_test_result"), { id: "i", goodToMerge: true, headSha: "a1b2c3d4e5f6" }, { projectId: "p" });
-    expect(withSha.body).toEqual({ goodToMerge: true, headSha: "a1b2c3d4e5f6" });
-    const without = buildRequest(tool("ziki_submit_test_result"), { id: "i", goodToMerge: true }, { projectId: "p" });
-    expect(without.body).toEqual({ goodToMerge: true });
+    const withSha = buildRequest(tool("ziki_submit_test_result"), { id: "i", goodToMerge: true, summary: "Good.", description: "Tested.", headSha: "a1b2c3d4e5f6" }, { projectId: "p" });
+    expect(withSha.body).toEqual({ goodToMerge: true, summary: "Good.", description: "Tested.", headSha: "a1b2c3d4e5f6" });
+    const without = buildRequest(tool("ziki_submit_test_result"), { id: "i", goodToMerge: true, summary: "Good.", description: "Tested." }, { projectId: "p" });
+    expect(without.body).toEqual({ goodToMerge: true, summary: "Good.", description: "Tested." });
+    // A bare verdict is refused before the API is called (#review-entries).
+    expect(() => buildRequest(tool("ziki_submit_test_result"), { id: "i", goodToMerge: true }, { projectId: "p" })).toThrow();
+    expect(() => buildRequest(tool("ziki_merge_fix"), { id: "i", verdict: "accept" }, { projectId: "p" })).toThrow();
     for (const bad of ["not-a-sha", "abc12", "g1b2c3d4e5f6", "a".repeat(65)]) {
-      expect(() => buildRequest(tool("ziki_submit_test_result"), { id: "i", goodToMerge: true, headSha: bad }, { projectId: "p" })).toThrow();
+      expect(() => buildRequest(tool("ziki_submit_test_result"), { id: "i", goodToMerge: true, summary: "Good.", description: "Tested.", headSha: bad }, { projectId: "p" })).toThrow();
     }
   });
 
   it("rejects input the route would reject", () => {
-    expect(() => buildRequest(tool("ziki_comment"), { id: "i", body: "x".repeat(2001) }, { projectId: null })).toThrow();
+    expect(() => buildRequest(tool("ziki_comment"), { id: "i", body: "x".repeat(10001) }, { projectId: null })).toThrow();
     expect(() => buildRequest(tool("ziki_ask_owner"), { body: "hi" }, { projectId: null })).toThrow();
   });
 });

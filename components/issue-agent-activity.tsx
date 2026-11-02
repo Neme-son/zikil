@@ -1,5 +1,3 @@
-import type { Severity } from "@prisma/client";
-import { severityLabel } from "@/lib/labels";
 import { LocalTime } from "@/components/local-time";
 import { ClaimDeadline } from "@/components/claim-deadline";
 import { ExpandableText } from "@/components/expandable-text";
@@ -16,7 +14,6 @@ export type AgentDecision =
       agentName: string;
       /** The person the agent acted for. */
       personName: string;
-      severity: Severity | null;
     }
   | {
       id: string;
@@ -45,6 +42,14 @@ export type AgentDecision =
       at: Date | string;
       /** #1446: a claim that was released or taken back. */
       kind: "claim_released";
+      agentName: string;
+      personName: string;
+    }
+  | {
+      id: string;
+      at: Date | string;
+      /** #delivered-step: the agent holding the claim delivered its work. */
+      kind: "delivered";
       agentName: string;
       personName: string;
     }
@@ -129,6 +134,12 @@ export function verdictVisual(decision: AgentDecision): VerdictVisual {
         chip: "bg-zk-warn-bg text-zk-warn-fg",
         iconWrap: "bg-zk-warn-bg text-zk-warn-fg",
       };
+    case "delivered":
+      return {
+        label: "Work delivered",
+        chip: "bg-zk-ok-bg text-zk-ok-fg",
+        iconWrap: "bg-zk-ok-bg text-zk-ok-fg",
+      };
     case "claim_released":
       return {
         label: "Claim released",
@@ -153,7 +164,7 @@ export function VerdictGlyph({ kind, goodToMerge }: { kind: AgentDecision["kind"
       </svg>
     );
   }
-  if (kind === "claimed") {
+  if (kind === "claimed" || kind === "delivered") {
     return (
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" className={common} aria-hidden>
         <path d="M12 5v14M5 12h14" strokeLinecap="round" />
@@ -190,13 +201,6 @@ export function decisionSentence(decision: AgentDecision) {
       return (
         <>
           <strong className="font-bold text-zk-text">{decision.agentName}</strong> confirmed this issue as real
-          {decision.severity ? (
-            <>
-              {" "}
-              and set the severity to{" "}
-              <strong className="font-bold text-zk-text">{severityLabel[decision.severity]}</strong>
-            </>
-          ) : null}
           {decision.personName ? <> on behalf of {decision.personName}</> : null}.
         </>
       );
@@ -242,6 +246,13 @@ export function decisionSentence(decision: AgentDecision) {
         <>
           <strong className="font-bold text-zk-text">{decision.agentName}</strong> accepted the fix and marked this
           issue resolved.
+        </>
+      );
+    case "delivered":
+      return (
+        <>
+          <strong className="font-bold text-zk-text">{decision.agentName}</strong> delivered the work for{" "}
+          {decision.personName}.
         </>
       );
     case "claim_released":
@@ -319,7 +330,7 @@ export function IssueAgentActivity({
                   <span className={`rounded-full px-2.5 py-0.5 text-[11px] font-extrabold ${visual.chip}`}>
                     {visual.label}
                   </span>
-                  <LocalTime compact className="text-xs text-zk-muted" date={decision.at} />
+                  <LocalTime className="text-xs text-zk-muted" date={decision.at} />
                 </div>
                 <p className="mt-1.5 text-sm leading-snug text-zk-text2">{decisionSentence(decision)}</p>
                 {(decision.kind === "rejected" || decision.kind === "merge_rejected") && decision.notes ? (
