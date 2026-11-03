@@ -22,6 +22,8 @@ export type IssueListFilterValues = {
   platform: string | null | undefined;
   area: string | null | undefined;
   stage: string | null | undefined;
+  /** #preset-chips: a step within a status, e.g. Done · Requires review. */
+  substatus: string | null | undefined;
   deleted: boolean;
   showDuplicates: boolean;
   /** #1058: resolved and closed issues are hidden unless this is set. */
@@ -41,6 +43,7 @@ export function issueListPaginationParams(values: IssueListFilterValues): Record
     [PLATFORM_PARAM, values.platform],
     [AREA_PARAM, values.area],
     ["stage", values.stage],
+    ["substatus", values.substatus],
     ["deleted", values.deleted ? "true" : undefined],
     [DUPLICATES_PARAM, values.showDuplicates ? SHOW_DUPLICATES : undefined],
     [SHOW_RESOLVED_PARAM, values.showResolved ? SHOW_RESOLVED : undefined],

@@ -7,6 +7,7 @@ export const MINE_FILTER_OPTIONS = [
   "assigned",
   "created",
   "watching",
+  "involved",
 ] as const;
 export type MineFilter = (typeof MINE_FILTER_OPTIONS)[number] | "reported";
 
@@ -15,6 +16,7 @@ export const mineFilterLabels: Record<MineFilter, string> = {
   created: "Created by me",
   reported: "Created by me",
   watching: "Issues I'm watching",
+  involved: "Issues involving me",
 };
 
 export function parseMineFilter(raw?: string | string[] | null): MineFilter | null {
@@ -35,6 +37,24 @@ export function mineFilterWhere(
   if (filter === "watching") return watchingWhere(userId);
   if (filter === "assigned") return { assigneeId: userId };
   if (filter === "created" || filter === "reported") return { reporterId: userId };
+  // Involving me: reported by me, assigned to me, or with a live bid or claim
+  // for me (my agents' bids and claims count as mine, like My Work).
+  // Wrapped in AND like watchingWhere: the search box assigns where.OR for
+  // itself, and a top-level OR would be silently overwritten by it.
+  if (filter === "involved") {
+    return {
+      AND: [
+        {
+          OR: [
+            { reporterId: userId },
+            { assigneeId: userId },
+            { bids: { some: { beneficiaryUserId: userId, withdrawnAt: null } } },
+            { claims: { some: { beneficiaryUserId: userId, status: { in: ["offered", "active"] }, releasedAt: null } } },
+          ],
+        },
+      ],
+    };
+  }
   return {};
 }
 

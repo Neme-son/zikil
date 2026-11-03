@@ -91,12 +91,14 @@ import { PlatformMenu, type PlatformTab } from "@/components/platform-tabs";
 import { IssueRowStatus } from "@/components/issue-row-status";
 import { BidsVoteBadge, ImportanceVoteBadge } from "@/components/vote-badge";
 import { RewardBadge } from "@/components/reward-badge";
+import { IssuePresetChips } from "@/components/issue-preset-chips";
+import { ISSUE_PRESETS, SUBSTATUS_PARAM, parseSubstatusFilter, type IssuePreset } from "@/lib/issue-list-presets";
 import { mergePathOf } from "@/lib/merge-history";
 import { IssuesToolsToggle } from "@/components/issues-tools-toggle";
 import { LoadError } from "@/components/load-error";
 import { logLoadFailure } from "@/lib/load-error";
 import { AREA_PARAM, parseProjectAreaFilter, projectAreaFilterWhere } from "@/lib/project-area-filter";
-import { openIssueConfirmations, parseIssueStageView, type IssueStage } from "@/lib/issue-stage";
+import { openIssueConfirmations, openIssueStages, parseIssueStageView, type IssueStage } from "@/lib/issue-stage";
 import { issueHref } from "@/lib/issue-ref";
 import { PROJECT_ALL_PARAM, showsAllProjects } from "@/lib/issue-list-filters";
 import { ideaVoteTotals, NO_VOTES } from "@/lib/idea-vote-totals";
@@ -161,6 +163,7 @@ type SearchParams = Promise<{
   deleted?: string | string[];
   mine?: string | string[];
   tags?: string | string[];
+  substatus?: string | string[];
   [key: string]: string | string[] | undefined;
 }>;
 
@@ -324,6 +327,10 @@ export async function IssuesList({
   // status filter the All tab shows every issue.
   const showResolved = parseShowResolved(params[SHOW_RESOLVED_PARAM]);
   if (statusWhere !== undefined) where.status = statusWhere;
+  // #preset-chips: ?substatus= narrows a tab to one step within its status
+  // (the Needs my review preset: Done · Requires review).
+  const selectedSubstatus = parseSubstatusFilter(params[SUBSTATUS_PARAM]);
+  if (selectedSubstatus) where.substatus = selectedSubstatus;
   // The Ideas tab lists ideas from their own table: no issue row matches it.
   const ideasView: IdeasView | null =
     isDeletedView
@@ -441,6 +448,7 @@ export async function IssuesList({
     id: _stageIds,
     confirmations: _rejected,
     duplicateOfId: _duplicate,
+    substatus: _selectedSubstatus,
     AND: _notMergeStage,
     ...tabScope
   } = where;
@@ -451,6 +459,7 @@ export async function IssuesList({
   void _stageIds;
   void _rejected;
   void _duplicate;
+  void _selectedSubstatus;
   void _notMergeStage;
   // The platform menu counts each platform's issues whatever tab is picked,
   // so its numbers don't move as you switch tabs; the tabs then split the
@@ -815,7 +824,7 @@ export async function IssuesList({
   const confirmingCount = [...stages.values()].filter((stage) => stage === "confirming").length;
   const readyCount = [...stages.values()].filter((stage) => stage === "ready").length;
 
-  const [statusCounts, rejectedCount, duplicateCount, errorCount, possiblyDeliveredCount] = isDeletedView || !tenantId ? [[], 0, 0, 0, 0] : await Promise.all([
+  const [statusCounts, rejectedCount, duplicateCount, errorCount, possiblyDeliveredCount, myOpenCount, reviewCount, confirmingPresetCount] = isDeletedView || !tenantId ? [[], 0, 0, 0, 0, 0, 0, 0] : await Promise.all([
     loadOrEmpty("status tabs", () => prisma.bug.groupBy({
       by: ["status"], where: statusTabWhere, _count: { _all: true },
     }), []),
@@ -831,10 +840,53 @@ export async function IssuesList({
     loadOrEmpty("possibly delivered list", () => prisma.bug.count({
       where: { AND: [statusTabWhere, POSSIBLY_DELIVERED_WHERE] },
     }), 0),
+    // #preset-chips: each preset's count, in the same scope the tab counts use
+    // (the other filters, whatever status tab is picked).
+    loadOrEmpty("my open preset", () => userId
+      ? prisma.bug.count({
+          where: { ...statusTabWhere, status: "open", ...mineFilterWhere("involved", userId) },
+        })
+      : Promise.resolve(0), 0),
+    loadOrEmpty("needs review preset", () => prisma.bug.count({
+      where: { ...statusTabWhere, status: "done", substatus: "requires_review" },
+    }), 0),
+    // The same count on every tab: open issues still at the confirming
+    // stage, in the tab-independent scope (the other preset counts' scope).
+    loadOrEmpty("awaiting confirmation preset", async () => {
+      const openStages = await openIssueStages(prisma, statusTabWhere);
+      return [...openStages.values()].filter((stage) => stage === "confirming").length;
+    }, 0),
   ]);
   // One status per issue, so the status tabs never overlap and add up to All.
   const countForStatus = (status: string) => statusCounts.find((row) => row.status === status)?._count._all ?? 0;
   const allCount = statusCounts.reduce((sum, row) => sum + row._count._all, 0);
+  // #preset-chips: the one-click personal views above the list. Each preset's
+  // link resets paging, the intake stage, the substatus and the mine filter,
+  // then applies the preset's own params; a selected preset links back to the
+  // plain All list, so a second click clears it.
+  const presetCounts: Record<IssuePreset["id"], number> = {
+    "my-open": myOpenCount,
+    "needs-review": reviewCount,
+    "awaiting-confirmation": confirmingPresetCount,
+  };
+  const presetHref = (preset: IssuePreset, selected: boolean): string => {
+    const next = new URLSearchParams(currentQuery);
+    next.delete("page");
+    next.delete("stage");
+    next.delete(SUBSTATUS_PARAM);
+    next.delete("mine");
+    next.delete(MY_WORK_PARAM);
+    if (selected) {
+      next.set("status", ALL_STATUS);
+      return listHref(next);
+    }
+    for (const [key, value] of Object.entries(preset.params)) next.set(key, value);
+    return listHref(next);
+  };
+  const presetSelected = (preset: IssuePreset): boolean => {
+    const current = new URLSearchParams(currentQuery);
+    return Object.entries(preset.params).every(([key, value]) => current.get(key) === value);
+  };
   const allFilterCount = (value: string) =>
     value === ALL_STATUS ? allCount : value === REJECTED_STATUS ? rejectedCount : value === DUPLICATE_STATUS ? duplicateCount : countForStatus(value);
   // The All tab stays selected on its own filters (Closed, Rejected, Duplicates).
@@ -949,6 +1001,22 @@ export async function IssuesList({
 
         {/* #project-links: the site/code panel renders here (from ProjectLinks in the top right) while it is open. */}
         <div id={PROJECT_LINKS_SLOT_ID} className="empty:hidden" />
+
+        {/* #preset-chips: the personal views, above the list and whatever it shows. */}
+        {!isIdeasView && !isDeletedView && !isFirstRun ? (
+          <IssuePresetChips
+            chips={ISSUE_PRESETS.map((preset) => {
+              const selected = presetSelected(preset);
+              return {
+                label: preset.label,
+                description: preset.description,
+                selected,
+                count: presetCounts[preset.id],
+                href: presetHref(preset, selected),
+              };
+            })}
+          />
+        ) : null}
 
         {milestoneSummary ? (
           <section aria-label={`Milestone ${milestoneSummary.title}`} className="rounded-[20px] border border-zk-border bg-zk-surface p-5">
@@ -1211,6 +1279,7 @@ export async function IssuesList({
                 platform: selectedPlatform,
                 area: selectedArea,
                 stage: stageView,
+                substatus: selectedSubstatus,
                 deleted: isDeletedView,
                 showDuplicates,
                 showResolved,

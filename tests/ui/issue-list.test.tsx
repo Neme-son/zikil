@@ -240,4 +240,39 @@ describe("issue list layout", () => {
     expect(counted(statusList(html))).toEqual({ Open: 13, "In progress": 2, Closed: 3, "Possibly delivered": 1 });
   });
 
+  it("offers one-click preset chips above the list (#preset-chips)", async () => {
+    const html = await renderList({ status: "all" });
+    expect(html).toContain('aria-label="Preset views"');
+    expect(html).toContain('href="/acme/issues/open?mine=involved"');
+    expect(html).toContain('href="/acme/issues/done?substatus=requires_review"');
+    expect(html).toContain('href="/acme/issues/all?stage=confirming"');
+    expect(html).toContain("My open");
+    expect(html).toContain("Needs my review");
+    expect(html).toContain("Awaiting confirmation");
+  });
+
+  it("marks the active preset selected and links it back to All, so a second click clears it (#preset-chips)", async () => {
+    const html = await renderList({ status: "open", mine: "involved" });
+    expect(html).toMatch(/<a aria-current="true"[^>]*href="\/acme\/issues\/all"/);
+    // The other presets stay plain links to their own views.
+    expect(html).toContain('href="/acme/issues/done?substatus=requires_review"');
+  });
+
+  it("narrows a tab to one substatus with the needs-review preset (#preset-chips)", async () => {
+    await renderList({ status: "done", substatus: "requires_review" });
+    const where = findMany.mock.calls.at(-1)![0].where;
+    expect(where.status).toBe("done");
+    expect(where.substatus).toBe("requires_review");
+  });
+
+  it("hides the preset chips on the Ideas tab and a brand-new tracker (#preset-chips)", async () => {
+    const ideasHtml = await renderList();
+    expect(ideasHtml).not.toContain("Preset views");
+    count.mockResolvedValue(0);
+    findMany.mockResolvedValue([]);
+    const firstRunHtml = await renderList({ status: "all" });
+    expect(firstRunHtml).not.toContain("Preset views");
+    expect(firstRunHtml).toMatch(/no issues yet/i);
+  });
+
 });
