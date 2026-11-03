@@ -38,6 +38,35 @@ async function expectNoSidewaysScroll(page: Page) {
 test.describe("no sideways scroll", () => {
   test.use({ as: "user" });
 
+  for (const width of WIDTHS) {
+    test(`the issue list and an issue page at ${width}px`, async ({ page, uniq }) => {
+      await page.setViewportSize({ width, height: 900 });
+      await page.goto(`${PROJECT}/issues/open`);
+      await expectNoSidewaysScroll(page);
+
+      await fileIssue(page, uniq("Layout target"));
+      await expectNoSidewaysScroll(page);
+
+      await page.goto("/inbox?tab=escalations");
+      await expectNoSidewaysScroll(page);
+    });
+  }
+
+  test("the top bar navigation stays on the page at phone and desktop widths", async ({ page }) => {
+    await page.setViewportSize({ width: 768, height: 900 });
+    await page.goto(`${PROJECT}/issues/open`);
+    await expect(page.getByRole("navigation", { name: "Workspace" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Open menu" })).toHaveCount(0);
+
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await expect(page.getByRole("navigation", { name: "Workspace" })).toBeVisible();
+  });
+});
+
+test.describe("expanded issue code containment", () => {
+  // Keep this report creation off the user account used by parallel report tests.
+  test.use({ as: "admin" });
+
   test("expanded code stays inside the issue description on desktop and mobile", async ({ page, uniq }) => {
     const title = uniq("Expanded fenced code stays in its card");
     const longCodeLine = `const value = "${"x".repeat(1800)}";`;
@@ -76,29 +105,5 @@ test.describe("no sideways scroll", () => {
       expect(bounds.codeScrollWidth, `code line did not scroll inside its block at ${width}px`).toBeGreaterThan(bounds.codeClientWidth);
       await expectNoSidewaysScroll(page);
     }
-  });
-
-  for (const width of WIDTHS) {
-    test(`the issue list and an issue page at ${width}px`, async ({ page, uniq }) => {
-      await page.setViewportSize({ width, height: 900 });
-      await page.goto(`${PROJECT}/issues/open`);
-      await expectNoSidewaysScroll(page);
-
-      await fileIssue(page, uniq("Layout target"));
-      await expectNoSidewaysScroll(page);
-
-      await page.goto("/inbox?tab=escalations");
-      await expectNoSidewaysScroll(page);
-    });
-  }
-
-  test("the top bar navigation stays on the page at phone and desktop widths", async ({ page }) => {
-    await page.setViewportSize({ width: 768, height: 900 });
-    await page.goto(`${PROJECT}/issues/open`);
-    await expect(page.getByRole("navigation", { name: "Workspace" })).toBeVisible();
-    await expect(page.getByRole("button", { name: "Open menu" })).toHaveCount(0);
-
-    await page.setViewportSize({ width: 1280, height: 900 });
-    await expect(page.getByRole("navigation", { name: "Workspace" })).toBeVisible();
   });
 });
