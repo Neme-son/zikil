@@ -38,6 +38,46 @@ async function expectNoSidewaysScroll(page: Page) {
 test.describe("no sideways scroll", () => {
   test.use({ as: "user" });
 
+  test("expanded code stays inside the issue description on desktop and mobile", async ({ page, uniq }) => {
+    const title = uniq("Expanded fenced code stays in its card");
+    const longCodeLine = `const value = "${"x".repeat(1800)}";`;
+    const description = [
+      "This issue tests a long fenced line after the description expands.",
+      "The description starts with enough text to show the expansion control.",
+      "The code must remain in the description card beside the issue side rail.",
+      "Long code lines should scroll inside the code block.",
+      "This text keeps the code below the collapsed preview.",
+      "The next section contains the long line.",
+      "```ts",
+      longCodeLine,
+      "```",
+    ].join("\n");
+    await fileIssue(page, title, description);
+
+    const descriptionCard = page.getByRole("region", { name: "Description" });
+    await descriptionCard.getByRole("button", { name: "View more" }).click();
+    const codeBlock = descriptionCard.getByRole("group", { name: "Code block" });
+
+    for (const width of [1280, 375]) {
+      await page.setViewportSize({ width, height: 900 });
+      await expect(codeBlock).toBeVisible();
+      const bounds = await page.evaluate(() => {
+        const card = document.querySelector<HTMLElement>('[aria-label="Description"]');
+        const code = card?.querySelector<HTMLElement>("pre[aria-label='Code block']");
+        if (!card || !code) throw new Error("Expanded description code block was not found");
+        return {
+          cardRight: card.getBoundingClientRect().right,
+          codeRight: code.getBoundingClientRect().right,
+          codeClientWidth: code.clientWidth,
+          codeScrollWidth: code.scrollWidth,
+        };
+      });
+      expect(bounds.codeRight, `code block escaped the card at ${width}px`).toBeLessThanOrEqual(bounds.cardRight + 1);
+      expect(bounds.codeScrollWidth, `code line did not scroll inside its block at ${width}px`).toBeGreaterThan(bounds.codeClientWidth);
+      await expectNoSidewaysScroll(page);
+    }
+  });
+
   for (const width of WIDTHS) {
     test(`the issue list and an issue page at ${width}px`, async ({ page, uniq }) => {
       await page.setViewportSize({ width, height: 900 });

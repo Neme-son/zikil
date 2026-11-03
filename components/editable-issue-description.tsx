@@ -86,7 +86,7 @@ export function EditableIssueDescription({
   const mentionUsers = users.map((u) => ({ id: u.id, name: u.name }));
 
   return (
-    <section className="flex flex-col gap-1.5 rounded-[20px] border border-zk-border bg-zk-surface p-5 sm:p-6" aria-label="Description">
+    <section className="flex min-w-0 max-w-full flex-col gap-1.5 rounded-[20px] border border-zk-border bg-zk-surface p-5 sm:p-6" aria-label="Description">
       <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
         <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
           <h2 className="text-xs font-bold uppercase tracking-[0.08em] text-zk-muted">
@@ -196,9 +196,9 @@ export function EditableIssueDescription({
         </form>
       ) : summary ? (
         // One card: the summary, and the full description opened beneath it.
-        <div>
+        <div className="min-w-0 max-w-full">
           <div className="flex items-start justify-between gap-3">
-            <RichText className="mt-0! max-w-3xl text-[15px] font-medium leading-relaxed text-zk-text" content={summary} />
+            <RichText className="mt-0! min-w-0 max-w-full text-[15px] font-medium leading-relaxed text-zk-text" content={summary} />
             {tags ? <div className="flex shrink-0 flex-wrap justify-end gap-1.5 pt-0.5">{tags}</div> : null}
           </div>
           <button
@@ -214,7 +214,7 @@ export function EditableIssueDescription({
             </svg>
           </button>
           {showFull ? (
-            <div id={`${bugId}-full-description`} className="mt-3 border-t border-zk-divider pt-3 text-[15px] leading-relaxed text-zk-text2">
+            <div id={`${bugId}-full-description`} className="mt-3 min-w-0 max-w-full border-t border-zk-divider pt-3 text-[15px] leading-relaxed text-zk-text2">
               {/* Section headings at the text's own size, so the description doesn't read larger than the summary. */}
               <RichText
                 className="mt-0! [&_h1]:!text-[15px] [&_h2]:!text-[15px] [&_h3]:!text-[15px] [&_h1]:!font-bold [&_h2]:!font-bold [&_h3]:!font-bold"
@@ -225,8 +225,8 @@ export function EditableIssueDescription({
           ) : null}
         </div>
       ) : (
-        <div className="flex items-start justify-between gap-3">
-        <div className="max-w-3xl text-[15px] leading-relaxed text-zk-text2">
+        <div className="flex min-w-0 max-w-full items-start justify-between gap-3">
+        <div className="min-w-0 max-w-full text-[15px] leading-relaxed text-zk-text2">
           <ExpandableText maxLines={6} expandText="View more" collapseText="View less">
             <RichText
               className="mt-0!"

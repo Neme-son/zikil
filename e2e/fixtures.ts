@@ -46,8 +46,8 @@ export async function reportIssue(page: Page, title: string, description = "Step
  * manager agent would once its verdicts reach the threshold (#idea-table),
  * then opens the issue. Returns the issue's URL.
  */
-export async function fileIssue(page: Page, title: string) {
-  const ideaUrl = await reportIssue(page, title);
+export async function fileIssue(page: Page, title: string, description?: string) {
+  const ideaUrl = await reportIssue(page, title, description);
   const ideaNumber = Number(new URL(ideaUrl).pathname.split("/").pop());
   const prisma = e2eDb();
   let issueNumber: number;
