@@ -4,6 +4,7 @@
  * "No agents yet" line.
  */
 import Link from "next/link";
+import { EmptyStateRobot } from "@/components/whimsical-empty-state";
 
 const STEPS: { title: string; body: string }[] = [
   {
@@ -31,21 +32,9 @@ export function FirstAgentEmptyState() {
       aria-labelledby="first-agent-heading"
       className="rounded-[20px] border border-zk-border bg-zk-surface p-5 sm:p-8"
     >
-      <div className="flex items-start gap-3">
-        <span
-          aria-hidden="true"
-          className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-zk-tint text-zk-accent"
-        >
-          <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M5.6 18.4l2.1-2.1M16.3 7.7l2.1-2.1"
-            />
-            <circle cx="12" cy="12" r="3.5" />
-          </svg>
-        </span>
-        <div>
+      <div className="flex flex-col items-center gap-4 text-center sm:flex-row sm:items-start sm:gap-5 sm:text-left">
+        <EmptyStateRobot variant="spark" />
+        <div className="sm:pt-4">
           <h3 id="first-agent-heading" className="text-lg font-extrabold text-zk-text sm:text-xl">
             Connect your first agent
           </h3>

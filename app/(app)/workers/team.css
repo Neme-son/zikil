@@ -27,11 +27,3 @@
 .team-work-list { display: flex; flex-direction: column; gap: 12px; }
 .team-work-list a { color: var(--zk-accent); text-decoration: underline; text-underline-offset: 3px; }
 .team-work-list li > span { display: block; margin-top: 2px; color: var(--zk-muted); font-size: 12px; }
-.team-empty { padding: 48px 24px; border: 1px solid var(--zk-border); border-radius: 24px; background: var(--zk-surface); text-align: center; }
-.team-empty h2 { font-size: 20px; line-height: 28px; font-weight: 700; color: var(--zk-text); }
-.team-empty p { margin: 12px auto 24px; max-width: 480px; color: var(--zk-text2); line-height: 24px; }
-.team-primary { display: inline-flex; align-items: center; justify-content: center; min-height: 44px; padding: 12px 20px; border-radius: 999px; background: var(--color-electric-blue-strong); color: white; font-size: 14px; font-weight: 700; }
-.team-primary:hover { filter: brightness(1.05); }
-@media (max-width: 639px) {
-  .team-empty { padding: 32px 20px; }
-}

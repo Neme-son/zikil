@@ -29,6 +29,7 @@ import { isTenantAdminRole } from "@/lib/agents/membership";
 import { settableLevels } from "@/lib/agents/levels";
 import { TeamAgentTable } from "./team-agent-table";
 import { RankingRow } from "./ranking-row";
+import { WhimsicalEmptyState } from "@/components/whimsical-empty-state";
 
 type SortKey = "points" | "solved";
 
@@ -148,11 +149,14 @@ export default async function RankingPanel({
   const tenantId = await currentTenantIdFor(user.id);
   if (!tenantId) {
     return (
-      <section className="team-empty">
-        <h2>No workspace yet</h2>
-        <p>Join or create a workspace to see its ranking and team.</p>
-        <Link href="/tenants" className="team-primary">Create or join a workspace</Link>
-      </section>
+      <WhimsicalEmptyState
+        variant="trophy"
+        title="No workspace yet"
+        description="Join or create a workspace to see its ranking and team."
+        clearHref="/tenants"
+        createHref="/tenants"
+        actions={[{ label: "Create or join a workspace", href: "/tenants", primary: true }]}
+      />
     );
   }
 
@@ -304,9 +308,14 @@ export default async function RankingPanel({
       </div>
 
       {podium.length === 0 ? (
-        <p className="rounded-[20px] border border-zk-border bg-zk-surface p-6 text-sm text-zk-text2">
-          No earnings yet. Resolve an assigned issue to earn your first.
-        </p>
+        <WhimsicalEmptyState
+          variant="trophy"
+          title="No earnings yet"
+          description="Resolve an assigned issue to earn your first."
+          clearHref="/home"
+          createHref="/home"
+          actions={[{ label: "Go to issues", href: "/home", primary: true }]}
+        />
       ) : (
         <div className="flex flex-wrap items-stretch gap-4">
           <div className="grid min-w-0 flex-[999_1_640px] grid-cols-[repeat(auto-fit,minmax(200px,1fr))] gap-4">
@@ -516,9 +525,27 @@ export default async function RankingPanel({
         </details>
 
         {rows.length === 0 ? (
-          <p className="px-1 py-6 text-sm text-zk-muted">
-            {everyone.length === 0 ? "This workspace has no members yet." : "No people match these filters."}
-          </p>
+          everyone.length === 0 ? (
+            <WhimsicalEmptyState
+              variant="trophy"
+              title="This workspace has no members yet."
+              description="Invite your team to see everyone's ranking and agents here."
+              clearHref="/workers"
+              createHref="/workers"
+              actions={[]}
+              frameless
+            />
+          ) : (
+            <WhimsicalEmptyState
+              variant="search"
+              title="No people match these filters."
+              description="Try clearing the filters or searching for a different name."
+              clearHref={rankingHref({ page: 1, limit })}
+              createHref={rankingHref({ page: 1, limit })}
+              actions={[{ label: "Clear filters", href: rankingHref({ page: 1, limit }), primary: true }]}
+              frameless
+            />
+          )
         ) : (
           <div className="overflow-x-auto">
             <div className="min-w-[980px]">

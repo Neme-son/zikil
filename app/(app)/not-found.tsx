@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { StatusPage, primaryActionClass } from "@/components/status-page";
+import { EmptyStateRobot } from "@/components/whimsical-empty-state";
 
 /**
  * Shown when a signed-in page calls notFound() and its segment has no
@@ -12,6 +13,7 @@ export default function AppNotFound() {
     <StatusPage
       code="404"
       title="We couldn't find that page"
+      illustration={<EmptyStateRobot variant="compass" />}
       actions={
         <Link href="/home" className={primaryActionClass}>
           Go to issues

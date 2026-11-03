@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { StatusPage, primaryActionClass } from "@/components/status-page";
+import { EmptyStateRobot } from "@/components/whimsical-empty-state";
 
 /**
  * The same page whether the project doesn't exist or the viewer can't manage
@@ -10,6 +11,7 @@ export default function ProjectNotFound() {
     <StatusPage
       code="404"
       title="We couldn't find that project"
+      illustration={<EmptyStateRobot variant="compass" />}
       actions={
         <Link href="/home" className={primaryActionClass}>
           Your issues

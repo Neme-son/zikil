@@ -6,6 +6,7 @@ import {
   primaryActionClass,
   secondaryActionClass,
 } from "@/components/status-page";
+import { EmptyStateRobot } from "@/components/whimsical-empty-state";
 
 /**
  * Shown when an issue page calls notFound(), e.g. an issue id that doesn't
@@ -22,6 +23,7 @@ export default async function IssueNotFound() {
     <StatusPage
       code="404"
       title="We couldn't find that issue"
+      illustration={<EmptyStateRobot variant="compass" />}
       actions={
         <>
           <Link href="/home" className={primaryActionClass}>

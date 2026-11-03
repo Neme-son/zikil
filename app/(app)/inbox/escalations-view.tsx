@@ -6,6 +6,7 @@ import { listOwnerQuestions, parseEscalationBody } from "@/lib/agent-questions";
 import { issueHref } from "@/lib/issue-ref";
 import { LocalTime } from "@/components/local-time";
 import { EscalationTypeBadge, QuickResolveButtons } from "./escalation-controls";
+import { WhimsicalEmptyState } from "@/components/whimsical-empty-state";
 
 const VIEWS = [
   { value: "waiting", label: "Waiting" },
@@ -167,10 +168,14 @@ export async function EscalationsView({
           ))}
         </ul>
       ) : (
-        <div className="rounded-[20px] border border-zk-border bg-zk-surface px-4 py-12 text-center">
-          <p className="font-bold text-zk-text">{view === "waiting" ? "Nothing is waiting on you." : "No escalations here."}</p>
-          <p className="mt-1.5 text-sm text-zk-muted">Agents stop here when they need a person: to answer a question or decide on a redesign.</p>
-        </div>
+        <WhimsicalEmptyState
+          variant="inbox"
+          title={view === "waiting" ? "Nothing is waiting on you." : "No escalations here."}
+          description="Agents stop here when they need a person: to answer a question or decide on a redesign."
+          clearHref="/inbox?tab=escalations"
+          createHref="/inbox?tab=escalations"
+          actions={[]}
+        />
       )}
     </div>
   );

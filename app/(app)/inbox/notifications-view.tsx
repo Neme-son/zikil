@@ -7,6 +7,7 @@ import { MarkAllReadButton } from "@/components/mark-all-read-button";
 import { PaginationControls } from "@/components/pagination-controls";
 import { calculatePagination } from "@/lib/pagination";
 import { BASE_PATH } from "@/lib/base-path";
+import { WhimsicalEmptyState } from "@/components/whimsical-empty-state";
 
 const PAGE_SIZE = 50;
 
@@ -74,16 +75,14 @@ export async function NotificationsView({
       ) : null}
 
       {notifications.length === 0 ? (
-        <div className="rounded-[20px] border border-dashed border-zk-border bg-zk-surface p-6 text-sm text-zk-muted">
-          <p className="font-semibold text-zk-text">No notifications yet</p>
-          <p className="mt-1">
-            New comments, mentions, assignments and status changes on issues
-            you&apos;re watching will show up here.
-          </p>
-          <Link href="/home" className="mt-3 inline-flex text-sm font-semibold text-zk-accent hover:underline">
-            Go to issues
-          </Link>
-        </div>
+        <WhimsicalEmptyState
+          variant="inbox"
+          title="No notifications yet"
+          description="New comments, mentions, assignments and status changes on issues you're watching will show up here."
+          clearHref="/home"
+          createHref="/home"
+          actions={[{ label: "Go to issues", href: "/home", primary: true }]}
+        />
       ) : (
         <ul className="divide-y divide-zk-divider overflow-hidden rounded-[20px] border border-zk-border bg-zk-surface">
           {notifications.map((n) => {

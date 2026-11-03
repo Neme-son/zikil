@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { StatusPage, primaryActionClass } from "@/components/status-page";
+import { EmptyStateRobot } from "@/components/whimsical-empty-state";
 
 /**
  * The same page whether the person doesn't exist or shares no workspace with
@@ -10,6 +11,7 @@ export default function PersonNotFound() {
     <StatusPage
       code="404"
       title="We couldn't find that person"
+      illustration={<EmptyStateRobot variant="compass" />}
       actions={
         <Link href="/workers" className={primaryActionClass}>
           Go to ranking
