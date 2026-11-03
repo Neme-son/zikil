@@ -6,13 +6,17 @@ import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { labelInNameMismatches } from "@/lib/a11y/label-in-name";
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { EntryReplyForm } from "@/components/entry-reply-form";
 import { CreateBugForm } from "@/components/create-issue-form";
 import { UserSearch } from "@/components/user-search";
 import { VoteButton } from "@/components/vote-button";
 import { WebhookManagement } from "@/components/webhook-management";
+import { CommandPalette } from "@/components/command-palette";
+import { KeyboardShortcuts } from "@/components/keyboard-shortcuts";
 import { createWebhookAction, listWebhooksAction } from "@/app/actions/webhooks";
+
+const { mockPush } = vi.hoisted(() => ({ mockPush: vi.fn() }));
 
 vi.mock("@/app/actions/issues", () => ({
   addCommentAction: vi.fn(),
@@ -35,10 +39,15 @@ vi.mock("@/app/actions/webhooks", () => ({
   reEnableWebhookAction: vi.fn(),
 }));
 
+vi.mock("@/app/actions/settings", () => ({
+  setThemeAction: vi.fn(),
+}));
+
 vi.mock("next/navigation", () => ({
-  useRouter: () => ({ push: vi.fn() }),
+  useRouter: () => ({ push: mockPush }),
   useSearchParams: () => new URLSearchParams(),
   useParams: () => ({ project: "acme" }),
+  usePathname: () => "/acme/issues/all",
 }));
 
 beforeAll(() => {
@@ -214,4 +223,67 @@ describe("component accessibility (axe)", () => {
     }
   });
 
+});
+
+describe("command palette (Ctrl+K)", () => {
+  function renderShell(enabled = true) {
+    return render(
+      <>
+        <CommandPalette slug="acme" />
+        <KeyboardShortcuts enabled={enabled} />
+      </>,
+    );
+  }
+
+  function openPalette() {
+    fireEvent.keyDown(document, { key: "k", ctrlKey: true, code: "KeyK" });
+  }
+
+  beforeEach(() => {
+    mockPush.mockClear();
+  });
+
+  it("opens on Ctrl+K, focuses the input, has no violations, and closes on Escape", async () => {
+    renderShell();
+    openPalette();
+
+    const dialog = await screen.findByRole("dialog", { name: "Command palette" });
+    const input = screen.getByRole("textbox", { name: "Search commands" });
+    expect(input).toHaveFocus();
+    await expectNoA11yViolations(dialog);
+
+    fireEvent.keyDown(dialog, { key: "Escape" });
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "Command palette" })).not.toBeInTheDocument(),
+    );
+  });
+
+  it("does not open when the shortcut setting is off", () => {
+    renderShell(false);
+    openPalette();
+    expect(screen.queryByRole("dialog", { name: "Command palette" })).not.toBeInTheDocument();
+  });
+
+  it("Enter on the search command goes to the issue list with the query", async () => {
+    renderShell();
+    openPalette();
+
+    const input = await screen.findByRole("textbox", { name: "Search commands" });
+    fireEvent.change(input, { target: { value: "crash" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    await waitFor(() => expect(mockPush).toHaveBeenCalledWith("/acme/issues/all?q=crash"));
+  });
+
+  it("arrow keys move through matches and Enter opens the highlighted page", async () => {
+    renderShell();
+    openPalette();
+
+    const input = await screen.findByRole("textbox", { name: "Search commands" });
+    fireEvent.change(input, { target: { value: "settings" } });
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    await waitFor(() => expect(mockPush).toHaveBeenCalledWith("/settings"));
+  });
 });

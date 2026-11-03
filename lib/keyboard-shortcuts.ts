@@ -16,7 +16,8 @@ export type ShortcutAction =
   | "new-issue"
   | "go-issues"
   | "go-notifications"
-  | "show-help";
+  | "show-help"
+  | "open-palette";
 
 export type ShortcutSpec = {
   keys: string[];
@@ -29,8 +30,8 @@ export type ShortcutSpec = {
 /** What the cheat sheet lists, in order. */
 export function shortcutGroups(): { title: string; items: ShortcutSpec[] }[] {
   const anywhere: ShortcutSpec[] = [
+    { keys: ["Ctrl/Cmd+K"], label: "Open the command palette", action: "open-palette" },
     { keys: ["n", "c"], label: "Report a new issue", action: "new-issue", joiner: "or" },
-    { keys: ["Ctrl/Cmd+K"], label: "Search", action: "focus-search" },
     { keys: ["g", "i"], label: "Go to issues", action: "go-issues" },
   ];
   anywhere.push(
@@ -114,7 +115,7 @@ export function shortcutFor(
   if (event.ctrlKey || event.metaKey) {
     // `code` covers layouts where K isn't the letter produced (e.g. Cyrillic).
     if (event.key.toLowerCase() === "k" || event.code === "KeyK") {
-      return { action: "focus-search", state: IDLE };
+      return { action: "open-palette", state: IDLE };
     }
     return { action: null, state: IDLE };
   }
@@ -152,3 +153,6 @@ export function stepRow(current: number, count: number, direction: 1 | -1): numb
 
 /** Window event that opens the cheat sheet from anywhere (e.g. Settings). */
 export const SHOW_SHORTCUTS_EVENT = "zedu:show-shortcuts";
+
+/** Window event the command palette listens for; dispatched when Ctrl/Cmd+K is pressed. */
+export const OPEN_PALETTE_EVENT = "zedu:open-palette";

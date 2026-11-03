@@ -7,6 +7,7 @@ import { newIssueHref } from "@/lib/reported-from";
 import { issuesPath } from "@/lib/project-paths";
 import {
   IDLE,
+  OPEN_PALETTE_EVENT,
   SHOW_SHORTCUTS_EVENT,
   shortcutFor,
   shortcutGroups,
@@ -118,6 +119,10 @@ export function KeyboardShortcuts({ enabled }: { enabled: boolean }) {
         case "show-help":
           event.preventDefault();
           setHelpOpen(true);
+          break;
+        case "open-palette":
+          event.preventDefault();
+          window.dispatchEvent(new Event(OPEN_PALETTE_EVENT));
           break;
       }
     };

@@ -198,15 +198,15 @@ export function IssueFilters({
     if (!shortcutsEnabled) return;
 
     function handleKeyDown(event: KeyboardEvent) {
-      const isCmdOrCtrlK =
-        (event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k";
+      // Ctrl/Cmd+K now opens the command palette (see components/keyboard-shortcuts.tsx);
+      // this listener only owns "/", which focuses this search box.
       const isSlash =
         event.key === "/" &&
         !event.metaKey &&
         !event.ctrlKey &&
         !event.altKey;
 
-      if (!isCmdOrCtrlK && !isSlash) return;
+      if (!isSlash) return;
       if (event.isComposing) return;
 
       const target = event.target as HTMLElement | null;
@@ -225,9 +225,8 @@ export function IssueFilters({
         Boolean(target?.closest?.('dialog[open], [role="dialog"], [role="alertdialog"], [data-shortcuts-ignore]')) ||
         Boolean(document.querySelector('dialog[open], [role="dialog"], [role="alertdialog"]'));
 
-      if (isSlash && isEditable) return;
+      if (isEditable) return;
       if (inDialog) return;
-      if (isCmdOrCtrlK && isEditable) return;
 
       event.preventDefault();
       const focusSearch = () => {

@@ -9,6 +9,7 @@ import { MAIN_CONTENT_ID, SkipLink } from "@/components/skip-link";
 import { PAGE_CONTAINER_CLASS } from "@/components/page-container";
 import { FocusMainOnNavigate } from "@/components/focus-main-on-navigate";
 import { KeyboardShortcuts } from "@/components/keyboard-shortcuts";
+import { CommandPalette } from "@/components/command-palette";
 import { isOrganizationAdmin, type OrganizationRole } from "@/lib/organization-role";
 import type { WorkspaceChoice } from "@/components/workspace-switcher";
 import { prisma } from "@/lib/prisma";
@@ -153,6 +154,7 @@ export default async function AppLayout({
       <KeyboardShortcuts
         enabled={shortcutsEnabled}
       />
+      <CommandPalette slug={defaultProjectSlug} />
     </div>
   );
 }
