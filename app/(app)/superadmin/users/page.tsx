@@ -72,7 +72,7 @@ export default async function AdminUsersPage({
         </div>
         <div className="w-full sm:w-auto">
           <Suspense
-            fallback={<div className="h-9 w-full animate-pulse rounded-lg bg-slate-100 sm:w-64" />}
+            fallback={<div className="h-9 w-full animate-pulse rounded-lg bg-zk-chip sm:w-64" />}
           >
             <UserSearch />
           </Suspense>

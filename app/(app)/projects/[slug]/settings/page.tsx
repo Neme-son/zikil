@@ -66,7 +66,7 @@ export default async function ProjectSettingsPage({
           <div className="mt-3">
             <a
               href={`/projects/${encodeURIComponent(project.slug)}/settings/github`}
-              className="inline-flex items-center justify-center rounded-full bg-teal-700 px-3.5 py-2 text-sm font-medium text-white transition hover:bg-teal-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-600 focus-visible:ring-offset-2"
+              className="inline-flex items-center justify-center rounded-full bg-electric-blue-strong px-3.5 py-2 text-sm font-semibold text-white transition hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-electric-blue focus-visible:ring-offset-2"
             >
               {project.githubInstallationId ? "Change installation" : "Connect GitHub App"}
             </a>

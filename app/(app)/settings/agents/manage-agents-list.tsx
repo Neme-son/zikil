@@ -140,7 +140,7 @@ export function ManageAgentsList({
                     {!agent.revokedAt ? (
                       <span
                         className={`absolute bottom-0 right-0 h-3.5 w-3.5 rounded-full border-2 border-zk-surface ${
-                          agent.recent ? "bg-emerald-500" : "bg-slate-400"
+                          agent.recent ? "bg-zk-ok-fg" : "bg-zk-muted"
                         }`}
                         aria-hidden
                       />

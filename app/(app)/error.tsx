@@ -46,8 +46,8 @@ export default function AppError({
           "Something went wrong on our side while loading this page. Trying again usually works. If it keeps happening, report it with the reference below."}
       </p>
       {error.digest ? (
-        <p className="text-xs text-slate-500">
-          Reference: <code className="rounded bg-slate-100 px-1 py-0.5">{error.digest}</code>
+        <p className="text-xs text-zk-muted">
+          Reference: <code className="rounded bg-zk-chip px-1 py-0.5">{error.digest}</code>
         </p>
       ) : null}
     </StatusPage>

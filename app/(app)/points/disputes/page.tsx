@@ -111,7 +111,7 @@ export default async function PointsDisputesPage() {
         </div>
         <Link
           href="/points/disputes/new"
-          className="inline-flex items-center justify-center rounded-full px-3 py-1.5 text-xs font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 bg-teal-700 text-white hover:bg-teal-800 focus-visible:ring-teal-600"
+          className="inline-flex items-center justify-center rounded-full px-3.5 py-1.5 text-sm font-semibold text-white transition bg-electric-blue-strong hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-electric-blue focus-visible:ring-offset-2"
         >
           Open a dispute
         </Link>
@@ -192,7 +192,7 @@ export default async function PointsDisputesPage() {
                 ) : (
                   <Link
                     href={`/points/disputes/new?entry=${entry.id}${entry.bugNumber !== null ? `&bug=${entry.bugNumber}` : ""}`}
-                    className="inline-flex items-center justify-center rounded-full px-3 py-1.5 text-xs font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 bg-card text-slate-800 border border-slate-300 hover:bg-slate-50 focus-visible:ring-slate-400"
+                    className="inline-flex items-center justify-center rounded-full border border-zk-border bg-zk-surface px-3 py-1.5 text-xs font-medium text-zk-text2 transition hover:bg-zk-chip hover:text-zk-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-electric-blue focus-visible:ring-offset-2"
                     aria-label={`Dispute entry for ${entry.bugNumber !== null ? `issue #${entry.bugNumber}` : "unlinked entry"} (${entry.points > 0 ? "+" : ""}${formatZ(entry.points)}, ${entry.role})`}
                   >
                     Dispute

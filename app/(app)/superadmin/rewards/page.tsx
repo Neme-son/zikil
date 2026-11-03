@@ -18,12 +18,12 @@ export default async function AdminRewardsPage() {
     <div className="mx-auto max-w-3xl space-y-6">
       <div>
         <p className="text-sm">
-          <Link href="/superadmin/users" className="font-medium text-teal-700 hover:underline">
+          <Link href="/superadmin/users" className="font-medium text-zk-accent hover:underline">
             ← Site admin
           </Link>
         </p>
-        <h1 className="mt-2 text-xl font-semibold text-slate-900 sm:text-2xl">Platform rewards</h1>
-        <p className="mt-1 max-w-2xl text-sm text-slate-600">
+        <h1 className="mt-2 text-xl font-extrabold tracking-tight text-zk-text sm:text-2xl">Platform rewards</h1>
+        <p className="mt-1 max-w-2xl text-sm text-zk-text2">
           Change the site-wide ledger amounts. When a value is missing from the database, the
           hard-coded default is used so awards keep working. Individual projects may still set
           their own solver, reporter, and merge-reviewer amounts.

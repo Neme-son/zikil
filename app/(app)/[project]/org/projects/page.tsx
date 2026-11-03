@@ -239,7 +239,7 @@ export default async function OrgProjectsPage({
                   {active ? null : (
                     <Link
                       href={ideasPath(project.slug)}
-                      className="inline-flex items-center justify-center rounded-full border border-slate-300 bg-card px-3.5 py-2 text-sm font-medium text-slate-800 transition hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400 focus-visible:ring-offset-2"
+                      className="inline-flex items-center justify-center rounded-full border border-zk-border bg-zk-surface px-3.5 py-2 text-sm font-medium text-zk-text transition hover:bg-zk-chip focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-electric-blue focus-visible:ring-offset-2"
                     >
                       Switch to {project.name}
                     </Link>
