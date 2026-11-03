@@ -162,12 +162,12 @@ export function IssueConfirmationsPanel({
             >
               <span
                 data-testid="confirmation-verdict"
-                className={`flex w-[72px] shrink-0 items-center justify-center rounded-lg px-2 py-1.5 text-xs font-bold ${verdictChipClass[entry.verdict]}`}
+                className={`flex w-[72px] shrink-0 items-center justify-center rounded-lg px-2 py-1.5 text-xs font-bold max-sm:w-14 max-sm:px-1 ${verdictChipClass[entry.verdict]}`}
               >
                 {confirmationVerdictLabels[entry.verdict]}
               </span>
               <div className="min-w-0 flex-1">
-              <p className="m-0 flex flex-wrap items-center gap-x-2 gap-y-1 pr-8 text-[13px]">
+              <p className="m-0 flex flex-wrap items-center gap-x-2 gap-y-1 pr-8 text-[13px] max-sm:pr-1">
                 <b className="font-semibold text-zk-text">{entry.by}</b>
                 {entry.agentName ? <span className="text-zk-muted">via {entry.agentName}</span> : null}
                 {entry.agentName && entry.agentReputation != null ? (

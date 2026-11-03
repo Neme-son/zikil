@@ -34,4 +34,9 @@
 .team-primary:hover { filter: brightness(1.05); }
 @media (max-width: 639px) {
   .team-empty { padding: 32px 20px; }
+  /* The five agent columns don't fit a phone: the table scrolls in place. */
+  .team-agent-panel { padding: 16px 12px; }
+  .team-agent-scroll { overflow-x: auto; }
+  .team-agent-table { min-width: 520px; }
+  .team-agent-table th, .team-agent-table td { padding: 12px 10px; }
 }

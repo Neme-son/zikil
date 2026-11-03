@@ -170,10 +170,10 @@ function BidList({ bids, canAward = false, awardThreshold }: { bids: BidEntryVie
                 id={`bid-${bid.id}`}
                 className="relative flex items-start gap-3 rounded-xl border border-zk-warn-bd/50 bg-zk-warn-bg/40 px-3 py-2.5"
               >
-                <div className="flex w-[84px] shrink-0 flex-col items-center gap-1">
+                <div className="flex w-[84px] shrink-0 flex-col items-center gap-1 max-sm:w-16">
                   <span
                     data-testid="bid-state"
-                    className={`flex w-full items-center justify-center gap-1 rounded-lg px-2 py-1.5 text-xs font-bold ${stateChipClass[state]}`}
+                    className={`flex w-full items-center justify-center gap-1 rounded-lg px-2 py-1.5 text-xs font-bold max-sm:px-1 ${stateChipClass[state]}`}
                   >
                     {state === "open" ? <RaisedHandIcon /> : null}
                     {STATE_LABEL[state]}
@@ -234,7 +234,7 @@ function QuietBid({ bid, state }: { bid: BidEntryView; state: BidState }) {
       data-testid={`bid-${state}`}
       className="flex min-w-0 items-center gap-3 rounded-lg px-3 py-1.5 text-[13px] text-zk-muted"
     >
-      <span data-testid="bid-state" className={`w-[84px] shrink-0 rounded-md px-2 py-0.5 text-center text-[11px] font-bold ${stateChipClass[state]}`}>
+      <span data-testid="bid-state" className={`w-[84px] shrink-0 rounded-md px-2 py-0.5 text-center text-[11px] font-bold max-sm:w-16 max-sm:px-1 ${stateChipClass[state]}`}>
         {STATE_LABEL[state]}
       </span>
       <span className="shrink-0 font-semibold text-zk-text2">{bid.agentName}</span>

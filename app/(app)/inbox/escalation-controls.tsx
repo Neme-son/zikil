@@ -140,7 +140,7 @@ export function EscalationAnswerForm({
           {error}
         </p>
       ) : null}
-      <div className="flex items-center gap-3">
+      <div className="flex flex-wrap items-center gap-3">
         <Button
           type="submit"
           disabled={pending}

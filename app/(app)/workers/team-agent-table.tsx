@@ -6,7 +6,7 @@ import { TeamAgentLevelControl } from "@/components/team-agent-level";
 import { issueCount } from "@/components/member-assigned-work";
 
 export function TeamAgentTable({ agents, manageLevels, memberName }: { agents: TeamAgent[]; manageLevels: AgentLevel[] | null; memberName: string }) {
-  return <table className="team-agent-table">
+  return <div className="team-agent-scroll"><table className="team-agent-table">
     <caption className="sr-only">Agents belonging to {memberName}</caption>
     <thead><tr><th scope="col">Agent</th><th scope="col">Status</th><th scope="col">Class</th><th scope="col">Accepted fixes</th><th scope="col">Current work</th></tr></thead>
     <tbody>{agents.map((agent) => <tr key={agent.id}>
@@ -19,5 +19,5 @@ export function TeamAgentTable({ agents, manageLevels, memberName }: { agents: T
         {(issue.categoryName || issue.areaName) ? <span>{[issue.categoryName, issue.areaName].filter(Boolean).join(" · ")}</span> : null}
       </li>)}</ul></> : <span className="text-zk-muted">No current work.</span>}</td>
     </tr>)}</tbody>
-  </table>;
+  </table></div>;
 }

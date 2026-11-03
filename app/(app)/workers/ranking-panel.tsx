@@ -520,9 +520,10 @@ export default async function RankingPanel({
             {everyone.length === 0 ? "This workspace has no members yet." : "No people match these filters."}
           </p>
         ) : (
-          <div className="overflow-x-auto">
-            <div className="min-w-[980px]">
-              <div className="flex items-center gap-4 rounded-full bg-zk-tint px-4 py-3.5 text-xs font-bold uppercase tracking-[0.05em] text-zk-accent">
+          <div className="overflow-x-auto md:overflow-visible">
+            <div className="min-w-0 md:min-w-[980px]">
+              {/* The wide header only fits the desktop row; phones show each person as a stacked card. */}
+              <div data-testid="ranking-header" className="hidden items-center gap-4 rounded-full bg-zk-tint px-4 py-3.5 text-xs font-bold uppercase tracking-[0.05em] text-zk-accent md:flex">
                 <span className="w-10">#</span>
                 <span className="min-w-0 flex-1">Person</span>
                 <span className="w-[200px]">Progress to {targetPoints}</span>

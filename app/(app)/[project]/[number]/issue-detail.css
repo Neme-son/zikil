@@ -271,6 +271,13 @@
   .issue-progress.ssum { padding: 12px; }
 }
 
+@media (max-width: 480px) {
+  /* Six stages don't fit a phone: the track scrolls, columns keep their shape. */
+  .issue-progress .pgw { overflow-x: auto; scrollbar-width: none; }
+  .issue-progress .pgw::-webkit-scrollbar { display: none; }
+  .issue-progress .pg { min-width: 420px; }
+}
+
 @media (max-width: 400px) {
   .issue-progress .pgc { display: none; }
 }

@@ -265,9 +265,10 @@ function CommentItem({
       // No box around a comment: avatar and name, the body under the name, a
       // line of actions, then the replies along the thread line, which hides
       // the comment and its replies when clicked (or with the minus button).
-      className="group/comment grid scroll-mt-24 grid-cols-[32px_minmax(0,1fr)] gap-x-2.5 break-inside-avoid"
+      className="group/comment grid scroll-mt-24 grid-cols-[32px_minmax(0,1fr)] gap-x-2.5 break-inside-avoid max-sm:grid-cols-[26px_minmax(0,1fr)] max-sm:gap-x-1.5"
     >
-      <div className="flex justify-center pt-0.5">
+      {/* Replies nest this grid, so a narrower avatar column keeps deep threads readable on phones. */}
+      <div className="flex justify-center pt-0.5 max-sm:scale-[0.8]">
         {collapsed ? toggle : <Avatar name={comment.author.name} image={comment.author.image} size="md" />}
       </div>
       <div className="flex min-h-8 flex-wrap items-center gap-x-1.5 gap-y-1 rounded-md text-[13px] text-zk-muted group-target/comment:bg-zk-tint">

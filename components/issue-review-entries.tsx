@@ -166,12 +166,12 @@ export function DeliveriesPanel({
         >
           <span
             data-testid="delivery-state"
-            className={`flex w-[84px] shrink-0 items-center justify-center rounded-lg px-2 py-1.5 text-xs font-bold ${delivery.current ? positive : "bg-zk-chip text-zk-text2"}`}
+            className={`flex w-[84px] shrink-0 items-center justify-center rounded-lg px-2 py-1.5 text-xs font-bold max-sm:w-16 max-sm:px-1 ${delivery.current ? positive : "bg-zk-chip text-zk-text2"}`}
           >
             {delivery.current ? "Delivered" : "Earlier"}
           </span>
           <div className="min-w-0 flex-1">
-            <p className="m-0 flex flex-wrap items-center gap-x-2 gap-y-1 pr-8 text-[13px]">
+            <p className="m-0 flex flex-wrap items-center gap-x-2 gap-y-1 pr-8 text-[13px] max-sm:pr-1">
               <b className="font-semibold text-zk-text">{delivery.agentName}</b>
               <span className="text-zk-muted">for {delivery.by}</span>
               <PullRequestRef url={delivery.pullRequestUrl} headSha={delivery.headSha} />

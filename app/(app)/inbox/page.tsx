@@ -29,7 +29,8 @@ export default async function InboxPage({ searchParams }: { searchParams?: Promi
   ] as const;
 
   return (
-    <div className="mx-auto flex max-w-4xl flex-col gap-5 pb-10">
+    // #415: no own max-w — the inbox lines up with the header like every other page.
+    <div className="flex w-full flex-col gap-5 pb-10">
       <h1 className="text-[28px] font-extrabold leading-tight tracking-[-0.02em] text-zk-text">Inbox</h1>
       <nav aria-label="Inbox" className="flex gap-1 border-b border-zk-border">
         {tabs.map((item) => {

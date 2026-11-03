@@ -243,10 +243,11 @@ export function IssueProgressReport({
         Progress report
       </h2>
       <div className="pgw">
-        <div className="pg-track" aria-hidden="true">
-          <span className="pg-fill" style={{ width: `${(currentIndex * 100) / (steps.length - 1)}%` }} />
-        </div>
         <ol className="pg" aria-label="Progress report: pick a stage to see its entries">
+          {/* Inside the grid, so the track scrolls with the columns on phones. */}
+          <div className="pg-track" aria-hidden="true">
+            <span className="pg-fill" style={{ width: `${(currentIndex * 100) / (steps.length - 1)}%` }} />
+          </div>
           {steps.map((stage, index) => {
             const state = stageState(stage, currentStage, setback);
             const tally = tallies[stage];
