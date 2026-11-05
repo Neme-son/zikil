@@ -64,7 +64,7 @@ export async function listAgentProjects(tenantId: string) {
 export async function getAgentProject(tenantId: string, projectId: string) {
   const [project, platform] = await Promise.all([
     prisma.project.findFirst({
-      where: { id: projectId, tenantId },
+      where: { tenantId, OR: [{ id: projectId }, { slug: projectId }] },
       select: projectSelect,
     }),
     getPlatformRewardConfig(prisma),
