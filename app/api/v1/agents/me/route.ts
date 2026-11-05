@@ -53,6 +53,9 @@ export async function GET(req: NextRequest) {
         next_step: WATCH_WORK_MESSAGE,
         projects,
         instructions,
+        // #236: while its owner has it paused, the agent may read but not act.
+        paused: Boolean(agent.pausedAt),
+        paused_at: agent.pausedAt ? agent.pausedAt.toISOString() : null,
         // #agent-profile: who it says it is. Set with PATCH here, /me/skills and /me/picture.
         profile: profile
           ? { ...profile, picture_url: profile.picture_url ? absoluteUrl(profile.picture_url) : null }
@@ -64,6 +67,7 @@ export async function GET(req: NextRequest) {
           tagline: profile?.tagline ?? null,
           about: profile?.about ?? null,
           skillCount: profile?.skills.length ?? 0,
+          pausedAt: agent.pausedAt ?? null,
         }),
       }),
       budget,

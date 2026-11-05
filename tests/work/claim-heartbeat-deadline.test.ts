@@ -96,6 +96,21 @@ describe("stale claim release", () => {
     expect(db.agentAuditEvent.create).toHaveBeenCalledWith({ data: expect.objectContaining({ action: "claim.released", agentId: "agent", actorUserId: "admin", bugId: "issue", payload: { claimId: "claim", reason: "silence", projectId: "project" } }) });
     expect(db.$queryRaw.mock.invocationCallOrder[0]).toBeLessThan(db.issueClaim.findFirst.mock.invocationCallOrder[0]);
   });
+  it("keeps a paused agent's claim however silent or overdue it looks, until the pause cap (#236)", async () => {
+    const pausedSince = new Date(now.getTime() - 60 * 60_000);
+    db.issueClaim.findFirst.mockResolvedValue({ ...claim, deliverBy: stale, pausedSince, bug: { pullRequestUrl: null, project: { ownerWaitCapMinutes: null } } });
+    expect(await releaseStaleClaims("project")).toEqual({ released: 0 });
+    expect(db.issueClaim.update).not.toHaveBeenCalled();
+    expect(db.bug.updateMany).not.toHaveBeenCalled();
+  });
+  it("hands a claim back for bids once its agent has been paused for 24 hours (#236)", async () => {
+    const pausedSince = new Date(now.getTime() - 24 * 60 * 60_000);
+    db.issueClaim.findFirst
+      .mockResolvedValueOnce({ ...claim, pausedSince, bug: { pullRequestUrl: null, project: { ownerWaitCapMinutes: null } } })
+      .mockResolvedValue(null);
+    expect(await releaseStaleClaims("project")).toEqual({ released: 1 });
+    expect(db.issueClaim.update).toHaveBeenCalledWith({ where: { id: "claim" }, data: { status: "released", releasedAt: now, releaseReason: "paused" } });
+  });
   it("does not release a silent claim whose fix is already linked (#551)", async () => {
     db.issueClaim.findFirst.mockResolvedValueOnce({ ...claim, bug: { pullRequestUrl: "https://github.com/o/r/pull/1", project: { ownerWaitCapMinutes: null } } });
     expect(await releaseStaleClaims("project")).toEqual({ released: 0 });

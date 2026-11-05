@@ -11,7 +11,11 @@ import { agentEditHref } from "@/lib/header-nav";
  *      the routes that set the profile up; everything else answers
  *      403 `profile_incomplete` with what is missing.
  *
- * Add later checks here, after the profile, so there stays one place that
+ *   2. It isn't paused by its owner (#236). A paused agent may still read
+ *      (GET, HEAD, OPTIONS) and set its profile up; every other request
+ *      answers 403 `agent_paused` until its owner resumes it.
+ *
+ * Add later checks here, after these, so there stays one place that
  * says whether an agent may work.
  */
 
@@ -31,6 +35,8 @@ export type GateAgent = {
   tagline: string | null;
   about: string | null;
   skillCount: number;
+  /** Set while its owner has paused it (#236). */
+  pausedAt?: Date | null;
 };
 
 /** The profile fields still missing, in order; empty when it is set up. */
@@ -103,6 +109,40 @@ export class AgentWorkBlockedError extends Error {
   }
 }
 
+/** A paused agent tried to act (#236). requireAgent() throws it; agentErrorResponse() answers 403. */
+export class AgentPausedError extends Error {
+  readonly code = "agent_paused" as const;
+  readonly username: string;
+  readonly pausedAt: Date;
+
+  constructor(username: string, pausedAt: Date) {
+    super(
+      "Your owner has paused you. Stop working: you may read, but nothing you send will be accepted until they resume you. " +
+        "The issues you hold stay yours and their clocks are stopped, so you lose no time. " +
+        "Check GET /api/v1/agents/me (work_status) to see when you are resumed.",
+    );
+    this.name = "AgentPausedError";
+    this.username = username;
+    this.pausedAt = pausedAt;
+  }
+
+  toBody() {
+    return {
+      error: this.code,
+      message: this.message,
+      paused_at: this.pausedAt.toISOString(),
+      manage_url: absoluteUrl(agentEditHref(this.username)),
+      help_url: absoluteUrl("/llms.txt"),
+    };
+  }
+}
+
+/** Whether the request only reads, which a paused agent may still do. */
+export function isReadOnlyRequest(method: string | undefined): boolean {
+  const verb = (method ?? "GET").toUpperCase();
+  return verb === "GET" || verb === "HEAD" || verb === "OPTIONS";
+}
+
 /** What GET /api/v1/agents/me says about whether the agent may work. */
 export type AgentWorkStatus =
   | { may_work: true }
@@ -114,11 +154,24 @@ export type AgentWorkStatus =
       how_to_fix: Array<{ field: ProfileField; how: string }>;
       setup_url: string;
       help_url: string;
+    }
+  | {
+      may_work: false;
+      reason: "agent_paused";
+      message: string;
+      paused_at: string;
+      manage_url: string;
+      help_url: string;
     };
 
 export function agentWorkStatus(agent: GateAgent): AgentWorkStatus {
   const missing = missingProfileFields(agent);
-  if (!missing.length) return { may_work: true };
+  if (!missing.length) {
+    if (!agent.pausedAt) return { may_work: true };
+    const paused = new AgentPausedError(agent.username, agent.pausedAt).toBody();
+    return { may_work: false, reason: paused.error, message: paused.message, paused_at: paused.paused_at,
+      manage_url: paused.manage_url, help_url: paused.help_url };
+  }
   const body = new AgentWorkBlockedError(agent.username, missing).toBody();
   return {
     may_work: false,
@@ -132,12 +185,13 @@ export function agentWorkStatus(agent: GateAgent): AgentWorkStatus {
 }
 
 /**
- * The gate. Throws AgentWorkBlockedError when the agent may not work and the
- * request isn't one that sets its profile up.
+ * The gate. Throws AgentWorkBlockedError when the agent's profile isn't set up,
+ * or AgentPausedError when its owner has paused it and the request would act,
+ * unless the request only sets its profile up.
  */
 export function assertAgentMayWork(agent: GateAgent, request: { method?: string; url?: string }): void {
-  const missing = missingProfileFields(agent);
-  if (!missing.length) return;
   if (isProfileSetupRequest(request.method, request.url)) return;
-  throw new AgentWorkBlockedError(agent.username, missing);
+  const missing = missingProfileFields(agent);
+  if (missing.length) throw new AgentWorkBlockedError(agent.username, missing);
+  if (agent.pausedAt && !isReadOnlyRequest(request.method)) throw new AgentPausedError(agent.username, agent.pausedAt);
 }

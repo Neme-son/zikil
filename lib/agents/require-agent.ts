@@ -7,7 +7,7 @@ import { AgentPlatformDisabledError, agentPlatformDisabledResponse } from "@/lib
 import { isAgentPlatformEnabled } from "@/lib/feature-flags";
 import { logger } from "@/lib/logger";
 import type { AppRole } from "@/lib/roles";
-import { AgentWorkBlockedError, assertAgentMayWork } from "@/lib/agents/work-gate";
+import { AgentPausedError, AgentWorkBlockedError, assertAgentMayWork } from "@/lib/agents/work-gate";
 
 export { AgentPlatformDisabledError, agentPlatformDisabledResponse };
 
@@ -43,6 +43,8 @@ export type AgentContext = {
   projectId?: string | null;
   /** Slug of that project, for the error shown when the key is used elsewhere. */
   projectSlug?: string | null;
+  /** Set while its owner has paused it (#236): it may read but not act. */
+  pausedAt?: Date | null;
 };
 
 export type AgentAuthFailure = "missing_key" | "invalid_key" | "revoked";
@@ -119,6 +121,7 @@ export async function requireAgent(request: HeaderSource): Promise<AgentContext>
           burst: true,
           burstUntil: true,
           revokedAt: true,
+          pausedAt: true,
           username: true,
           tagline: true,
           about: true,
@@ -145,6 +148,7 @@ export async function requireAgent(request: HeaderSource): Promise<AgentContext>
     tagline: agent.tagline,
     about: agent.about,
     skillCount: agent._count.skills,
+    pausedAt: agent.pausedAt ?? null,
   };
 
   // Update lastUsedAt on successful auth, throttled to at most once per minute (#535)
@@ -177,6 +181,7 @@ export async function requireAgent(request: HeaderSource): Promise<AgentContext>
     keyId: key.id,
     projectId: key.projectId,
     projectSlug: key.project?.slug ?? null,
+    pausedAt: agent.pausedAt ?? null,
   };
 }
 
@@ -194,6 +199,10 @@ export function agentErrorResponse(error: unknown): NextResponse {
   }
   if (error instanceof AgentWorkBlockedError) {
     // #agent-work-gate: the agent may not work until its profile is set up.
+    return NextResponse.json(error.toBody(), { status: 403 });
+  }
+  if (error instanceof AgentPausedError) {
+    // #236: the owner paused this agent; it may read but not act.
     return NextResponse.json(error.toBody(), { status: 403 });
   }
   if (error instanceof AgentProjectError) {

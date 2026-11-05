@@ -95,6 +95,7 @@ describe("requireAgent (#427)", () => {
       keyId: "key1",
       projectId: null,
       projectSlug: null,
+      pausedAt: null,
     });
     // Looked up by hash only; the raw key never reaches the query.
     expect(JSON.stringify(findUnique.mock.calls[0][0])).not.toContain(KEY);

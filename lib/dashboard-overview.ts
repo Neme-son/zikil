@@ -326,6 +326,7 @@ export async function loadOwnAgents({
           lastHeartbeatAt: true,
           deliverBy: true,
           waitingOnOwnerSince: true,
+          pausedSince: true,
           bug: { select: { number: true, title: true, status: true, isDeleted: true, pullRequestUrl: true, project: { select: { slug: true, tenant: { select: { slug: true } } } } } },
         },
       },
@@ -354,7 +355,8 @@ export async function loadOwnAgents({
     const quiet = heartbeat === null || heartbeat.getTime() < workingCutoff;
     const claimStalled =
       claimHeld &&
-      isClaimStalled({ quiet, deliverBy: claim.deliverBy, waitingOnOwnerSince: claim.waitingOnOwnerSince, pullRequestUrl: claimedBug.pullRequestUrl, now });
+      isClaimStalled({ quiet, deliverBy: claim.deliverBy, // #236: a paused agent's clocks stand still, like a wait on its owner.
+      waitingOnOwnerSince: claim.waitingOnOwnerSince ?? claim.pausedSince, pullRequestUrl: claimedBug.pullRequestUrl, now });
     const claimIsLive = claimHeld && !quiet;
 
     const lastSeenAt = latest(

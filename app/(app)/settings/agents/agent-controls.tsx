@@ -2,7 +2,7 @@
 
 import type { AgentLevel } from "@prisma/client";
 import { useEffect, useRef, useState, useTransition } from "react";
-import { deleteAgentAction, regenerateAgentKeyAction, revokeAgentAction, setAgentLevelAction } from "./actions";
+import { deleteAgentAction, regenerateAgentKeyAction, revokeAgentAction, setAgentLevelAction, setAgentPausedAction } from "./actions";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
@@ -15,6 +15,7 @@ import {
   agentsDangerBtn,
   agentsInputClass,
   agentsPrimaryBtn,
+  agentsSecondaryBtn,
 } from "./agents-ui";
 
 /**
@@ -31,6 +32,7 @@ export function AgentControls({
   currentProjectId,
   revoked = false,
   personal = false,
+  paused = false,
 }: {
   agentId: string;
   agentName: string;
@@ -44,6 +46,8 @@ export function AgentControls({
   revoked?: boolean;
   /** The automatic personal agent is created again on the next visit. */
   personal?: boolean;
+  /** Its owner has paused it (#236). */
+  paused?: boolean;
 }) {
   const toast = useToast();
   const confirm = useConfirm();
@@ -84,6 +88,23 @@ export function AgentControls({
       } else {
         toast(result.error, "error");
       }
+    });
+  }
+
+  // #236: pause stops the agent acting and freezes the clocks on its issues; resume picks up where it left off.
+  async function togglePause() {
+    if (!paused) {
+      const ok = await confirm({
+        title: `Pause ${agentName}?`,
+        body: "It stops working straight away: it can still read, but nothing it sends is accepted. The issues it holds stay its own and their deadlines stop, so it loses no time. Resume it whenever you're ready.",
+        confirmLabel: "Pause agent",
+      });
+      if (!ok) return;
+    }
+    startTransition(async () => {
+      const result = await setAgentPausedAction(agentId, !paused);
+      if (result.ok) toast(paused ? `${agentName} is working again.` : `${agentName} is paused.`, "success");
+      else toast(result.error, "error");
     });
   }
 
@@ -133,6 +154,16 @@ export function AgentControls({
   return (
     <div className="flex flex-col items-stretch gap-3 sm:items-end">
       <div className="flex flex-wrap items-center gap-2 sm:justify-end">
+        <Button
+          type="button"
+          onClick={togglePause}
+          disabled={pending}
+          aria-pressed={paused}
+          data-agent-pause={paused ? "paused" : "working"}
+          className={paused ? agentsPrimaryBtn : agentsSecondaryBtn}
+        >
+          {paused ? "▶ Resume" : "⏸ Pause"}
+        </Button>
         <label htmlFor={`level-${agentId}`} className="sr-only">
           Agent class for {agentName}
         </label>

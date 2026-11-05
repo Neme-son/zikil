@@ -39,6 +39,8 @@ export type HeldClaim = {
   beneficiaryUserId: string;
   claimedAt: Date | null;
   extendedAt: Date | null;
+  /** Set while its agent is paused by its owner (#236); a paused claim is never idle. */
+  pausedSince?: Date | null;
   agent: { ownerUserId: string };
 };
 
@@ -84,7 +86,7 @@ export async function inProgressWork(db: Db, bugId: string): Promise<InProgressW
   const claim = await db.issueClaim.findFirst({
     where: { bugId, status: "active", releasedAt: null },
     orderBy: [{ createdAt: "desc" }, { id: "desc" }],
-    select: { id: true, agentId: true, beneficiaryUserId: true, claimedAt: true, extendedAt: true, agent: { select: { ownerUserId: true } } },
+    select: { id: true, agentId: true, beneficiaryUserId: true, claimedAt: true, extendedAt: true, pausedSince: true, agent: { select: { ownerUserId: true } } },
   });
   return { bug, claim, lastUpdate: await inProgressLastUpdate(db, bug, claim) };
 }
@@ -95,6 +97,8 @@ export type IdleInProgress = InProgressWork & { lastUpdate: Date; windowMinutes:
 export async function idleInProgress(bugId: string, db: Db = prisma, now = Date.now()): Promise<IdleInProgress | null> {
   const work = await inProgressWork(db, bugId);
   if (!work) return null;
+  // #236: the owner paused the agent on purpose; that isn't abandoning the work.
+  if (work.claim?.pausedSince) return null;
   const { abandonCheckMinutes } = await workflowFor(work.bug.projectId, db);
   if (!work.lastUpdate || !isIdle(work.lastUpdate, abandonCheckMinutes, now)) return null;
   return { ...work, lastUpdate: work.lastUpdate, windowMinutes: abandonCheckMinutes };

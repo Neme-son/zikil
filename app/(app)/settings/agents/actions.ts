@@ -9,6 +9,7 @@ import { approvePairing, findPendingPairing } from "@/lib/agents/pairing";
 import { currentTenantIdFor } from "@/lib/tenant-context";
 import { createAgent, deleteAgent, regenerateKey, revokeAgent, setAgentAreaPreferences, setAgentLevel } from "@/lib/agents/registry";
 import { RATE_LIMIT_MESSAGE } from "@/lib/rate-limit";
+import { pauseAgent, pauseAllAgents, resumeAgent, resumeAllAgents } from "@/lib/agents/pause";
 import { isAgentPlatformEnabled } from "@/lib/feature-flags";
 
 /** Shown when the platform is off (#505): no new agents or keys get issued. */
@@ -161,4 +162,27 @@ export async function pairAgentAction(
     level: pending.proposedLevel ?? "working",
     instructions: pending.proposedInstructions,
   };
+}
+
+/** Pauses or resumes one agent (#236), as its owner or a team admin. */
+export async function setAgentPausedAction(agentId: unknown, paused: unknown): Promise<AgentActionResult> {
+  if (typeof agentId !== "string" || typeof paused !== "boolean") return { ok: false, error: "Invalid agent." };
+  const user = await requireUser();
+  const result = paused ? await pauseAgent(user, agentId) : await resumeAgent(user, agentId);
+  if (!result.ok) return result;
+  revalidatePath("/agents/mine");
+  return { ok: true };
+}
+
+export type PauseAllActionResult = { ok: true; changed: number } | { ok: false; error: string };
+
+/** Pauses (or resumes) every agent the person owns in their current workspace (#236). */
+export async function setAllAgentsPausedAction(paused: unknown): Promise<PauseAllActionResult> {
+  if (typeof paused !== "boolean") return { ok: false, error: "Invalid request." };
+  const user = await requireUser();
+  const tenantId = await currentTenantIdFor(user.id);
+  if (!tenantId) return { ok: false, error: "You aren't in a workspace yet." };
+  const result = paused ? await pauseAllAgents(user, tenantId) : await resumeAllAgents(user, tenantId);
+  if (result.ok) revalidatePath("/agents/mine");
+  return result;
 }

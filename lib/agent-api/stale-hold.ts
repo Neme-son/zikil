@@ -14,7 +14,7 @@ export async function staleHold(bugId: string, now = new Date()): Promise<StaleH
     where: { bugId, releasedAt: null, status: { in: ["offered", "active"] } },
     orderBy: [{ createdAt: "desc" }, { id: "desc" }],
     select: {
-      id: true, status: true, offeredAt: true, claimedAt: true, lastHeartbeatAt: true, deliverBy: true, waitingOnOwnerSince: true,
+      id: true, status: true, offeredAt: true, claimedAt: true, lastHeartbeatAt: true, deliverBy: true, waitingOnOwnerSince: true, pausedSince: true,
       bug: { select: { projectId: true, pullRequestUrl: true, status: true } },
     },
   });
@@ -24,7 +24,7 @@ export async function staleHold(bugId: string, now = new Date()): Promise<StaleH
     const lapsed = claim.offeredAt !== null && now.getTime() - claim.offeredAt.getTime() >= workflow.offerWindowSeconds * 1000;
     return lapsed ? { claimId: claim.id, kind: "offer_expired" } : null;
   }
-  if (claim.bug.status !== "in_progress" || claim.bug.pullRequestUrl || claim.waitingOnOwnerSince) return null;
+  if (claim.bug.status !== "in_progress" || claim.bug.pullRequestUrl || claim.waitingOnOwnerSince || claim.pausedSince) return null;
   if (isDeliveryOverdue(claim.deliverBy, now)) return { claimId: claim.id, kind: "overdue" };
   const lastSeen = claim.lastHeartbeatAt ?? claim.claimedAt;
   if (lastSeen && lastSeen.getTime() < now.getTime() - workflow.heartbeatMinutes * 60_000) return { claimId: claim.id, kind: "silent" };

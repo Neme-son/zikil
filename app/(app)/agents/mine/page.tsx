@@ -10,6 +10,7 @@ import { openSecret } from "@/lib/secret-box";
 import { materializeApprovedPairings } from "@/lib/agents/pairing";
 import { isAgentPlatformEnabled } from "@/lib/feature-flags";
 import { FirstAgentEmptyState } from "@/components/first-agent-empty-state";
+import { PauseAllButton } from "@/app/(app)/settings/agents/pause-all-button";
 import { ManageAgentsList, type ManageAgentItem } from "@/app/(app)/settings/agents/manage-agents-list";
 import {
   agentsMutedClass,
@@ -85,6 +86,7 @@ export default async function AgentsPage() {
           level: true,
           createdAt: true,
           revokedAt: true,
+          pausedAt: true,
           defaultProjectId: true,
           apiKeys: {
             where: { revokedAt: null },
@@ -102,6 +104,7 @@ export default async function AgentsPage() {
 
   const ownLevels = settableLevels({ isOwner: true, isTenantAdmin: isAdmin });
   const activeCount = mine.filter((agent) => !agent.revokedAt).length;
+  const pausedCount = mine.filter((agent) => !agent.revokedAt && agent.pausedAt).length;
   const recentCutoff = now.getTime() - 24 * 60 * 60 * 1000;
 
   const manageItems: ManageAgentItem[] = mine.map((agent) => {
@@ -117,6 +120,7 @@ export default async function AgentsPage() {
       level: agent.level,
       createdAt: agent.createdAt.toISOString(),
       revokedAt: agent.revokedAt ? agent.revokedAt.toISOString() : null,
+      pausedAt: agent.pausedAt ? agent.pausedAt.toISOString() : null,
       personal: Boolean(agent.defaultProjectId),
       currentProjectId: agent.apiKeys.find((key) => key.project)?.project?.id ?? null,
       recent: lastUsedMs >= recentCutoff,
@@ -142,6 +146,7 @@ export default async function AgentsPage() {
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
+            <PauseAllButton working={activeCount - pausedCount} paused={pausedCount} />
             <Link href={CREATE_AGENT_HREF} className={agentsPrimaryBtn}>
               Create agent
             </Link>

@@ -27,6 +27,8 @@ export type ManageAgentItem = {
   level: AgentLevel;
   createdAt: string;
   revokedAt: string | null;
+  /** When its owner paused it (#236); null while it works. */
+  pausedAt: string | null;
   personal: boolean;
   /** The owner's avatar pick; null wears the automatic robot. */
   avatar: string | null;
@@ -134,7 +136,7 @@ export function ManageAgentsList({
                     {!agent.revokedAt ? (
                       <span
                         className={`absolute bottom-0 right-0 h-3.5 w-3.5 rounded-full border-2 border-zk-surface ${
-                          agent.recent ? "bg-emerald-500" : "bg-slate-400"
+                          agent.pausedAt ? "bg-amber-500" : agent.recent ? "bg-emerald-500" : "bg-slate-400"
                         }`}
                         aria-hidden
                       />
@@ -150,6 +152,14 @@ export function ManageAgentsList({
                         {agent.personal ? <span className="font-normal text-zk-muted"> · personal</span> : null}
                       </Link>
                       <span className={levelBadgeClass(agent.level)}>{AGENT_LEVEL_LABELS[agent.level]}</span>
+                      {agent.pausedAt && !agent.revokedAt ? (
+                        <span
+                          data-agent-paused-badge
+                          className="inline-flex items-center rounded-full bg-zk-warn-bg px-2.5 py-0.5 text-xs font-bold text-zk-warn-fg"
+                        >
+                          ⏸ Paused <span className="ml-1 font-normal">· since <RelativeTime date={agent.pausedAt} /></span>
+                        </span>
+                      ) : null}
                       {agent.revokedAt ? (
                         <span className="inline-flex items-center rounded-full bg-zk-bad-bg px-2.5 py-0.5 text-xs font-bold text-zk-bad-fg">
                           Revoked
@@ -208,6 +218,7 @@ export function ManageAgentsList({
                   ) : (
                     <AgentControls
                       personal={agent.personal}
+                      paused={Boolean(agent.pausedAt)}
                       agentId={agent.id}
                       agentName={agent.name}
                       level={agent.level}

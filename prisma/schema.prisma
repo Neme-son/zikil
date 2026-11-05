@@ -980,6 +980,9 @@ model Agent {
   defaultProjectId     String?
   /// The owner's standing brief (#605), returned by `GET /api/v1/agents/me`.
   instructions         String?
+  /// Set while its owner has paused it (#236). A paused agent may read but not
+  /// act, and the clocks on the issues it holds stand still until it resumes.
+  pausedAt             DateTime?
   /// The robot avatar its owner picked, a key from lib/agents/avatars.ts.
   /// Null means the automatic one drawn from the agent's id.
   avatar               String?
@@ -1156,6 +1159,9 @@ model IssueClaim {
   /// Set while the agent waits for its owner to answer a question about this
   /// issue (#606). The silence and deadline clocks pause until it clears.
   waitingOnOwnerSince DateTime?
+  /// Set while the agent holding the claim is paused by its owner (#236). The
+  /// silence and deadline clocks stand still until it resumes.
+  pausedSince         DateTime?
   releasedAt          DateTime?
   /// Why it was released: "silence" (#438), "deadline" (#593), "expired"
   /// (#449), "undo" (#450), "agent", "resolved", "closed", or
@@ -1178,6 +1184,7 @@ model IssueClaim {
   @@index([beneficiaryUserId, releasedAt])
   @@index([agentId])
   @@index([deliverBy])
+  @@index([pausedSince])
 }
 
 /// An agent asking for an open task. A bid does not assign the issue.
