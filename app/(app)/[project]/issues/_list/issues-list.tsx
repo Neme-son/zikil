@@ -93,6 +93,9 @@ import {
   platformFilterWhere,
 } from "@/lib/platform-filter";
 import { PlatformMenu, type PlatformTab } from "@/components/platform-tabs";
+import { liveCheck, liveConfirmLabel, liveFactLabel, type LiveCheck, type LiveFact } from "@/lib/live-check";
+import { latestPullRequestReports } from "@/lib/agent-api/pull-request-report";
+import { parseGitHubRepoUrl } from "@/lib/github/pull-request-url";
 import { IssueRowStatus } from "@/components/issue-row-status";
 import { BidsVoteBadge, ImportanceVoteBadge } from "@/components/vote-badge";
 import { RewardBadge } from "@/components/reward-badge";
@@ -103,6 +106,11 @@ import { logLoadFailure } from "@/lib/load-error";
 import { AREA_PARAM, parseProjectAreaFilter, projectAreaFilterWhere } from "@/lib/project-area-filter";
 import { openIssueConfirmations, parseIssueStageView, type IssueStage } from "@/lib/issue-stage";
 import { issueHref } from "@/lib/issue-ref";
+import { loadProdConfirmations, loadProdConfirmers, type ProdConfirmation } from "@/lib/live-confirm-data";
+import { PROD_CONFIRMATIONS_NEEDED } from "@/lib/live-confirm";
+import { LiveRefresh } from "@/components/live-refresh";
+import { ConfirmDots } from "@/components/confirm-dots";
+import { ExpandableRow, RowToggle } from "@/components/expandable-row";
 import { PROJECT_ALL_PARAM, showsAllProjects } from "@/lib/issue-list-filters";
 import { ideaVoteTotals, NO_VOTES } from "@/lib/idea-vote-totals";
 
@@ -180,6 +188,23 @@ async function loadOrEmpty<T>(label: string, load: () => Promise<T>, empty: T): 
     console.error(`[bugs] ${label} lookup failed`, error);
     return empty;
   }
+}
+
+/**
+ * Where each Live issue's fix really is (#live-check): the latest independent
+ * check of its pull request, against its project's repository.
+ */
+async function loadLiveChecks(bugs: ReadonlyArray<{ id: string; pullRequestUrl: string | null; projectId: string }>): Promise<Map<string, LiveCheck>> {
+  const checks = new Map<string, LiveCheck>();
+  if (bugs.length === 0) return checks;
+  const [reports, confirmers, projects] = await Promise.all([
+    latestPullRequestReports(bugs),
+    loadProdConfirmers(bugs.map((bug) => bug.id)),
+    prisma.project.findMany({ where: { id: { in: [...new Set(bugs.map((bug) => bug.projectId))] } }, select: { id: true, repoUrl: true } }),
+  ]);
+  const repos = new Map(projects.map((project) => [project.id, parseGitHubRepoUrl(project.repoUrl)]));
+  for (const bug of bugs) checks.set(bug.id, liveCheck(bug.pullRequestUrl, reports.get(bug.id), repos.get(bug.projectId) ?? null, confirmers.get(bug.id) ?? []));
+  return checks;
 }
 
 /** The database error stays in the server log under `reference` (#506). */
@@ -385,6 +410,31 @@ export async function IssuesList({
     const asNumber = parseIssueNumberQuery(qParam);
     if (asNumber !== null) where.OR.push({ number: asNumber });
   }
+
+  // #live-confirm: on the Live tab, narrow to the issues three agents have
+  // found on prod, or the ones still short. The counts are of the unnarrowed list.
+  // The line above the list describes every Live issue the other filters match, whichever confirmation filter is on.
+  const liveSummaryWhere: Prisma.BugWhereInput = { ...where };
+  const confirmFilter = statusParam === "resolved" && !isDeletedView ? (["done", "more"] as const).find((value) => value === toSingleQueryParam(params.confirm)) ?? null : null;
+  let confirmCounts: { all: number; done: number } | null = null;
+  if (statusParam === "resolved" && !isDeletedView) {
+    confirmCounts = await loadOrEmpty("live confirmations", async () => {
+      const ids = (await prisma.bug.findMany({ where, select: { id: true } })).map((bug) => bug.id);
+      const confirmers = await loadProdConfirmers(ids);
+      const done = ids.filter((id) => (confirmers.get(id)?.length ?? 0) >= PROD_CONFIRMATIONS_NEEDED);
+      if (confirmFilter) where.id = confirmFilter === "done" ? { in: done } : { in: ids.filter((id) => !done.includes(id)) };
+      return { all: ids.length, done: done.length };
+    }, null);
+  }
+  const confirmHref = (value: "done" | "more" | null) => {
+    const [path, query = ""] = returnTo.split("?");
+    const next = new URLSearchParams(query);
+    if (value) next.set("confirm", value);
+    else next.delete("confirm");
+    next.delete("page");
+    const text = next.toString();
+    return text ? `${path}?${text}` : path;
+  };
 
   let totalCount = 0;
   try {
@@ -600,7 +650,10 @@ export async function IssuesList({
         },
       },
       // A personal list reads newest-activity-first; boosts are for the shared one.
-      orderBy: getBugOrderBy(currentSort, { boostFirst: !isWatchingView }),
+      // #live-confirm: "Needs more" puts the issues closest to confirmed first.
+      orderBy: confirmFilter === "more"
+        ? [{ deploymentReports: { _count: "desc" } }, ...getBugOrderBy(currentSort, { boostFirst: false })]
+        : getBugOrderBy(currentSort, { boostFirst: !isWatchingView }),
       skip: pagination.skip,
       take: pagination.take,
     })
@@ -610,6 +663,19 @@ export async function IssuesList({
     return issuesQueryError(listed.reference);
   }
   const bugs = listed.bugs;
+  // #live-check: on the Live tab, every Live issue the filters match (for the
+  // line above the list); elsewhere, just the Live rows on this page.
+  const liveTabChecks = statusParam === "resolved" && !isDeletedView
+    ? await loadOrEmpty("live checks", async () => loadLiveChecks(await prisma.bug.findMany({
+        where: liveSummaryWhere,
+        select: { id: true, pullRequestUrl: true, projectId: true },
+      })), new Map<string, LiveCheck>())
+    : new Map<string, LiveCheck>();
+  const liveChecks = liveTabChecks.size > 0
+    ? liveTabChecks
+    : await loadOrEmpty("live checks", () => loadLiveChecks(bugs.filter((bug) => bug.status === "resolved")), new Map<string, LiveCheck>());
+  // #live-confirm: what each agent found, for the Live rows on this page, shown when a row is opened.
+  const liveConfirmations = await loadOrEmpty("live confirmations", () => loadProdConfirmations(bugs.filter((bug) => liveChecks.has(bug.id)).map((bug) => bug.id)), new Map<string, ProdConfirmation[]>());
 
   // #idea-table: the Ideas tab's New ideas and Drafted read open ideas from
   // their own table, in the same tenant, project and search scope as the
@@ -990,6 +1056,11 @@ export async function IssuesList({
 
   const listContent = (
     <div className="space-y-4">
+        {statusParam === "resolved" && !isDeletedView ? <LiveRefresh /> : null}
+        {statusParam === "resolved" && liveTabChecks.size > 0 ? (
+          <LiveShipped checks={[...liveTabChecks.values()]} filter={confirmFilter} confirmTotals={confirmCounts}
+            hrefs={{ all: confirmHref(null), done: confirmHref("done"), more: confirmHref("more") }} />
+        ) : null}
 
         {/* #project-links: the site/code panel renders here (from ProjectLinks in the top right) while it is open. */}
         <div id={PROJECT_LINKS_SLOT_ID} className="empty:hidden" />
@@ -1134,7 +1205,9 @@ export async function IssuesList({
                     // Green once an Open issue has a bid: someone wants to do it.
                     const hasBids = bug.substatus === "open" && bug._count.bids > 0;
                     const importance = <ImportanceVoteBadge bugId={bug.id} count={bug.voteCount} highlighted={hasBids} votable={false} />;
-                    const rowStatus = (
+                    // #live-check: a Live row says where its fix really is, as its issue page does.
+                    const liveFix = liveChecks.get(bug.id);
+                    const status = (
                       <IssueRowStatus substatus={bug.substatus} stage={stage} botConfirmations={confirmationCounts.get(bug.id) ?? 0} work={work}
                         closeReason={bug.closeReason}
                         confirmed={confirmationStates.get(bug.id)?.confirmed ?? false}
@@ -1142,13 +1215,21 @@ export async function IssuesList({
                         offeredTo={bug.substatus === "open" && offer ? (offer.beneficiary?.name ?? "someone") : null}
                         mergePath={bug.status === "resolved" && bug.pullRequestUrl ? mergePathOf(bug) : null} />
                     );
+                    // #live-confirm: on a Live row, the status as it is, then how many of the 3 people found it on prod.
+                    const rowStatus = liveFix ? (
+                      <span className="inline-flex items-center gap-1">
+                        {status}
+                        <LiveDots check={liveFix} />
+                      </span>
+                    ) : status;
 
                     return (
-                      <li
+                      <ExpandableRow
                         key={bug.id}
                         className={`issues-row flex items-center gap-2 px-2 py-3.5 lg:gap-4 lg:px-4 ${
                           index < bugs.length - 1 ? "border-b border-zk-divider" : ""
                         }`}
+                        details={liveFix ? <LiveRowDetails check={liveFix} confirmations={liveConfirmations.get(bug.id) ?? []} /> : null}
                       >
                         <div className="issues-vote w-[76px] shrink-0">
                           <RewardBadge reward={Number(bug.reward)} estimates={bug.rewardEstimateCount} fixed={Boolean(bug.rewardFixedAt)} />
@@ -1210,6 +1291,8 @@ export async function IssuesList({
                             {signals.has(bug.id) ? <DeliverySignalsLine signals={signals.get(bug.id)!} /> : null}
                           </span>
                         </Link>
+                        {/* #live-confirm: opens who found it on prod, under the row (a button can't sit in the link). */}
+                        {liveFix ? <RowToggle label="Show who found it on prod" /> : null}
                         <span className="issues-status-cell justify-center">
                           <BidsVoteBadge count={bug._count.bids} />
                         </span>
@@ -1233,7 +1316,7 @@ export async function IssuesList({
                             <UnwatchButton bugId={bug.id} label={`${formatIssueNumber(bug.number)} ${bug.title}`} />
                           ) : null}
                         </span>
-                      </li>
+                      </ExpandableRow>
                     );
                   })}
                 </ul>
@@ -1421,3 +1504,113 @@ function DeliverySignalsLine({ signals }: { signals: DeliverySignals }) {
     </span>
   );
 }
+
+/** Three dots for the three agents who must find it on prod (#live-confirm). */
+function LiveDots({ check }: { check: LiveCheck }) {
+  const names = check.confirmedBy.length ? `Found on prod by ${check.confirmedBy.join(", ")}` : "Nobody has found it on prod yet";
+  return (
+    <span className="inline-flex text-zk-ok-fg">
+      <ConfirmDots count={check.confirmedBy.length} needed={PROD_CONFIRMATIONS_NEEDED} label={liveConfirmLabel(check)} title={`${liveConfirmLabel(check)}. ${names}.`} />
+    </span>
+  );
+}
+
+/**
+ * A Live row, opened (#live-confirm): what the pull request check found, and
+ * each agent who found it on prod, with what they checked.
+ */
+function LiveRowDetails({ check, confirmations }: { check: LiveCheck; confirmations: ProdConfirmation[] }) {
+  const left = PROD_CONFIRMATIONS_NEEDED - confirmations.length;
+  return (
+    <div data-testid="live-row-details" className="mt-3 grid gap-3 rounded-lg border border-zk-border bg-zk-bg px-4 py-3 text-[13px] leading-5 text-zk-text2 sm:grid-cols-[1fr_1.4fr]">
+      <div>
+        <p className="m-0 font-semibold text-zk-text">Its pull request</p>
+        <p className="m-0">
+          {liveFactLabel(check)}{check.repo ? <> in {check.repo}</> : null}.{" "}
+          {check.checkedBy ? <>Checked on GitHub by {check.checkedBy}.</> : <>Nobody has checked it on GitHub yet.</>}
+        </p>
+      </div>
+      <div>
+        <p className="m-0 font-semibold text-zk-text">Found on prod: {liveConfirmLabel(check)}</p>
+        {confirmations.length ? (
+          <ol className="m-0 mt-1 list-none space-y-1.5 p-0">
+            {confirmations.map((confirmation) => (
+              <li key={`${confirmation.agentName}-${confirmation.createdAt.toISOString()}`}>
+                <span className="font-semibold text-zk-text">{confirmation.agentName}</span>{" "}
+                <LocalTime date={confirmation.createdAt} className="text-zk-muted" />
+                <span className="block break-words">{confirmation.note}</span>
+              </li>
+            ))}
+          </ol>
+        ) : null}
+        {left > 0 ? (
+          <p className="m-0 mt-1 text-zk-muted">
+            {left === PROD_CONFIRMATIONS_NEEDED ? "Nobody has found it on prod yet. " : ""}
+            {left} more {left === 1 ? "person" : "people"} must each check it is running on prod. The solver&apos;s own report doesn&apos;t count.
+          </p>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+/** Each reason a Live issue isn't released, as the end of a sentence: "18 have no pull request linked". */
+const NOT_RELEASED_BECAUSE: Record<Exclude<LiveFact, "released">, (n: number) => string> = {
+  no_pr: (n) => `${n} ${n === 1 ? "has" : "have"} no pull request linked`,
+  not_released: (n) => `${n} ${n === 1 ? "is" : "are"} merged but not released`,
+  other_repository: (n) => `${n} ${n === 1 ? "is" : "are"} in another repository`,
+  unchecked: (n) => `${n} ${n === 1 ? "hasn't" : "haven't"} been checked`,
+  pr_open: (n) => `${n} still ${n === 1 ? "has" : "have"} an open pull request`,
+  pr_closed: (n) => `${n} had ${n === 1 ? "its" : "their"} pull request closed unmerged`,
+  pr_missing: (n) => `${n} link to a pull request that doesn't exist`,
+};
+
+/**
+ * Above the Live list (#live-check): how much of the Live work has really
+ * shipped, and the biggest reasons the rest hasn't.
+ */
+function LiveShipped({ checks, filter, confirmTotals, hrefs }: {
+  checks: LiveCheck[];
+  filter: "done" | "more" | null;
+  confirmTotals: { all: number; done: number } | null;
+  hrefs: { all: string; done: string; more: string };
+}) {
+  const counts = new Map<LiveFact, number>();
+  for (const check of checks) counts.set(check.fact, (counts.get(check.fact) ?? 0) + 1);
+  const released = counts.get("released") ?? 0;
+  const reasons = (Object.keys(NOT_RELEASED_BECAUSE) as Exclude<LiveFact, "released">[])
+    .map((fact) => ({ fact, n: counts.get(fact) ?? 0 }))
+    .filter(({ n }) => n > 0)
+    .sort((a, b) => b.n - a.n)
+    .slice(0, 3)
+    .map(({ fact, n }) => NOT_RELEASED_BECAUSE[fact](n));
+  const rest = reasons.length > 1 ? `${reasons.slice(0, -1).join(", ")} and ${reasons[reasons.length - 1]}` : reasons[0];
+  return (
+    <p data-testid="live-shipped" className="m-0 px-1 text-sm leading-6 text-zk-text2">
+      <b className="font-bold text-zk-text">{released} of {checks.length}</b> Live issues are released: the default branch has their fix.
+      {rest ? <> Of the rest, {rest}.</> : null}
+      {confirmTotals ? (
+        <>
+          {" "}<b className="font-bold text-zk-text">{confirmTotals.done}</b> {confirmTotals.done === 1 ? "has" : "have"} been found on prod by {PROD_CONFIRMATIONS_NEEDED} different agents.
+        </>
+      ) : null}
+      {confirmTotals ? (
+        <span className="mt-2 flex flex-wrap items-center gap-1.5" data-testid="confirm-filters">
+          {([
+            { value: null, label: "All", n: confirmTotals.all, href: hrefs.all },
+            { value: "done", label: `Found by ${PROD_CONFIRMATIONS_NEEDED}`, n: confirmTotals.done, href: hrefs.done },
+            { value: "more", label: "Needs more", n: confirmTotals.all - confirmTotals.done, href: hrefs.more },
+          ] as const).map(({ value, label, n, href }) => (
+            <Link key={label} href={href} aria-current={filter === value ? "page" : undefined}
+              className={`inline-flex h-7 items-center gap-1.5 rounded-full border px-3 text-[12.5px] font-semibold ${
+                filter === value ? "border-zk-accent bg-zk-accent text-white" : "border-zk-border bg-zk-surface text-zk-text2 hover:bg-zk-chip"
+              }`}>
+              {label} <span className="tabular-nums opacity-80">{n}</span>
+            </Link>
+          ))}
+        </span>
+      ) : null}
+    </p>
+  );
+}
+
