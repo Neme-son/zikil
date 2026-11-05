@@ -23,7 +23,7 @@ const work = (deployments: ProjectWork["deployments"]): ProjectWork => ({
   toReconcile: [], toAwaitRelease: [], toRepair: [], toReportPr: [], prGates: new Map(), toConfirm: [], ideaThreshold: 3, tests: [],
   ready: [], bids: [], toAward: [], toInvestigate: [], comments: [], toAccept: [], toMerge: [], jobs: [], facts: new Map(),
   ideaFacts: new Map(), offerWindowSeconds: 1800, capacity: 2,
-  uncategorized: { issues: [], ideas: [], platforms: [] }, rewards: [], contests: [],
+  rewards: [], contests: [],
   governance: { thresholdOnly: false, managerVoteWeight: 3, closeThreshold: 3, awardThreshold: 3, acceptThreshold: 3 },
 });
 const deploymentItems = (ownerId: string, deployments: ProjectWork["deployments"]) =>
