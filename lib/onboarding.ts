@@ -12,7 +12,7 @@ export const GETTING_STARTED_COOKIE_MAX_AGE = 60 * 60 * 24 * 365;
 /** Most workspace ids the cookie keeps, so it can't grow without bound. */
 const MAX_DISMISSED = 50;
 
-export type GettingStartedStepId = "workspace" | "project" | "issue" | "invite";
+export type GettingStartedStepId = "workspace" | "project" | "issue" | "invite" | "agent";
 
 export type GettingStartedStep = {
   id: GettingStartedStepId;
@@ -22,9 +22,9 @@ export type GettingStartedStep = {
   done: boolean;
 };
 
-type Db = Pick<PrismaClient, "project" | "bug" | "membership" | "tenantInvite">;
+type Db = Pick<PrismaClient, "project" | "bug" | "membership" | "tenantInvite" | "agent">;
 
-/** The steps for one workspace, from four cheap counts. */
+/** The steps for one workspace, from five cheap counts. */
 export async function gettingStartedFor(
   db: Db,
   tenantId: string,
@@ -32,11 +32,13 @@ export async function gettingStartedFor(
   slug: ProjectRef,
   { now = new Date() }: { now?: Date } = {},
 ): Promise<{ steps: GettingStartedStep[]; complete: boolean }> {
-  const [projects, issues, members, pendingInvites] = await Promise.all([
+  const [projects, issues, members, pendingInvites, agents] = await Promise.all([
     db.project.count({ where: { tenantId } }),
     db.bug.count({ where: { tenantId, isDeleted: false } }),
     db.membership.count({ where: { tenantId } }),
     db.tenantInvite.count({ where: { tenantId, acceptedAt: null, expiresAt: { gt: now } } }),
+    // The workspace's agents (anyone's, not revoked): the step is about the workspace having one.
+    db.agent.count({ where: { tenantId, revokedAt: null } }),
   ]);
   const steps: GettingStartedStep[] = [
     {
@@ -67,8 +69,18 @@ export async function gettingStartedFor(
       href: orgPath(slug, "invites"),
       done: members > 1 || pendingInvites > 0,
     },
+    {
+      id: "agent",
+      label: "Connect your first agent",
+      hint: "An agent files issues, bids on work and delivers fixes for you. Connect one from Settings.",
+      href: "/settings/connect",
+      done: agents > 0,
+    },
   ];
-  return { steps, complete: steps.every((step) => step.done) };
+  // The list is done when the four steps it always had are. The agent step was added later, so a workspace that
+  // had already finished the list doesn't see it come back for want of an agent (the next-step card covers that).
+  const complete = steps.filter((step) => step.id !== "agent").every((step) => step.done);
+  return { steps, complete };
 }
 
 /** Workspace ids whose checklist was dismissed on this device. */

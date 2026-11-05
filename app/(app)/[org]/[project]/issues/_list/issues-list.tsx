@@ -27,6 +27,8 @@ import { IDEA_SORT_COOKIE, ISSUE_SORT_COOKIE, getIdeaOrderBy, parseIdeaSort } fr
 import { SortHeader } from "@/components/sort-header";
 import { PROJECT_LINKS_SLOT_ID, ProjectLinks } from "@/components/project-links";
 import { AgentSetupNotice, type UnconfiguredAgent } from "@/components/agent-setup-notice";
+import { WorkspaceNextStepCard } from "@/components/workspace-next-step-card";
+import { NEXT_STEP_COOKIE, workspaceNextStep, type WorkspaceNextStep } from "@/lib/workspace-next-step";
 import { missingProfileFields } from "@/lib/agents/work-gate";
 import { isTenantAdmin } from "@/lib/agents/membership";
 import type { AppRole } from "@/lib/roles";
@@ -689,6 +691,39 @@ export async function IssuesList({
           [] as UnconfiguredAgent[],
         )
       : [];
+  // The next-step card (#agents-dock) where the empty agents bar used to be: the one next thing for you, from your role and what the
+  // workspace has. Never beside AgentSetupNotice, never repeating a Getting started step that is showing, and dismissable per workspace.
+  let nextStep: WorkspaceNextStep | null = null;
+  if (tenantId && userId && membershipRole && slug !== EARN_PROJECT_SLUG && !isDeletedView) {
+    const dismissed = parseDismissed((await cookies()).get(NEXT_STEP_COOKIE)?.value).includes(tenantId);
+    if (!dismissed) {
+      const counts = await loadOrEmpty(
+        "next step",
+        async () => {
+          const now = new Date();
+          const [agentCount, memberCount, pendingInvites] = await Promise.all([
+            prisma.agent.count({ where: { tenantId, ownerUserId: userId, revokedAt: null } }),
+            prisma.membership.count({ where: { tenantId } }),
+            prisma.tenantInvite.count({ where: { tenantId, acceptedAt: null, expiresAt: { gt: now } } }),
+          ]);
+          return { agentCount, memberCount, pendingInvites };
+        },
+        null,
+      );
+      if (counts) {
+        nextStep = workspaceNextStep({
+          slug: ref,
+          membershipRole,
+          appRole: effectiveRole,
+          ...counts,
+          blockedAgentCount: unconfiguredAgents.length,
+          dismissed,
+          // The checklist is drawn on every view but Your Work (and hidden on phones).
+          openChecklistSteps: gettingStarted && !isYourWorkView ? gettingStarted.steps.filter((step) => !step.done).map((step) => step.id) : [],
+        });
+      }
+    }
+  }
   // My Work shows only when you have work in this project: issues you bid on or hold, whatever their status.
   const myWorkCount =
     userId && !isDeletedView
@@ -1042,6 +1077,7 @@ export async function IssuesList({
         <div id={PROJECT_LINKS_SLOT_ID} className="empty:hidden" />
 
         <AgentSetupNotice agents={unconfiguredAgents} />
+        {nextStep && tenantId ? <WorkspaceNextStepCard step={nextStep} tenantId={tenantId} /> : null}
 
         {milestoneSummary ? (
           <section aria-label={`Milestone ${milestoneSummary.title}`} className="rounded-[20px] border border-zk-border bg-zk-surface p-5">
