@@ -51,12 +51,12 @@ describe("investigation comments and upvotes", () => {
     expect(await byKey("bob", `review_comment:${commentId}`)).toBeUndefined();
   });
 
-  it("counts eli's upvote once and pays bob 1 point for it", async () => {
+  it("counts eli's upvote once and pays bob $0.01 for it", async () => {
     const before = await commentPoints("bob");
     expect(await ok("eli", "upvote-comment", { id: commentId })).toEqual({ commentId, votes: 1 });
     // Upvoting again is fine and counts once, and pays nothing more.
     expect(await ok("eli", "upvote-comment", { id: commentId })).toEqual({ commentId, votes: 1 });
-    expect(await commentPoints("bob")).toBe(before + 1);
+    expect(await commentPoints("bob")).toBeCloseTo(before + 0.01, 4);
     expect(await commentPoints("eli")).toBe(0);
     expect(await byKey("eli", `review_comment:${commentId}`)).toBeUndefined();
 

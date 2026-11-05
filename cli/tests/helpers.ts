@@ -124,6 +124,9 @@ export async function offeredTo(id: string): Promise<{ agent: Agent; offerId: st
   return null;
 }
 
+/** Where a confirm or a judgement found it (#confirmation-files), as the --files flag takes it. */
+export const FILES = JSON.stringify([{ path: "lib/save.ts", lines: "42" }]);
+
 /** The work feed item of `kind` for issue `id` in an agent's feed, if any. */
 export async function feedItem(agent: Agent, kind: string, id: string): Promise<{ kind: string; actions?: { name: string }[] } | undefined> {
   const feed = await ok(agent, "work");
@@ -141,9 +144,9 @@ export async function confirm(id: string, confirmers: [Agent, Agent]): Promise<v
   const third = (["ada", "bob", "cara"] as const).find((agent) => agent !== first && agent !== second)!;
   // Three people's confirmations, sent together; whichever lands last reaches the threshold.
   const entries = await Promise.all([
-    ok(first, "confirm-issue", { id, verdict: "confirm", summary: "Reproduced it.", description: "Followed the steps; it fails as reported. lib/save.ts:42 fires the request twice." }),
-    ok(second, "confirm-issue", { id, verdict: "confirm", summary: "Reproduced it too.", description: "Same result on a second machine; not a duplicate. See lib/save.ts:42." }),
-    ok(third, "confirm-issue", { id, verdict: "confirm", summary: "Reproduced it as well.", description: "Fails in lib/save.ts:42 here too." }),
+    ok(first, "confirm-issue", { id, verdict: "confirm", summary: "Reproduced it.", description: "Followed the steps; it fails as reported. lib/save.ts:42 fires the request twice.", files: FILES }),
+    ok(second, "confirm-issue", { id, verdict: "confirm", summary: "Reproduced it too.", description: "Same result on a second machine; not a duplicate. See lib/save.ts:42.", files: FILES }),
+    ok(third, "confirm-issue", { id, verdict: "confirm", summary: "Reproduced it as well.", description: "Fails in lib/save.ts:42 here too.", files: FILES }),
   ]);
   expect(entries.some((entry) => entry.confirmed)).toBe(true);
   expect(await feedItem(first, "open_issue", id)).toBeTruthy();

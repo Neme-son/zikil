@@ -7,13 +7,11 @@ import {
   POINT_TARGET_MAX,
   REPORTER_POINTS,
   REVIEWER_POINTS,
-  SOLVER_POINTS,
   TARGET_POINTS,
   TRIAGER_CLEAR_POINTS,
 } from "./rules";
 
 const hardCodedValues = {
-  solver: SOLVER_POINTS,
   reporter: REPORTER_POINTS,
   reviewer: REVIEWER_POINTS,
   confirmationReviewer: CONFIRMATION_REVIEWER_POINTS,
@@ -26,29 +24,26 @@ const hardCodedValues = {
 
 export const platformRewardConfigSchema = z
   .object({
-    solver: z.coerce.number().int().min(0).max(POINT_AWARD_MAX).default(SOLVER_POINTS),
-    reporter: z.coerce.number().int().min(0).max(POINT_AWARD_MAX).default(REPORTER_POINTS),
-    reviewer: z.coerce.number().int().min(0).max(POINT_AWARD_MAX).default(REVIEWER_POINTS),
+    reporter: z.coerce.number().min(0).max(POINT_AWARD_MAX).default(REPORTER_POINTS),
+    reviewer: z.coerce.number().min(0).max(POINT_AWARD_MAX).default(REVIEWER_POINTS),
     confirmationReviewer: z.coerce
       .number()
-      .int()
       .min(0)
       .max(POINT_AWARD_MAX)
       .default(CONFIRMATION_REVIEWER_POINTS),
-    triagerClear: z.coerce.number().int().min(0).max(POINT_AWARD_MAX).default(TRIAGER_CLEAR_POINTS),
-    duplicateMarker: z.coerce.number().int().min(0).max(POINT_AWARD_MAX).default(DUPLICATE_MARKER_POINTS),
-    dispatcher: z.coerce.number().int().min(0).max(POINT_AWARD_MAX).default(DISPATCHER_POINTS),
-    target: z.coerce.number().int().min(1).max(POINT_TARGET_MAX).default(TARGET_POINTS),
+    triagerClear: z.coerce.number().min(0).max(POINT_AWARD_MAX).default(TRIAGER_CLEAR_POINTS),
+    duplicateMarker: z.coerce.number().min(0).max(POINT_AWARD_MAX).default(DUPLICATE_MARKER_POINTS),
+    dispatcher: z.coerce.number().min(0).max(POINT_AWARD_MAX).default(DISPATCHER_POINTS),
+    target: z.coerce.number().min(1).max(POINT_TARGET_MAX).default(TARGET_POINTS),
     guidelines: z.string().trim().max(2000).optional().nullable().default(null),
   })
   .default({ ...hardCodedValues });
 
 export type PlatformRewardConfig = z.infer<typeof platformRewardConfigSchema>;
 
-/** Hard-coded ledger amounts — ultimate fallback when DB config is missing. */
+/** Hard-coded amounts, in $: the fallback when no settings are saved. Solving pays each issue's own reward (#rewards). */
 export function hardCodedPlatformRewards(): PlatformRewardConfig {
   return {
-    solver: hardCodedValues.solver,
     reporter: hardCodedValues.reporter,
     reviewer: hardCodedValues.reviewer,
     confirmationReviewer: hardCodedValues.confirmationReviewer,
@@ -75,7 +70,6 @@ export function parsePlatformRewardConfigFromFormData(formData: FormData): Platf
     return Number.isFinite(value) ? value : fallback;
   };
   return platformRewardConfigSchema.parse({
-    solver: num("solverPoints", hard.solver),
     reporter: num("reporterPoints", hard.reporter),
     reviewer: num("reviewerPoints", hard.reviewer),
     confirmationReviewer: num("confirmationReviewerPoints", hard.confirmationReviewer),

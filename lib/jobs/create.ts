@@ -67,7 +67,7 @@ export async function createJob(agent: AgentContext, input: CreateJobInput): Pro
         projectId: project.id,
         dedupeKey: job.dedupeKey,
         maxSubmissions: job.maxSubmissions,
-        pointsPerAccepted: job.pointsPerAccepted,
+        pointsPerAccepted: Number(job.pointsPerAccepted),
       },
     });
     return job;

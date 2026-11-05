@@ -5,5 +5,8 @@ export async function register() {
 
     const { startPlatformCron } = await import("@/lib/cron/scheduler");
     startPlatformCron();
+
+    const { promoteSuperAdminsOnStart } = await import("@/lib/super-admin-on-start");
+    void promoteSuperAdminsOnStart();
   }
 }

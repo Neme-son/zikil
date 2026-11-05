@@ -3,6 +3,7 @@ import { cookies } from "next/headers";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
 import { cleanEnv } from "@/lib/env-clean";
+import { deployedCommit } from "@/lib/deployed-version";
 import { calculateVoteChange } from "@/lib/voting";
 import { createdSummary } from "@/lib/activity-log";
 import {
@@ -55,15 +56,6 @@ async function isSuperAdminRequest(): Promise<boolean> {
   }
 }
 
-/** The deployed commit when the platform exposes one (#539). */
-function deployedCommit(): string | undefined {
-  return (
-    cleanEnv(process.env.SOURCE_COMMIT) ??
-    cleanEnv(process.env.VERCEL_GIT_COMMIT_SHA) ??
-    cleanEnv(process.env.GIT_COMMIT) ??
-    undefined
-  );
-}
 
 /** Public: minimal `{status:"ok"}` (or 503 `{status:"degraded"}` if DB down), plus the deployed commit when known. Super admin: full diagnostics and `?test=crud` self-test. */
 export async function GET(request: NextRequest) {

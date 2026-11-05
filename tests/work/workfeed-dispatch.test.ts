@@ -74,9 +74,11 @@ const facts = (overrides: Partial<ProjectWork["facts"] extends Map<string, infer
 function work(overrides: Partial<ProjectWork> = {}): ProjectWork {
   return {
     tenantId: "t1",
-    project: { id: "p1", slug: "ziki", name: "Ziki" },
+    project: { id: "p1", slug: "ziki", name: "Ziki", orgSlug: "zedu" },
     importance: [],
     deployments: [],
+    contests: [],
+    rewards: [],
     ideas: [],
     toConvert: [],
     toReject: [],
@@ -177,11 +179,12 @@ describe("itemsFor", () => {
     expect(merger.merge_fix.canAct).toBe(true);
   });
 
-  it("asks to bid on a ready issue, with no offer request", () => {
+  it("asks to stake or bid on a ready issue, with no offer request (#stakes)", () => {
     const [item] = itemsFor(agent("working"), work({ ready: [{ id: "b1", number: 1, title: "x", importance: 3 }] }), nothingMine);
     expect(item).toMatchObject({ kind: "ready_issue", title: "Bid on #1", canAct: true });
-    expect(item.actions.map((a) => a.name)).toEqual(["bid"]);
-    expect(item.actions[0]).toMatchObject({ method: "POST", path: "/api/v1/issues/b1/bid?projectId=p1" });
+    expect(item.actions.map((a) => a.name)).toEqual(["stake", "bid"]);
+    expect(item.actions[0]).toMatchObject({ method: "POST", path: "/api/v1/issues/b1/stake?projectId=p1" });
+    expect(item.actions[1]).toMatchObject({ method: "POST", path: "/api/v1/issues/b1/bid?projectId=p1" });
   });
 
   it("asks agents to vote for an open bid, not a working agent of its own owner, nor a past voter (#bid-votes)", () => {

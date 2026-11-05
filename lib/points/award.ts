@@ -1,7 +1,8 @@
 import type { Prisma, PrismaClient } from "@prisma/client";
-import { pointSourceKey, roundPoints, type PointRole } from "./rules";
-import { calculateSolverPoints, type ProjectRewardConfig } from "./project-rewards";
-import { getPlatformRewardConfig, getProjectRewardConfig } from "./platform-rewards";
+import { pointSourceKey, type PointRole } from "./rules";
+import { solverReward } from "./project-rewards";
+import { pointsMultiplierFor, scaledPoints } from "./multiplier";
+import { getPlatformRewardConfig } from "./platform-rewards";
 import { reportedClosedUnmerged } from "@/lib/agent-api/pull-request-report";
 
 /**
@@ -26,12 +27,25 @@ export type PointAward = {
   sourceKey: string;
   /** The agent whose work earned it (#710); omit for a person's own action. */
   agentId?: string | null;
+  /**
+   * When it was earned, for an award written later than the action that earned
+   * it (the startup backfill); omit to stamp it now.
+   */
+  createdAt?: Date;
+  /**
+   * Store `points` as given, without the workspace's multiplier. Only for an
+   * amount already read from the ledger (a correction, a penalty), which was
+   * multiplied when it was first written.
+   */
+  exact?: boolean;
 };
 
 /** Writes `entry` unless an entry with its `sourceKey` exists. True if it was written. */
 export async function award(db: Db, entry: PointAward): Promise<boolean> {
+  const { exact, ...row } = entry;
+  const multiplier = exact ? 1 : await pointsMultiplierFor(db, entry.tenantId);
   const { count } = await db.pointEntry.createMany({
-    data: [{ ...entry, points: roundPoints(entry.points) }],
+    data: [{ ...row, points: scaledPoints(entry.points, multiplier) }],
     skipDuplicates: true,
   });
   return count > 0;
@@ -57,54 +71,35 @@ export async function awardDispatcher(
 export type ResolvedIssue = {
   id: string;
   tenantId: string;
-  projectId?: string | null;
-  /** Who it was assigned to at resolution time; nobody earns points without one. */
+  /** Who it was assigned to at resolution time; nobody earns the reward without one. */
   assigneeId: string | null;
-  rewardConfig?: ProjectRewardConfig | null;
+  /** The issue's reward, in $ (#rewards). */
+  reward?: number | { toNumber(): number } | null;
   pullRequestUrl?: string | null;
 };
 
-/** The solver award for resolving `issue`, or null when nobody is assigned. */
+/** The solver award for resolving `issue`, its reward, or null when nobody is assigned. */
 export function solverAward(issue: ResolvedIssue): PointAward | null {
   if (!issue.assigneeId) return null;
-  const points = calculateSolverPoints(issue.rewardConfig);
-
   return {
     tenantId: issue.tenantId,
     userId: issue.assigneeId,
     bugId: issue.id,
     role: "solver",
-    points,
+    points: solverReward(issue.reward),
     sourceKey: pointSourceKey("solver", issue.id, issue.assigneeId),
   };
 }
 
-/** Awards solver points for a resolved issue, once per issue and person. */
-export async function awardSolver(db: Db, issue: ResolvedIssue): Promise<boolean> {
-  if (!issue.assigneeId) return false;
-
-  // #642: a pull request reported closed without merging earns no solver
-  // points (#pr-reports: the latest independent report, not GitHub).
-  if (issue.pullRequestUrl && (await reportedClosedUnmerged(issue.id, issue.pullRequestUrl, db))) return false;
-
-  let rewardConfig = issue.rewardConfig;
-  if (rewardConfig === undefined) {
-    let projectId = issue.projectId;
-    if ("bug" in db) {
-      // Look up projectId and pullRequestUrl from the issue row if not supplied
-      const bug = await (db as PrismaClient).bug.findUnique({
-        where: { id: issue.id },
-        select: { projectId: true, pullRequestUrl: true },
-      });
-      if (!projectId) projectId = bug?.projectId;
-      if (!issue.pullRequestUrl && bug?.pullRequestUrl && (await reportedClosedUnmerged(issue.id, bug.pullRequestUrl, db))) {
-        return false;
-      }
-    }
-    // Always resolve through platform → hard-coded when projectId is missing.
-    rewardConfig = await getProjectRewardConfig(db, projectId);
-  }
-
-  const entry = solverAward({ ...issue, rewardConfig });
-  return entry ? award(db, entry) : false;
+/**
+ * The solver award a resolved issue earns, read from the issue (its reward
+ * and pull request), or null: nobody assigned, or the pull request was
+ * reported closed without merging (#642). The caller holds it until the work
+ * is reported deployed (lib/points/payout.ts).
+ */
+export async function solverAwardFor(db: Db, issue: { id: string; tenantId: string; assigneeId: string | null }): Promise<PointAward | null> {
+  if (!issue.assigneeId) return null;
+  const bug = await db.bug.findUnique({ where: { id: issue.id }, select: { reward: true, pullRequestUrl: true } });
+  if (bug?.pullRequestUrl && (await reportedClosedUnmerged(issue.id, bug.pullRequestUrl, db))) return null;
+  return solverAward({ ...issue, reward: bug?.reward ?? null });
 }

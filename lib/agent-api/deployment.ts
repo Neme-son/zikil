@@ -7,6 +7,8 @@ import { publish } from "@/lib/agent-api/events";
 import { statusChangedSummary } from "@/lib/activity-log";
 import { parseIssueRef } from "@/lib/issue-ref";
 import { ENVIRONMENTS, LIVE_SUBSTATUS, moveTo } from "@/lib/issue-substatus";
+import { LIVE_REPORTS_NEEDED, liveReporters, releasePayoutIfLive } from "@/lib/points/payout";
+import { prodReporters } from "@/lib/live-confirm-data";
 
 /**
  * Deployment reports (#substatus). A Live issue's substatus says where its
@@ -14,6 +16,14 @@ import { ENVIRONMENTS, LIVE_SUBSTATUS, moveTo } from "@/lib/issue-substatus";
  * resolving puts it), On staging or On prod. Ziki never checks a deployment
  * itself: an agent checks where the work is running and reports it, and the
  * latest report is where it is. Any agent may report, on any Live issue.
+ *
+ * #live-payout: each person's latest report is kept. Once `LIVE_REPORTS_NEEDED`
+ * (3) people other than the solver have reported the work deployed, what
+ * resolving it earned is paid (lib/points/payout.ts).
+ *
+ * #live-confirm: the same rule decides On prod. A prod report moves the issue
+ * there only once that many people other than the solver have reported prod;
+ * until then it stays where it was. Dev and staging still move at once.
  */
 export const deploymentSchema = z
   .object({
@@ -30,7 +40,7 @@ export async function reportDeployment(
   scope: { tenantId: string; projectId: string },
   issueRef: string,
   rawBody: unknown,
-): Promise<{ issueId: string; status: "resolved"; substatus: Substatus; previousSubstatus: Substatus; changed: boolean }> {
+): Promise<{ issueId: string; status: "resolved"; substatus: Substatus; previousSubstatus: Substatus; changed: boolean; liveReports: number; liveReportsNeeded: number; prodReports: number; payoutReleased: boolean }> {
   const parsed = deploymentSchema.safeParse(rawBody ?? {});
   if (!parsed.success) {
     const message = parsed.error.issues[0]?.message ?? "Invalid deployment report.";
@@ -41,14 +51,22 @@ export async function reportDeployment(
   return prisma.$transaction(async (tx) => {
     const bug = await tx.bug.findFirst({
       where: { ...scope, isDeleted: false, ...(ref.kind === "number" ? { number: ref.number } : { id: ref.id }) },
-      select: { id: true, tenantId: true, status: true, substatus: true },
+      select: { id: true, tenantId: true, status: true, substatus: true, assigneeId: true },
     });
     if (!bug) throw new IssueApiError(404, NOT_FOUND, { error: "not_found", message: NOT_FOUND });
     if (bug.status !== "resolved") {
       const message = "Deployments are reported on Live issues: resolve the merged work first.";
       throw new IssueApiError(409, message, { error: "not_live", message, status: bug.status, substatus: bug.substatus });
     }
-    const to = LIVE_SUBSTATUS[environment];
+    // #live-payout: this person's report counts once, and enough of them pay what resolving it earned.
+    await tx.deploymentReport.upsert({
+      where: { bugId_onBehalfOfUserId: { bugId: bug.id, onBehalfOfUserId: agent.ownerId } },
+      create: { bugId: bug.id, onBehalfOfUserId: agent.ownerId, agentId: agent.agentId, environment, note },
+      update: { agentId: agent.agentId, environment, note },
+    });
+    // #live-confirm: one person's prod report doesn't make it On prod.
+    const prodReports = (await prodReporters(tx, bug.id, bug.assigneeId)).length;
+    const to = environment === "prod" && prodReports < LIVE_REPORTS_NEEDED ? bug.substatus : LIVE_SUBSTATUS[environment];
     const changed = to !== bug.substatus;
     if (changed) {
       await tx.bug.update({ where: { id: bug.id }, data: moveTo(to) });
@@ -58,7 +76,7 @@ export async function reportDeployment(
           actorId: agent.ownerId,
           type: "status_changed",
           summary: statusChangedSummary(bug.substatus, to),
-          metadata: { field: "status", from: bug.substatus, to, via: "deployment", environment, note },
+          metadata: { field: "status", from: bug.substatus, to, via: "deployment", environment, note, ...(environment === "prod" ? { prodReports } : {}) },
         },
       });
     }
@@ -67,6 +85,8 @@ export async function reportDeployment(
     if (changed) {
       await publish(tx, { tenantId: bug.tenantId, type: "issue.updated", actorAgentId: agent.agentId, bugId: bug.id, payload: { ...payload, values: moveTo(to) } });
     }
-    return { issueId: bug.id, status: "resolved" as const, substatus: to, previousSubstatus: bug.substatus, changed };
+    const payoutReleased = await releasePayoutIfLive(tx, bug.id);
+    const liveReports = (await liveReporters(tx, bug.id, bug.assigneeId)).length;
+    return { issueId: bug.id, status: "resolved" as const, substatus: to, previousSubstatus: bug.substatus, changed, liveReports, liveReportsNeeded: LIVE_REPORTS_NEEDED, prodReports, payoutReleased };
   });
 }

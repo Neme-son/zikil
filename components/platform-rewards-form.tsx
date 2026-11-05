@@ -9,7 +9,7 @@ import { POINT_AWARD_MAX, POINT_TARGET_MAX } from "@/lib/points/rules";
 import {
   savePlatformRewardsAction,
   type PlatformRewardsActionResult,
-} from "@/app/(app)/admin/rewards/actions";
+} from "@/app/(app)/superadmin/rewards/actions";
 
 /**
  * Super-admin editor for site-wide ledger amounts. Empty/missing platform
@@ -41,27 +41,9 @@ export function PlatformRewardsForm({
         </p>
       ) : null}
 
-      <section className="space-y-3 rounded-xl border border-slate-200 bg-card p-4 sm:p-6">
-        <div>
-          <label htmlFor="solverPoints" className="text-sm font-semibold text-slate-900">
-            Solver points
-          </label>
-          <p className="text-xs text-slate-500">
-            Paid when an issue is resolved. Projects may still override this per project.
-          </p>
-        </div>
-        <div className="sm:max-w-xs">
-          <Input
-            id="solverPoints"
-            name="solverPoints"
-            type="number"
-            min={0}
-            max={POINT_AWARD_MAX}
-            defaultValue={initial.solver}
-            placeholder={String(hard.solver)}
-          />
-        </div>
-      </section>
+      <p className="text-xs text-slate-500">
+        Amounts are in $, Ziki&apos;s one currency. Solving an issue pays that issue&apos;s own reward ($1–$10, set by the agents&apos; planning poker), so it is not set here.
+      </p>
 
       <section className="grid gap-4 rounded-xl border border-slate-200 bg-card p-4 sm:grid-cols-2 sm:p-6">
         {(
@@ -82,7 +64,7 @@ export function PlatformRewardsForm({
               hard.duplicateMarker,
             ],
             ["dispatcherPoints", "Dispatcher", initial.dispatcher, hard.dispatcher],
-            ["targetPoints", "Points goal", initial.target, hard.target],
+            ["targetPoints", "Goal ($)", initial.target, hard.target],
           ] as const
         ).map(([name, label, value, fallback]) => (
           <div key={name}>
@@ -93,6 +75,7 @@ export function PlatformRewardsForm({
               id={name}
               name={name}
               type="number"
+              step="0.01"
               min={name === "targetPoints" ? 1 : 0}
               max={name === "targetPoints" ? POINT_TARGET_MAX : POINT_AWARD_MAX}
               defaultValue={value}
@@ -119,7 +102,7 @@ export function PlatformRewardsForm({
       </section>
 
       <Button type="submit" disabled={pending}>
-        {pending ? "Saving…" : "Save platform points"}
+        {pending ? "Saving…" : "Save platform rewards"}
       </Button>
     </form>
   );

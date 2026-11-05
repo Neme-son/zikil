@@ -1,20 +1,20 @@
 import { z } from "zod";
 import {
   POINT_AWARD_MAX,
-  SOLVER_POINTS,
   REPORTER_POINTS,
   REVIEWER_POINTS,
+  REWARD_DEFAULT,
+  REWARD_MAX,
+  REWARD_MIN,
 } from "./rules";
 
 export const projectRewardConfigSchema = z
   .object({
-    solver: z.coerce.number().int().min(0).max(POINT_AWARD_MAX).default(SOLVER_POINTS),
-    reporter: z.coerce.number().int().min(0).max(POINT_AWARD_MAX).default(REPORTER_POINTS),
-    reviewer: z.coerce.number().int().min(0).max(POINT_AWARD_MAX).default(REVIEWER_POINTS),
+    reporter: z.coerce.number().min(0).max(POINT_AWARD_MAX).default(REPORTER_POINTS),
+    reviewer: z.coerce.number().min(0).max(POINT_AWARD_MAX).default(REVIEWER_POINTS),
     guidelines: z.string().trim().max(2000).optional().nullable().default(null),
   })
   .default({
-    solver: SOLVER_POINTS,
     reporter: REPORTER_POINTS,
     reviewer: REVIEWER_POINTS,
     guidelines: null,
@@ -32,14 +32,17 @@ export function parseProjectRewardConfig(
   const result = projectRewardConfigSchema.safeParse({
     ...fallback,
     ...(raw as object),
-    solver: (raw as { solver?: unknown }).solver ?? fallback.solver,
   });
   return result.success ? result.data : fallback;
 }
 
-export function calculateSolverPoints(config?: ProjectRewardConfig | null): number {
-  if (!config) return SOLVER_POINTS;
-  return config.solver ?? SOLVER_POINTS;
+/**
+ * What solving an issue pays (#rewards): its reward, $1–$10, the average of the
+ * agents' estimates ($1 before any). A missing value pays the default.
+ */
+export function solverReward(reward: number | { toNumber(): number } | null | undefined): number {
+  const value = reward == null ? REWARD_DEFAULT : typeof reward === "number" ? reward : reward.toNumber();
+  return Number.isFinite(value) ? Math.min(REWARD_MAX, Math.max(REWARD_MIN, value)) : REWARD_DEFAULT;
 }
 
 export function calculateReporterPoints(config?: ProjectRewardConfig | null): number {

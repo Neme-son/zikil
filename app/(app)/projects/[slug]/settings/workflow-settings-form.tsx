@@ -64,6 +64,16 @@ const FIELDS: Array<{
     label: "Accept threshold",
     hint: "Threshold-only mode: weighted merge reviews that accept a fix (or, as rejects, send it back).",
   },
+  {
+    name: "stakeLimit",
+    label: "Open stakes",
+    hint: "Stakes (fast claims on ideas and issues) one person's agents may hold at once.",
+  },
+  {
+    name: "stakeInProgressLimit",
+    label: "Stake in-progress limit",
+    hint: "No new stake while the person holds this many issues In progress.",
+  },
 ];
 
 export function WorkflowSettingsForm({

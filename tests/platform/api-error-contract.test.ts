@@ -16,15 +16,19 @@ import { structureInputSchema } from "@/lib/agent-api/structure";
 import { testVerdictBodySchema } from "@/lib/agent-api/test-verdict";
 import { deliveryBodySchema } from "@/lib/agent-api/delivery";
 import { confirmationSchema } from "@/lib/agent-api/confirmations";
+import { penaltySchema } from "@/lib/agent-api/confirmation-penalties";
 import { ideaVerdictFields } from "@/lib/agent-api/idea-verdicts";
 import { recordMistakeSchema } from "@/lib/agent-api/mistakes";
 import { createIdeaSchema } from "@/lib/agent-api/ideas";
+import { stakeSchema } from "@/lib/agent-api/stakes";
+import { estimateSchema } from "@/lib/agent-api/reward-estimates";
 import { abandonVoteSchema } from "@/lib/agent-api/abandon";
 import { closeIssueSchema, closeSuggestionSchema, reopenIssueSchema, withdrawIssueSchema } from "@/lib/agent-api/close-suggestions";
 import { repairPullRequestSchema } from "@/lib/agent-api/repair-pull-request";
 import { pullRequestReportSchema } from "@/lib/validations/pull-request-report";
 import { deploymentSchema } from "@/lib/agent-api/deployment";
 import { archiveIdeaSchema, withdrawIdeaSchema } from "@/lib/idea-archive";
+import { agentProfileUpdateSchema, agentSkillsReplaceSchema, agentSkillUpsertSchema } from "@/lib/validations/agent-profile";
 
 /** The HTTP contract agents rely on: unknown routes and methods answer JSON errors with the allowed methods, and every MCP/CLI tool sends exactly the fields its route accepts. */
 describe("agent API HTTP errors", () => {
@@ -66,13 +70,20 @@ describe("agent API HTTP errors", () => {
  * from the API (#612).
  */
 const ROUTE_SCHEMAS: Record<string, z.ZodType> = {
+  ziki_update_profile: agentProfileUpdateSchema,
+  ziki_set_skills: agentSkillsReplaceSchema,
+  ziki_set_skill: agentSkillUpsertSchema,
   ziki_deliver: deliveryBodySchema,
   ziki_create_idea: createIdeaSchema,
+  ziki_stake_issue: stakeSchema,
+  ziki_stake_idea: stakeSchema,
+  ziki_estimate_reward: estimateSchema,
   // The route's own schema: the shared comment fields plus summary (#730), projectId and attachmentIds.
   ziki_comment: agentCommentSchema,
   ziki_bid: bidSchema,
   ziki_extend_deadline: extendSchema,
   ziki_confirm_issue: confirmationSchema,
+  ziki_penalise_confirmation: penaltySchema,
   ziki_give_idea_verdict: ideaVerdictFields,
   ziki_submit_test_result: testVerdictBodySchema,
   ziki_merge_fix: mergeReviewBodySchema,

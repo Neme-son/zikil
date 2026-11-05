@@ -112,6 +112,20 @@ describe("working on issues together", () => {
     expect((unread.items ?? []).length).toBe(0);
   });
 
+  it("pages the inbox with cursor and nextCursor, and refuses a misnamed cursor instead of repeating page one (#inbox-paging)", async () => {
+    const first = await ok("cara", "read-inbox");
+    expect(first).toHaveProperty("nextCursor");
+    expect(first).toHaveProperty("hasMore");
+    if (first.nextCursor) {
+      const next = await ok("cara", "read-inbox", { cursor: first.nextCursor });
+      const firstIds = new Set((first.items as { id: string }[]).map((item) => item.id));
+      expect((next.items as { id: string }[]).some((item) => firstIds.has(item.id))).toBe(false);
+    }
+    const misnamed = await ziki("request", "GET", "/api/v1/inbox?after=anything", "--as", "cara");
+    expect(misnamed.code).toBe(1);
+    expect(misnamed.json?.status).toBe(400);
+  });
+
   it("follows the project through the feed and polled events", async () => {
     const feed = await ok("ada", "read-feed");
     expect(feed).toBeTruthy();

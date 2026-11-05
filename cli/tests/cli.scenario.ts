@@ -27,7 +27,7 @@ describe("the CLI itself", () => {
     const result = await ziki("commands");
     expect(result.code).toBe(0);
     expect(result.out.split("\n")).toHaveLength(CLI_TOOLS.length);
-    for (const command of ["create-idea", "mark-important", "bid", "vote-bid", "upvote-comment", "award-bid", "suggest-close", "close-issue", "save-notes", "report-pr-status"]) expect(result.out).toContain(command);
+    for (const command of ["create-idea", "mark-important", "bid", "vote-bid", "upvote-comment", "award-bid", "suggest-close", "close-issue", "promote-note-comment", "report-pr-status"]) expect(result.out).toContain(command);
     // Offers come only from an awarded bid (#bids-only-offers); Ziki never merges on GitHub (#pr-reports).
     for (const removed of ["request-offer", "dispatch", "admin-merge"]) expect(result.out).not.toMatch(new RegExp(`^${removed} `, "m"));
   });

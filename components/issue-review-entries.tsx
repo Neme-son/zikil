@@ -3,6 +3,8 @@ import { LocalTime } from "@/components/local-time";
 import { StepTitle } from "@/components/issue-timeline";
 import { EntryReplies, type EntryReplyView } from "@/components/entry-replies";
 import { EntryReplyForm, type ReplyTarget } from "@/components/entry-reply-form";
+import { EvidenceFilesList } from "@/components/evidence-files";
+import type { EvidenceFile } from "@/lib/agent-api/evidence-files";
 
 /** What a review-stage entry shows, whichever stage it is from. */
 type ReviewEntryView = {
@@ -18,6 +20,10 @@ type ReviewEntryView = {
   current: boolean;
   updatedAt: Date | string;
   replies: EntryReplyView[];
+  /** A judgement's changed files (#confirmation-files); null while hidden from this viewer. */
+  files?: EvidenceFile[] | null;
+  filesHidden?: boolean;
+  fileCount?: number;
 };
 
 export type TestVerdictView = ReviewEntryView & { goodToMerge: boolean };
@@ -53,6 +59,7 @@ function ReviewEntryList({
   replyLabel,
   emptyText,
   canReply,
+  filesHiddenUntil = "you give yours",
 }: {
   bugId: string;
   entries: ReviewEntryView[];
@@ -62,6 +69,8 @@ function ReviewEntryList({
   replyLabel: string;
   emptyText: string;
   canReply: boolean;
+  /** What shows another entry's hidden files. */
+  filesHiddenUntil?: string;
 }) {
   if (entries.length === 0) return <p className="m-0 text-[13px] text-zk-muted">{emptyText}</p>;
   return (
@@ -86,6 +95,13 @@ function ReviewEntryList({
             <EntrySummary summary={entry.summary} description={entry.description}>
               {canReply ? <EntryReplyForm bugId={bugId} target={target(entry.id)} label={replyLabel} /> : null}
             </EntrySummary>
+            <EvidenceFilesList
+              files={entry.files}
+              filesHidden={entry.filesHidden}
+              fileCount={entry.fileCount}
+              hiddenUntil={filesHiddenUntil}
+              testId={`${idPrefix}-files`}
+            />
             <EntryReplies replies={entry.replies} />
           </li>
         );
@@ -226,6 +242,7 @@ export function TestVerdictsPanel({
         replyLabel="Reply to this judgement"
         emptyText="No judgements yet."
         canReply={canReply}
+        filesHiddenUntil="you judge it too"
       />
     </section>
   );

@@ -1,6 +1,7 @@
 import { prisma } from "@/lib/prisma";
 import { logger } from "@/lib/logger";
 import { sweepExpiredOffers } from "@/lib/agent-api/offer";
+import { sweepStakes } from "@/lib/agent-api/stakes";
 import { sweepJobReviewOffers } from "@/lib/jobs/review";
 import { sweepStaleClaims } from "@/lib/agent-api/availability";
 import { dispatchDueDeliveries } from "@/lib/webhooks/deliver";
@@ -43,6 +44,7 @@ export type PlatformSweepsResult = {
   timestamp: string;
   sweeps: {
     offers: { status: "ok" | "error"; expired?: number; error?: string };
+    stakes: { status: "ok" | "error"; settled?: number; error?: string };
     jobReviewOffers: { status: "ok" | "error"; expired?: number; offered?: number; error?: string };
     claims: { status: "ok" | "error"; released?: number; error?: string };
     orphanedIssues: { status: "ok" | "error"; reopened?: number; error?: string };
@@ -88,6 +90,7 @@ export async function runPlatformSweeps(): Promise<PlatformSweepsResult | { skip
       timestamp,
       sweeps: {
         offers: { status: "ok" },
+        stakes: { status: "ok" },
         jobReviewOffers: { status: "ok" },
         claims: { status: "ok" },
         orphanedIssues: { status: "ok" },
@@ -105,6 +108,16 @@ export async function runPlatformSweeps(): Promise<PlatformSweepsResult | { skip
     } catch (err) {
       recordSweepFailure("offers", err);
       result.sweeps.offers = { status: "error", error: err instanceof Error ? err.message : String(err) };
+    }
+
+    // 1a. Stakes (#stakes): drops, 10-minute wins and decided contests.
+    try {
+      const res = await sweepStakes();
+      recordSweepSuccess("stakes");
+      result.sweeps.stakes = { status: "ok", settled: res.settled };
+    } catch (err) {
+      recordSweepFailure("stakes", err);
+      result.sweeps.stakes = { status: "error", error: err instanceof Error ? err.message : String(err) };
     }
 
     // 1b. Job Review Offers

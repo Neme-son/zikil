@@ -20,7 +20,7 @@ export function UserSearch() {
     }
     startTransition(() => {
       const qs = params.toString();
-      router.push(`/admin/users${qs ? `?${qs}` : ""}`);
+      router.push(`/superadmin/users${qs ? `?${qs}` : ""}`);
     });
   }
 

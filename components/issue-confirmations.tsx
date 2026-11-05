@@ -8,6 +8,9 @@ import { EntryReplyForm } from "@/components/entry-reply-form";
 import { EntryReplies, type EntryReplyView } from "@/components/entry-replies";
 import type { ConfirmationVerdictName } from "@/components/confirmation-form";
 import { issuePath } from "@/lib/issue-ref";
+import { projectRef } from "@/lib/project-paths";
+import { EvidenceFilesList } from "@/components/evidence-files";
+import type { EvidenceFile } from "@/lib/agent-api/evidence-files";
 
 export type ConfirmationReplyView = EntryReplyView;
 
@@ -16,7 +19,7 @@ export type ConfirmationEntryView = {
   verdict: ConfirmationVerdictName;
   summary: string;
   description: string;
-  duplicateOf: { id: string; number: number; projectSlug: string } | null;
+  duplicateOf: { id: string; number: number; projectSlug: string; orgSlug: string } | null;
   onBehalfOfUserId: string;
   by: string;
   agentName: string | null;
@@ -28,6 +31,20 @@ export type ConfirmationEntryView = {
   /** Evidence: screenshots and other files, served at /api/attachments/{id}. */
   attachments?: { id: string; filename: string; contentType: string }[];
   replies: ConfirmationReplyView[];
+  /** Where it was found (#confirmation-files); null while hidden from this viewer. */
+  files?: EvidenceFile[] | null;
+  filesHidden?: boolean;
+  fileCount?: number;
+  /** A penalty another confirmer gave it (#confirmation-penalties). */
+  penalty?: { id: string; reason: string; points: number; byAgentName: string } | null;
+  /** The agent's reputation (#agent-reputation). */
+  agentReputation?: number | null;
+};
+
+const PENALTY_REASONS: Record<string, string> = {
+  irrelevant: "files not relevant",
+  missing: "files don't exist",
+  empty: "files empty",
 };
 
 export type ConfirmationsData = {
@@ -154,10 +171,24 @@ export function IssueConfirmationsPanel({
               <p className="m-0 flex flex-wrap items-center gap-x-2 gap-y-1 pr-8 text-[13px]">
                 <b className="font-semibold text-zk-text">{entry.by}</b>
                 {entry.agentName ? <span className="text-zk-muted">via {entry.agentName}</span> : null}
+                {entry.agentName && entry.agentReputation != null ? (
+                  <span
+                    className={`whitespace-nowrap text-xs ${entry.agentReputation < 0 ? "font-semibold text-zk-bad-fg" : "text-zk-muted"}`}
+                    title="The agent's reputation: down for penalties on its confirmations, up for upvotes on its comments."
+                    data-testid="confirmation-reputation"
+                  >
+                    · reputation {entry.agentReputation}
+                  </span>
+                ) : null}
+                {entry.penalty ? (
+                  <span className="whitespace-nowrap rounded-md bg-zk-bad-bg px-1.5 py-0.5 text-[11px] font-bold text-zk-bad-fg" data-testid="confirmation-penalised">
+                    Penalised: {PENALTY_REASONS[entry.penalty.reason] ?? entry.penalty.reason}
+                  </span>
+                ) : null}
                 {entry.duplicateOf ? (
                   <span className="text-zk-muted">
                     · duplicate of{" "}
-                    <Link href={issuePath(entry.duplicateOf.projectSlug, entry.duplicateOf.number)} className="font-bold text-zk-accent hover:underline">
+                    <Link href={issuePath(projectRef(entry.duplicateOf.orgSlug, entry.duplicateOf.projectSlug), entry.duplicateOf.number)} className="font-bold text-zk-accent hover:underline">
                       #{entry.duplicateOf.number}
                     </Link>
                   </span>
@@ -172,6 +203,13 @@ export function IssueConfirmationsPanel({
                 ) : null}
               </p>
               <EntrySummary summary={entry.summary} description={entry.description} />
+              <EvidenceFilesList
+                files={entry.files}
+                filesHidden={entry.filesHidden}
+                fileCount={entry.fileCount}
+                hiddenUntil="you confirm too"
+                testId="confirmation-files"
+              />
               {entry.attachments?.length ? (
                 <ul className="m-0 mt-2 flex list-none flex-wrap gap-2 p-0" data-testid="confirmation-attachments">
                   {entry.attachments.map((file) => (
@@ -253,6 +291,7 @@ export function IssueConfirmationsPanel({
                       summary: mine.summary,
                       description: mine.description,
                       duplicateOfNumber: mine.duplicateOf?.number ?? null,
+                      files: mine.files ?? [],
                     }
                   : null
               }

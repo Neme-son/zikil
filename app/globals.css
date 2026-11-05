@@ -449,6 +449,19 @@ body:has([data-app-shell]) {
   }
 }
 
+/* The site/code icon after the panel flies into it (components/project-links.tsx). */
+@keyframes zk-links-arrive {
+  0% { transform: scale(1); box-shadow: 0 0 0 0 rgba(37, 99, 235, 0.45); }
+  40% { transform: scale(1.18); }
+  100% { transform: scale(1); box-shadow: 0 0 0 10px rgba(37, 99, 235, 0); }
+}
+
+/* The typing cursor while Claude writes up an idea (components/claude-working.tsx). */
+@keyframes zk-caret {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+
 /* The agents dock (#agents-dock): a working agent bobs, a waiting one waves, an idle one breathes. */
 @keyframes zk-agent-work {
   0%, 100% { transform: translateY(0) rotate(0deg); }
@@ -461,7 +474,56 @@ body:has([data-app-shell]) {
   10%, 30% { transform: rotate(-10deg); }
   20%, 40% { transform: rotate(10deg); }
 }
+/* The agents dock's faces (components/agent-face.tsx): a blink, a glance at work, a pulsing ring when it needs you or is stuck. */
+@keyframes zk-face-blink {
+  0%, 92%, 100% { transform: scaleY(1); }
+  95% { transform: scaleY(0.12); }
+}
+@keyframes zk-face-glance {
+  0%, 30%, 100% { transform: translateX(0); }
+  40%, 60% { transform: translateX(1.5px); }
+  70%, 90% { transform: translateX(-1.2px); }
+}
+@keyframes zk-face-ring {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.25; }
+}
+/* The agents dock's panel grows up out of its Agents button (components/agents-dock.tsx). */
+@keyframes zk-dock-rise {
+  from { opacity: 0; transform: translateY(8px) scale(0.96); }
+  to { opacity: 1; transform: none; }
+}
 @keyframes zk-agent-breathe {
   0%, 100% { transform: scale(1); }
   50% { transform: scale(1.06); }
+}
+
+/* Earn (#earn-drafts): the money bar fills in, and a paid task pops. Reduced motion shows the end state at once. */
+@keyframes earn-grow {
+  from { transform: scaleX(0); }
+  to { transform: scaleX(1); }
+}
+@keyframes earn-coin {
+  0% { opacity: 0; transform: translateY(-28px) rotateY(0deg) scale(0.6); }
+  55% { opacity: 1; transform: translateY(4px) rotateY(540deg) scale(1.08); }
+  75% { transform: translateY(-3px) rotateY(720deg) scale(1); }
+  100% { opacity: 1; transform: translateY(0) rotateY(720deg) scale(1); }
+}
+@keyframes earn-spark {
+  0% { opacity: 1; transform: translate(0, 0) scale(1); }
+  100% { opacity: 0; transform: translate(var(--dx), var(--dy)) scale(0.4); }
+}
+@keyframes earn-hop {
+  0%, 100% { transform: translateY(0); }
+  35% { transform: translateY(-9px); }
+  60% { transform: translateY(0); }
+  80% { transform: translateY(-3px); }
+}
+.earn-grow { transform-origin: left center; animation: earn-grow 0.9s cubic-bezier(0.16, 1, 0.3, 1) both; }
+.earn-coin { animation: earn-coin 0.9s cubic-bezier(0.16, 1, 0.3, 1) both; }
+.earn-spark { animation: earn-spark 0.9s cubic-bezier(0.16, 1, 0.3, 1) 0.45s both; }
+.earn-hop { animation: earn-hop 0.8s ease-out 0.5s both; }
+@media (prefers-reduced-motion: reduce) {
+  .earn-grow, .earn-coin, .earn-spark, .earn-hop { animation: none; }
+  .earn-spark { opacity: 0; }
 }

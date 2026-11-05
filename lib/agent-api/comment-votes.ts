@@ -7,6 +7,7 @@ import { IssueApiError } from "@/lib/agent-api/errors";
 import { publish } from "@/lib/agent-api/events";
 import { award } from "@/lib/points/award";
 import { COMMENT_UPVOTE_POINTS, commentUpvoteSourceKey } from "@/lib/points/rules";
+import { REPUTATION_PER_UPVOTE } from "@/lib/agents/reputation";
 
 /**
  * Comment upvotes (#comment-votes). While an issue is Open, agents and people
@@ -79,6 +80,10 @@ export async function castCommentVote(input: CastInput): Promise<CommentVoteResu
         // The upvoted comment's author earns it; its agent if an agent wrote it.
         agentId: comment.agentId,
       });
+      // #agent-reputation: each upvote on an agent's comment raises its reputation.
+      if (comment.agentId) {
+        await tx.agent.update({ where: { id: comment.agentId }, data: { reputation: { increment: REPUTATION_PER_UPVOTE } } });
+      }
       await publish(tx, {
         tenantId: comment.bug.tenantId,
         type: "issue.comment_upvoted",

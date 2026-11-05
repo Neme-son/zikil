@@ -1,3 +1,4 @@
+import { refreshIssueRatings } from "@/lib/agents/profile";
 import { Prisma } from "@prisma/client";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
@@ -19,6 +20,7 @@ import { refreshJudgedStatus } from "@/lib/agent-api/tested-status";
 import { entryDescription, entryReplySelect, entrySummary, toEntryReplies, type EntryReply } from "@/lib/agent-api/entry-fields";
 import { IssueApiError } from "@/lib/agent-api/errors";
 import { issueIdFor, parseIssueRef } from "@/lib/issue-ref";
+import { canSeeEvidenceFiles, evidenceFilesSchema, evidenceFilesView, uniqueEvidenceFiles, type EvidenceFilesView } from "@/lib/agent-api/evidence-files";
 
 /**
  * Reviewer agents reporting whether a fix is good to merge (#434). A verdict
@@ -61,6 +63,11 @@ export const testVerdictBodySchema = z.object({
   description: entryDescription,
   /** The person the agent acts for; defaults to its owner. */
   onBehalfOfUserId: z.string().trim().min(1).max(191).optional(),
+  /**
+   * The changed files you judged (#confirmation-files): [{ path, lines? }].
+   * Required. Other testers see them only once they have judged too.
+   */
+  files: evidenceFilesSchema.min(1, "files: list the changed files you judged, as [{ path, lines? }]."),
   /**
    * The head commit the reviewer tested (#489). Defaults to the SHA recorded
    * when the pull request was linked, so every verdict names its code.
@@ -131,7 +138,9 @@ function invalidVerdict(error: z.ZodError): { status: 400; error: "invalid_reque
       ? "Add a summary."
       : field === "description" && issue?.code === "invalid_type"
         ? "Add a description of what you tested and why it is, or isn't, good to merge."
-        : issue?.message ?? "Invalid test verdict.";
+        : field === "files" && issue?.code === "invalid_type"
+          ? "files: list the changed files you judged, as [{ path, lines? }]."
+          : issue?.message ?? "Invalid test verdict.";
   return { status: 400, error: "invalid_request", message, ...(field ? { field } : {}) };
 }
 
@@ -289,6 +298,7 @@ export async function submitTestVerdict(
             onBehalfOfUserId,
             pullRequestUrl,
             headSha,
+            files: uniqueEvidenceFiles(body.files),
             changedAt: new Date(),
           },
           select: verdictSelect,
@@ -336,6 +346,7 @@ export async function submitTestVerdict(
           description: body.description,
           pullRequestUrl,
           headSha,
+          files: uniqueEvidenceFiles(body.files),
         },
         select: verdictSelect,
       });
@@ -360,6 +371,8 @@ export async function submitTestVerdict(
     });
     // #delivered-step: enough independent judgements move it to Done, or back to Open.
     await refreshJudgedStatus(prisma, bug.id, agent.ownerId);
+    // #agent-profile: a judgement moves the rating of whoever delivered the work.
+    await refreshIssueRatings(prisma, bug.id).catch((error: unknown) => console.error("[agent-rating] refresh failed", error));
     return result;
   } catch (error) {
     if (
@@ -434,11 +447,19 @@ export type TestVerdictEntry = {
   createdAt: Date;
   updatedAt: Date;
   replies: EntryReply[];
-};
+} & EvidenceFilesView;
+
+/**
+ * Who is reading, for the files rule (#confirmation-files): another tester's
+ * files show once the viewer has judged the issue too; their own and
+ * workspace admins always see them. Without a viewer they are hidden.
+ */
+export type VerdictViewer = { userId: string; admin?: boolean };
 
 /** Every test verdict on one issue, newest first. */
 export async function testVerdictEntries(
   bug: { id: string; pullRequestUrl: string | null; pullRequestHeadSha: string | null },
+  viewer: VerdictViewer | null,
   db: Prisma.TransactionClient | typeof prisma = prisma,
 ): Promise<TestVerdictEntry[]> {
   const rows = await db.testVerdict.findMany({
@@ -453,6 +474,7 @@ export async function testVerdictEntries(
       description: true,
       pullRequestUrl: true,
       headSha: true,
+      files: true,
       createdAt: true,
       updatedAt: true,
       agent: { select: { name: true } },
@@ -460,8 +482,11 @@ export async function testVerdictEntries(
       replies: entryReplySelect,
     },
   });
-  return rows.map(({ agent, onBehalfOf, replies, ...row }) => ({
+  const judged = Boolean(viewer) && rows.some((row) => row.onBehalfOfUserId === viewer?.userId);
+  const evidenceViewer = viewer ? { ...viewer, hasOwnEntry: judged } : null;
+  return rows.map(({ agent, onBehalfOf, replies, files, ...row }) => ({
     ...row,
+    ...evidenceFilesView(files, canSeeEvidenceFiles(evidenceViewer, row.onBehalfOfUserId)),
     agentName: agent.name,
     by: onBehalfOf.name ?? "A member",
     current:
@@ -473,7 +498,7 @@ export async function testVerdictEntries(
 }
 
 /** GET /issues/{id}/test-results: the issue's test verdicts, each with its replies. */
-export async function listTestVerdicts(scope: { tenantId: string; projectId?: string }, issueRef: string) {
+export async function listTestVerdicts(scope: { tenantId: string; projectId?: string }, issueRef: string, viewer: VerdictViewer | null) {
   const ref = parseIssueRef(issueRef);
   const bug = await prisma.bug.findFirst({
     where: { ...scope, isDeleted: false, ...(ref.kind === "number" ? { number: ref.number } : { id: ref.id }) },
@@ -485,6 +510,6 @@ export async function listTestVerdicts(scope: { tenantId: string; projectId?: st
     issueNumber: bug.number,
     pullRequestUrl: bug.pullRequestUrl,
     headSha: bug.pullRequestHeadSha,
-    verdicts: await testVerdictEntries(bug),
+    verdicts: await testVerdictEntries(bug, viewer),
   };
 }

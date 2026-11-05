@@ -7,7 +7,7 @@ import { IssueApiError } from "@/lib/agent-api/errors";
 import { publish } from "@/lib/agent-api/events";
 import { ENTRY_SUMMARY_MAX_CHARS, entryDescription, entrySummary } from "@/lib/agent-api/entry-fields";
 import { award, type PointAward } from "@/lib/points/award";
-import { confirmationReviewerSourceKey, duplicateMarkerSourceKey, pointSourceKey, reviewerPointsAt, triagerClearSourceKey } from "@/lib/points/rules";
+import { confirmationPointsAt, confirmationReviewerSourceKey, duplicateMarkerSourceKey, pointSourceKey, triagerClearSourceKey } from "@/lib/points/rules";
 import { calculateReporterPoints } from "@/lib/points/project-rewards";
 import { getPlatformRewardConfig, getProjectRewardConfig } from "@/lib/points/platform-rewards";
 import { workflowFor } from "@/lib/workflow";
@@ -18,10 +18,13 @@ import { isThresholdOnly } from "@/lib/governance";
 import { linkAttachments } from "@/lib/attachment-link";
 import { MAX_ATTACHMENTS_PER_ITEM } from "@/lib/attachments";
 import { moveTo } from "@/lib/issue-substatus";
+import { penalisedConfirmationIds } from "@/lib/agent-api/confirmation-penalties";
+import { canSeeEvidenceFiles, evidenceFilesSchema, evidenceFilesView, uniqueEvidenceFiles, type EvidenceFile, type EvidenceFilesView } from "@/lib/agent-api/evidence-files";
 
 /**
  * Confirmations (#issue-confirmations). An issue at Requires confirmation
- * takes one entry per person: `confirm` (it is real and not a duplicate),
+ * takes one entry per person, and so does one whose work started before it was
+ * confirmed (`takesConfirmations`): `confirm` (it is real and not a duplicate),
  * `reject` (it is not real, or, with `duplicateOfId`, it duplicates another
  * issue) or `neutral`. Every entry has a summary of at most two sentences and
  * a full description — nobody gives a bare verdict. Giving it again replaces
@@ -63,9 +66,18 @@ export const confirmationSchema = z
     duplicateOfId: ref.optional(),
     /** Uploaded files (screenshots) attached as evidence, from POST /api/v1/attachments. */
     attachmentIds: z.array(ref).max(MAX_ATTACHMENTS_PER_ITEM).optional(),
+    /**
+     * The files, and optionally the lines, where the issue is (#confirmation-files):
+     * [{ path, lines? }]. Required with confirm. Other agents see them only once
+     * they have confirmed too.
+     */
+    files: evidenceFilesSchema.optional(),
   })
   .strict()
   .superRefine((body, ctx) => {
+    if (body.verdict === "confirm" && !(body.files && body.files.length > 0)) {
+      ctx.addIssue({ code: "custom", path: ["files"], message: "A confirm needs files: the files (and lines) where you found the issue, as [{ path, lines? }]." });
+    }
     if (body.duplicateOfId && body.verdict !== "reject") {
       ctx.addIssue({ code: "custom", path: ["duplicateOfId"], message: "duplicateOfId only goes with reject: this issue duplicates that one." });
     }
@@ -138,32 +150,44 @@ export async function standingConfirmationAwards(db: Db, bugId: string): Promise
   const platform = await getPlatformRewardConfig(db);
   const entries: PointAward[] = [];
   const duplicate = state.duplicate || Boolean(bug.duplicateOfId);
-  let reviewerIndex = 0;
+  const order = paidConfirmerOrder(state.counted, bug);
+  // #confirmation-penalties: a penalised confirmation's points went to the penaliser.
+  const penalised = await penalisedConfirmationIds(db, bugId);
   for (const entry of state.counted) {
     const userId = entry.onBehalfOfUserId;
+    if (penalised.has(entry.id)) continue;
     // An entry on the person's own issue counts toward the threshold but pays no confirmer points.
     if (ownsIssue(userId, bug)) continue;
+    // Attribution: the agent that gave it, and when it was given, not when this backfill ran.
+    const earned = { agentId: entry.agentId, createdAt: entry.updatedAt };
     if (entry.verdict === "confirm") {
-      // A confirm is the old "real" accept and the duplicate clearance in one.
-      if (!duplicate) {
+      // A confirm is the old "real" accept and the duplicate clearance in one, paid by the
+      // confirmer's place in line (#confirmation-pay): nothing for pile-ons.
+      const index = order.indexOf(userId);
+      const review = confirmationPointsAt(index, platform.confirmationReviewer);
+      if (!duplicate && review > 0) {
         entries.push({
           tenantId: bug.tenantId,
           userId,
           bugId,
           role: "reviewer",
-          points: reviewerPointsAt(reviewerIndex, platform.confirmationReviewer),
+          points: review,
           sourceKey: confirmationReviewerSourceKey(bugId, userId),
+          ...earned,
         });
       }
-      reviewerIndex += 1;
-      entries.push({
-        tenantId: bug.tenantId,
-        userId,
-        bugId,
-        role: "triager",
-        points: platform.triagerClear,
-        sourceKey: triagerClearSourceKey(bugId, userId),
-      });
+      const clear = confirmationPointsAt(index, platform.triagerClear);
+      if (clear > 0) {
+        entries.push({
+          tenantId: bug.tenantId,
+          userId,
+          bugId,
+          role: "triager",
+          points: clear,
+          sourceKey: triagerClearSourceKey(bugId, userId),
+          ...earned,
+        });
+      }
     } else if (entry.verdict === "reject" && entry.duplicateOfId) {
       entries.push({
         tenantId: bug.tenantId,
@@ -172,10 +196,24 @@ export async function standingConfirmationAwards(db: Db, bugId: string): Promise
         role: "triager",
         points: platform.duplicateMarker,
         sourceKey: duplicateMarkerSourceKey(bugId, userId),
+        ...earned,
       });
     }
   }
   return entries;
+}
+
+/**
+ * The people paid for confirming an issue, in the order they confirmed
+ * (#confirmation-pay): the counted confirms, one per person, leaving out the
+ * issue's own people (their confirm counts but pays no confirmer points). A
+ * confirmer's place in this list sets their share (`confirmationPayFactor`).
+ */
+export function paidConfirmerOrder(
+  counted: readonly { verdict: string; onBehalfOfUserId: string }[],
+  bug: Parameters<typeof ownsIssue>[1],
+): string[] {
+  return [...new Set(counted.filter((entry) => entry.verdict === "confirm" && !ownsIssue(entry.onBehalfOfUserId, bug)).map((entry) => entry.onBehalfOfUserId))];
 }
 
 export type GivenConfirmation = {
@@ -188,6 +226,8 @@ export type GivenConfirmation = {
     duplicateOfId: string | null;
     onBehalfOfUserId: string;
     agentId: string | null;
+    /** The files this entry points at; the giver always sees their own. */
+    files: EvidenceFile[];
     createdAt: Date;
     updatedAt: Date;
   };
@@ -203,6 +243,24 @@ export type GivenConfirmation = {
 };
 
 const NOT_FOUND = "No such issue in this project.";
+
+/**
+ * Where an issue can be before it is confirmed. A bid can be awarded while the
+ * issue awaits confirmation (#open-award), and a released claim sends it back
+ * to Open, so its work can start, be delivered and be judged first; accepting
+ * it still needs the confirmation (`merge.ts`), so it must still be possible
+ * to give one there.
+ */
+const UNCONFIRMED_WORK_SUBSTATUSES: ReadonlySet<string> = new Set(["open", "in_progress", "requires_review", "accepted"]);
+
+/**
+ * Whether an issue takes confirmation entries: always at Requires
+ * confirmation, and at the stages above until it is confirmed.
+ */
+export function takesConfirmations(substatus: string, confirmed: boolean): boolean {
+  if (substatus === "requires_confirmation") return true;
+  return !confirmed && UNCONFIRMED_WORK_SUBSTATUSES.has(substatus);
+}
 
 /** Resolves `duplicateOfId` (an id or a number) to another issue in the tenant. */
 async function resolveDuplicate(tx: Prisma.TransactionClient, tenantId: string, bugId: string, raw: string): Promise<string> {
@@ -243,14 +301,14 @@ export async function giveConfirmation(
     const bug = await tx.bug.findUnique({ where: { id: found.id }, select: bugSelect });
     if (!bug || bug.isDeleted) throw new IssueApiError(404, NOT_FOUND, { error: "not_found", message: NOT_FOUND });
 
-    if (bug.substatus !== "requires_confirmation") {
-      const message = "This issue is not at Requires confirmation, so it takes no confirmations.";
+    const before = await confirmationStateOf(bug.id, tx);
+    const wasConfirmed = before?.confirmed ?? false;
+    if (!takesConfirmations(bug.substatus, wasConfirmed)) {
+      const message = "This issue is not at Requires confirmation and is already confirmed, so it takes no confirmations.";
       throw new IssueApiError(409, message, { error: "not_confirming", message, status: bug.status, substatus: bug.substatus });
     }
 
     const duplicateOfId = input.duplicateOfId ? await resolveDuplicate(tx, bug.tenantId, bug.id, input.duplicateOfId) : null;
-    const before = await confirmationStateOf(bug.id, tx);
-    const wasConfirmed = before?.confirmed ?? false;
 
     // One entry per person per class: a manager agent's and a worker's (or the person's) are separate.
     const weightClass = giver.agent && hasLevel(giver.agent.level, "manager") ? "manager" : "working";
@@ -262,6 +320,7 @@ export async function giveConfirmation(
       summary: input.summary,
       description: input.description,
       duplicateOfId,
+      files: uniqueEvidenceFiles(input.files ?? []),
       // Giving it again after an undo is a new entry.
       undoneAt: null,
     };
@@ -271,7 +330,7 @@ export async function giveConfirmation(
       update: data,
       select: {
         id: true, weightClass: true, verdict: true, summary: true, description: true, duplicateOfId: true,
-        onBehalfOfUserId: true, agentId: true, createdAt: true, updatedAt: true,
+        onBehalfOfUserId: true, agentId: true, files: true, createdAt: true, updatedAt: true,
       },
     });
 
@@ -292,7 +351,9 @@ export async function giveConfirmation(
 
     // A confirmed issue waits for an agent to move it to Open (openConfirmedIssue);
     // in a threshold-only project the confirm that reaches the threshold opens it.
-    const opened = confirmed && isThresholdOnly(await workflowFor(bug.projectId, tx));
+    // An issue whose work started first stays where it is.
+    const opened =
+      confirmed && bug.substatus === "requires_confirmation" && isThresholdOnly(await workflowFor(bug.projectId, tx));
     if (opened) await moveToOpen(tx, bug.id, giver.userId, "threshold");
 
     // Points: the same keys the backfill recomputes (`standingConfirmationAwards`).
@@ -302,24 +363,31 @@ export async function giveConfirmation(
     // confirmer points: the reporter points pay for it.
     const own = ownsIssue(giver.userId, bug);
     const counted = !own && (after?.counted.some((entry) => entry.id === confirmation.id) ?? false);
-    if (counted && input.verdict === "confirm") {
-      await award(tx, {
-        tenantId: bug.tenantId,
-        userId: giver.userId,
-        bugId: bug.id,
-        role: "triager",
-        points: platform.triagerClear,
-        sourceKey: triagerClearSourceKey(bug.id, giver.userId),
-        agentId: giver.agent?.id ?? null,
-      });
-      const index = after?.confirmers.indexOf(giver.userId) ?? -1;
-      if (!duplicate && index >= 0) {
+    // #confirmation-penalties: a penalised confirmation earns nothing, even given again.
+    const penalised = counted && (await penalisedConfirmationIds(tx, bug.id)).has(confirmation.id);
+    if (counted && !penalised && input.verdict === "confirm") {
+      // #confirmation-pay: the first three confirmers in full, the next three 1/2, 1/4, 1/8, then nothing.
+      const index = paidConfirmerOrder(after?.counted ?? [], bug).indexOf(giver.userId);
+      const clear = confirmationPointsAt(index, platform.triagerClear);
+      if (clear > 0) {
+        await award(tx, {
+          tenantId: bug.tenantId,
+          userId: giver.userId,
+          bugId: bug.id,
+          role: "triager",
+          points: clear,
+          sourceKey: triagerClearSourceKey(bug.id, giver.userId),
+          agentId: giver.agent?.id ?? null,
+        });
+      }
+      const review = confirmationPointsAt(index, platform.confirmationReviewer);
+      if (!duplicate && review > 0) {
         await award(tx, {
           tenantId: bug.tenantId,
           userId: giver.userId,
           bugId: bug.id,
           role: "reviewer",
-          points: reviewerPointsAt(index, platform.confirmationReviewer),
+          points: review,
           sourceKey: confirmationReviewerSourceKey(bug.id, giver.userId),
           agentId: giver.agent?.id ?? null,
         });
@@ -379,7 +447,7 @@ export async function giveConfirmation(
     }
 
     return {
-      confirmation,
+      confirmation: { ...confirmation, files: evidenceFilesView(confirmation.files, true).files ?? [] },
       replaced: Boolean(existing),
       confirmed,
       newlyConfirmed,
@@ -465,7 +533,7 @@ export type ConfirmationView = {
   verdict: ConfirmationVerdict;
   summary: string;
   description: string;
-  duplicateOf: { id: string; number: number; projectSlug: string } | null;
+  duplicateOf: { id: string; number: number; projectSlug: string; orgSlug: string } | null;
   onBehalfOfUserId: string;
   by: string;
   agentId: string | null;
@@ -478,7 +546,11 @@ export type ConfirmationView = {
   /** Evidence files (screenshots); served at /api/attachments/{id}. */
   attachments: { id: string; filename: string; contentType: string }[];
   replies: ConfirmationReply[];
-};
+  /** The penalty another confirmer gave it (#confirmation-penalties), if any. */
+  penalty: { id: string; reason: string; points: number; byAgentName: string; createdAt: Date } | null;
+  /** The agent's global reputation (#agent-reputation); null for a person's own entry. */
+  agentReputation: number | null;
+} & EvidenceFilesView;
 
 export type ConfirmationList = {
   issueId: string;
@@ -491,8 +563,21 @@ export type ConfirmationList = {
   entries: ConfirmationView[];
 };
 
+/**
+ * Who is reading the list, for the files rule (#confirmation-files): another
+ * confirmer's files show only once the viewer has a confirm of their own on
+ * the issue; their own entries and workspace admins always see them. Without
+ * a viewer every entry's files are hidden.
+ */
+export type ConfirmationViewer = { userId: string; admin?: boolean };
+
 /** Every confirmation entry on an issue (by number or id), newest first, with its replies. */
-export async function listConfirmations(scope: { tenantId: string; projectId?: string }, issueRef: string, db: PrismaClient = prisma): Promise<ConfirmationList> {
+export async function listConfirmations(
+  scope: { tenantId: string; projectId?: string },
+  issueRef: string,
+  viewer: ConfirmationViewer | null,
+  db: PrismaClient = prisma,
+): Promise<ConfirmationList> {
   const parsed = parseIssueRef(issueRef);
   const bug = await db.bug.findFirst({
     where: { ...scope, isDeleted: false, ...(parsed.kind === "number" ? { number: parsed.number } : { id: parsed.id }) },
@@ -506,10 +591,11 @@ export async function listConfirmations(scope: { tenantId: string; projectId?: s
       orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
       select: {
         id: true, weightClass: true, verdict: true, summary: true, description: true, duplicateOfId: true,
-        onBehalfOfUserId: true, agentId: true, undoneAt: true, createdAt: true, updatedAt: true,
+        onBehalfOfUserId: true, agentId: true, undoneAt: true, createdAt: true, updatedAt: true, files: true,
         onBehalfOf: { select: { name: true } },
         attachments: { orderBy: { createdAt: "asc" }, select: { id: true, filename: true, contentType: true } },
-        agent: { select: { name: true } },
+        agent: { select: { name: true, reputation: true } },
+        penalty: { select: { id: true, reason: true, points: true, createdAt: true, agent: { select: { name: true } } } },
         replies: {
           where: { deletedAt: null },
           orderBy: [{ createdAt: "asc" }, { id: "asc" }],
@@ -524,11 +610,13 @@ export async function listConfirmations(scope: { tenantId: string; projectId?: s
   ]);
   const duplicateIds = [...new Set(rows.map((row) => row.duplicateOfId).filter((id): id is string => Boolean(id)))];
   const duplicates = duplicateIds.length
-    ? await db.bug.findMany({ where: { id: { in: duplicateIds } }, select: { id: true, number: true, project: { select: { slug: true } } } })
+    ? await db.bug.findMany({ where: { id: { in: duplicateIds } }, select: { id: true, number: true, project: { select: { slug: true, tenant: { select: { slug: true } } } } } })
     : [];
-  const duplicateById = new Map(duplicates.map((d) => [d.id, { id: d.id, number: d.number, projectSlug: d.project.slug }]));
+  const duplicateById = new Map(duplicates.map((d) => [d.id, { id: d.id, number: d.number, projectSlug: d.project.slug, orgSlug: d.project.tenant.slug }]));
   const counted = new Map(state?.counted.map((entry) => [entry.id, entry.weight]) ?? []);
   const needed = state?.needed ?? (await workflowFor(bug.projectId, db)).confirmationsNeeded;
+  const hasOwnConfirm = Boolean(viewer) && rows.some((row) => row.onBehalfOfUserId === viewer?.userId && row.verdict === "confirm" && !row.undoneAt);
+  const evidenceViewer = viewer ? { ...viewer, hasOwnEntry: hasOwnConfirm } : null;
   return {
     issueId: bug.id,
     issueNumber: bug.number,
@@ -537,8 +625,13 @@ export async function listConfirmations(scope: { tenantId: string; projectId?: s
     confirmations: state?.accepts ?? 0,
     rejections: state?.rejects ?? 0,
     confirmationsNeeded: needed,
-    entries: rows.map(({ onBehalfOf, agent, replies, duplicateOfId, undoneAt, ...row }) => ({
+    entries: rows.map(({ onBehalfOf, agent, replies, duplicateOfId, undoneAt, files, penalty, ...row }) => ({
       ...row,
+      ...evidenceFilesView(files, canSeeEvidenceFiles(evidenceViewer, row.onBehalfOfUserId)),
+      penalty: penalty
+        ? { id: penalty.id, reason: penalty.reason, points: penalty.points.toNumber(), byAgentName: penalty.agent.name, createdAt: penalty.createdAt }
+        : null,
+      agentReputation: agent?.reputation ?? null,
       duplicateOf: (duplicateOfId && duplicateById.get(duplicateOfId)) || null,
       by: onBehalfOf.name,
       agentName: agent?.name ?? null,

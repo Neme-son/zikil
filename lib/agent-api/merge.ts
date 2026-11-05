@@ -1,3 +1,4 @@
+import { refreshIssueRatings } from "@/lib/agents/profile";
 import { Prisma } from "@prisma/client";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
@@ -9,13 +10,14 @@ import { IssueApiError } from "@/lib/agent-api/errors";
 import { publish } from "@/lib/agent-api/events";
 import { isConfirmed } from "@/lib/agent-api/confirmations";
 import { countedMergeVerdicts, deliveredClaim, MANAGER_VERDICT_WEIGHT } from "@/lib/agent-api/merge-verdicts";
-import { award, awardDispatcher } from "@/lib/points/award";
+import type { PointAward } from "@/lib/points/award";
+import { holdPayout } from "@/lib/points/payout";
+import { solverReward } from "@/lib/points/project-rewards";
 import { pointSourceKey, reviewerPointsAt } from "@/lib/points/rules";
 import {
   calculateReviewerPoints,
-  calculateSolverPoints,
 } from "@/lib/points/project-rewards";
-import { getProjectRewardConfig } from "@/lib/points/platform-rewards";
+import { getPlatformRewardConfig, getProjectRewardConfig } from "@/lib/points/platform-rewards";
 import { assertRedesignOpen } from "@/lib/redesigns";
 import { statusChangedSummary } from "@/lib/activity-log";
 import { entryDescription, entryReplySelect, entrySummary, toEntryReplies, type EntryReply } from "@/lib/agent-api/entry-fields";
@@ -237,6 +239,8 @@ async function saveMergeReview(
   const saved = existing
     ? await tx.mergeReview.update({ where: { id: existing.id }, data, select: reviewSelect })
     : await tx.mergeReview.create({ data: { ...data, bugId: bug.id, agentId: agent.agentId }, select: reviewSelect });
+  // #agent-profile: a merge review moves the rating of whoever delivered the work.
+  await refreshIssueRatings(tx, bug.id);
   return { review: saved, replaced: Boolean(existing) };
 }
 
@@ -341,7 +345,8 @@ async function reviewFix(
       status: 409 as const,
       error: "not_ready" as const,
       missing: "confirmation" as const,
-      message: "This issue isn't confirmed yet: the project's required independent reviewers must accept it as real.",
+      message:
+        "This issue isn't confirmed yet: the project's required independent reviewers must accept it as real. It still takes confirmations (POST /api/v1/issues/{id}/confirmations); accept again once it is confirmed.",
     };
   }
 
@@ -589,31 +594,52 @@ export async function finalizeResolved(tx: Prisma.TransactionClient, input: Fina
     data: { status: "released", releasedAt: new Date(), releaseReason: "resolved" },
   });
 
+  // #live-payout: what resolving earns is held until enough people report the work deployed.
   const rewardConfig = await getProjectRewardConfig(tx, bug.projectId);
+  const platform = await getPlatformRewardConfig(tx);
+  const { reward } = await tx.bug.findUniqueOrThrow({ where: { id: bug.id }, select: { reward: true } });
+  const payout: PointAward[] = [];
   if (solverUserId) {
-    await award(tx, {
+    payout.push({
       tenantId: bug.tenantId,
       userId: solverUserId,
       bugId: bug.id,
       role: "solver",
-      points: calculateSolverPoints(rewardConfig),
+      // #rewards: the issue's reward, $1–$10.
+      points: solverReward(reward),
       sourceKey: pointSourceKey("solver", bug.id, solverUserId),
       // The agent that held the claim and delivered the work.
       agentId: claim?.agentId ?? null,
     });
   }
-  await awardDispatcher(tx, bug, claim?.dispatcherUserId);
+  if (claim?.dispatcherUserId) {
+    payout.push({ tenantId: bug.tenantId, bugId: bug.id, userId: claim.dispatcherUserId, role: "dispatcher", points: platform.dispatcher, sourceKey: `dispatcher:${bug.id}` });
+  }
   const reviewerPoints = calculateReviewerPoints(rewardConfig);
+  // Attribution: each tester's award names the agent that gave their good-to-merge judgement.
+  const judgements = rewardedReviewerUserIds.length
+    ? await tx.testVerdict.findMany({
+        where: { bugId: bug.id, goodToMerge: true, onBehalfOfUserId: { in: rewardedReviewerUserIds }, pullRequestUrl: bug.pullRequestUrl ?? "" },
+        orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
+        select: { onBehalfOfUserId: true, agentId: true },
+      })
+    : [];
+  const judgingAgent = new Map<string, string>();
+  for (const judgement of judgements) {
+    if (!judgingAgent.has(judgement.onBehalfOfUserId)) judgingAgent.set(judgement.onBehalfOfUserId, judgement.agentId);
+  }
   for (const [index, userId] of rewardedReviewerUserIds.entries()) {
-    await award(tx, {
+    payout.push({
       tenantId: bug.tenantId,
       userId,
       bugId: bug.id,
       role: "reviewer",
       points: reviewerPointsAt(index, reviewerPoints),
       sourceKey: pointSourceKey("reviewer", bug.id, userId),
+      agentId: judgingAgent.get(userId) ?? null,
     });
   }
+  await holdPayout(tx, bug.id, payout);
 
   await audit(
     agent,

@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { CONFIRMATION_REVIEWER_POINTS, reviewerPointsAt } from "@/lib/points/rules";
+import { CONFIRMATION_REVIEWER_POINTS, confirmationPointsAt } from "@/lib/points/rules";
 
 /** Confirmation (#issue-confirmations, #confirmation-weights): weighted confirms, one entry per person per class, the move to Open, and duplicate decisions. */
 type Entry = {
@@ -32,6 +32,7 @@ const db = vi.hoisted(() => ({
   bugActivity: { create: vi.fn() },
   issueConfirmation: { findUnique: vi.fn(), upsert: vi.fn(), findMany: vi.fn() },
   pointEntry: { createMany: vi.fn() },
+  confirmationPenalty: { findMany: vi.fn(async () => []) },
   $queryRaw: vi.fn(),
   $transaction: vi.fn(),
 }));
@@ -43,6 +44,7 @@ vi.mock("@/lib/agents/audit", () => ({ audit }));
 vi.mock("@/lib/workflow", () => ({ workflowFor: vi.fn(async () => ({ confirmationsNeeded: 2 })) }));
 
 import { giveConfirmation, isConfirmed, openConfirmedIssue } from "@/lib/agent-api/confirmations";
+import { workflowFor } from "@/lib/workflow";
 import { IssueApiError } from "@/lib/agent-api/errors";
 import { DUPLICATE_ERRORS, duplicateLinkProblem } from "@/lib/duplicates";
 
@@ -56,6 +58,7 @@ const body = (verdict: string, extra: Record<string, unknown> = {}) => ({
   verdict,
   summary: "Reproduced it on staging.",
   description: "Followed the steps; it fails as reported and no other issue matches.",
+  ...(verdict === "confirm" ? { files: [{ path: "lib/save.ts", lines: "42" }] } : {}),
   ...extra,
 });
 
@@ -167,7 +170,8 @@ describe("giveConfirmation (#issue-confirmations)", () => {
       "triager-clear:bug1:bob",
       "triager-clear:bug1:cara",
     ]);
-    expect(state.points.find((p) => p.sourceKey === "reviewer-confirm:bug1:cara")?.points).toBe(reviewerPointsAt(1, CONFIRMATION_REVIEWER_POINTS));
+    // #confirmation-pay: the second confirmer is still among the first three, paid in full.
+    expect(state.points.find((p) => p.sourceKey === "reviewer-confirm:bug1:cara")?.points).toBe(CONFIRMATION_REVIEWER_POINTS);
 
     // Events agents already subscribe to; only the agent's entry is audited.
     expect(publish).toHaveBeenCalledWith(db, expect.objectContaining({ type: "issue.confirmation", actorAgentId: "agent-bob" }));
@@ -225,10 +229,53 @@ describe("giveConfirmation (#issue-confirmations)", () => {
     expect((await rejection(openConfirmedIssue(opener, scope, "bug1"))).body).toMatchObject({ error: "not_confirming" });
   });
 
-  it("takes entries only at Requires confirmation, and 404s an unknown issue", async () => {
-    state.bug = bugRow({ status: "open", substatus: "open" });
-    expect((await rejection(giveConfirmation(person("bob"), scope, "bug1", body("confirm")))).body).toMatchObject({ error: "not_confirming" });
+  it("takes no entries once a confirmed issue has left Requires confirmation, and 404s an unknown issue", async () => {
+    await giveConfirmation(person("bob"), scope, "bug1", body("confirm"));
+    await giveConfirmation(person("cara"), scope, "bug1", body("confirm"));
+    state.bug = { ...state.bug, status: "open", substatus: "open" };
+    expect((await rejection(giveConfirmation(person("dan"), scope, "bug1", body("confirm")))).body).toMatchObject({ error: "not_confirming" });
+    state.bug = { ...state.bug, status: "in_progress", substatus: "in_progress" };
+    expect((await rejection(giveConfirmation(person("dan"), scope, "bug1", body("confirm")))).body).toMatchObject({ error: "not_confirming" });
     expect((await rejection(giveConfirmation(person("bob"), scope, "nope", body("confirm")))).status).toBe(404);
+  });
+
+  it("still takes entries when the work started before the issue was confirmed (#open-award), without moving it", async () => {
+    // Awarded at 1 of 2, then delivered and judged: the accept needs the missing confirmation.
+    await giveConfirmation(person("bob"), scope, "bug1", body("confirm"));
+    state.bug = { ...state.bug, status: "done", substatus: "accepted" };
+    const last = await giveConfirmation(person("cara"), scope, "bug1", body("confirm"));
+    expect(last).toMatchObject({ confirmed: true, newlyConfirmed: true, opened: false, confirmations: 2 });
+    expect(state.bug.substatus).toBe("accepted");
+    expect(db.bug.update).not.toHaveBeenCalled();
+    expect(await isConfirmed("bug1")).toBe(true);
+    // The reporter is paid once, as for any confirmed issue.
+    expect(state.points.filter((p) => p.sourceKey === "reporter:bug1:ada")).toHaveLength(1);
+  });
+
+  it("takes them at Open, In progress and Requires review too, but not after the fix is accepted or the issue is closed", async () => {
+    for (const [status, substatus] of [["open", "open"], ["in_progress", "in_progress"], ["done", "requires_review"]] as const) {
+      state.bug = bugRow({ status, substatus });
+      state.entries = [];
+      await expect(giveConfirmation(person("bob"), scope, "bug1", body("confirm"))).resolves.toMatchObject({ confirmations: 1 });
+    }
+    for (const [status, substatus] of [["merge", "ready_to_merge"], ["resolved", "on_dev"], ["closed", "closed"]] as const) {
+      state.bug = bugRow({ status, substatus });
+      state.entries = [];
+      expect((await rejection(giveConfirmation(person("bob"), scope, "bug1", body("confirm")))).body).toMatchObject({ error: "not_confirming" });
+    }
+  });
+
+  it("does not open an issue whose work already started, even in a threshold-only project", async () => {
+    vi.mocked(workflowFor).mockImplementation(async () => ({ confirmationsNeeded: 2, governance: "threshold" }) as never);
+    try {
+      state.bug = bugRow({ status: "in_progress", substatus: "in_progress" });
+      await giveConfirmation(person("bob"), scope, "bug1", body("confirm"));
+      const last = await giveConfirmation(person("cara"), scope, "bug1", body("confirm"));
+      expect(last).toMatchObject({ confirmed: true, opened: false });
+      expect(state.bug.substatus).toBe("in_progress");
+    } finally {
+      vi.mocked(workflowFor).mockImplementation(async () => ({ confirmationsNeeded: 2 }) as never);
+    }
   });
 
   it("marks a duplicate with a reject naming another issue, and pays the marker", async () => {
@@ -254,6 +301,14 @@ describe("giveConfirmation (#issue-confirmations)", () => {
     expect(changed).toMatchObject({ replaced: true, confirmations: 1 });
     expect(state.entries).toHaveLength(1);
     expect(state.entries[0]).toMatchObject({ verdict: "confirm", summary: "I was wrong.", agentId: "agent-bob", undoneAt: null });
+  });
+});
+
+describe("confirmation pay (#confirmation-pay)", () => {
+  it("pays the first three confirmers in full, halves the next three, and pays pile-ons nothing", () => {
+    const paid = Array.from({ length: 8 }, (_, index) => confirmationPointsAt(index, CONFIRMATION_REVIEWER_POINTS));
+    expect(paid).toEqual([0.9, 0.9, 0.9, 0.45, 0.225, 0.1125, 0, 0]);
+    expect(confirmationPointsAt(-1, CONFIRMATION_REVIEWER_POINTS)).toBe(0);
   });
 });
 

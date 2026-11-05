@@ -8,15 +8,15 @@ const repo = path.resolve(import.meta.dirname, "../../..");
 const docs = readFileSync(path.join(repo, "docs/ziki-for-agents.md"), "utf8");
 
 // `/issues/{id}/bid` lives at app/api/v1/issues/[id]/bid/route.ts. A site-root
-// route such as the work feed `/{projectId}/work` lives at app/[project]/work/route.ts.
+// route such as the work feed `/{org}/{projectId}/work` lives at app/[org]/[project]/work/route.ts.
 function routeFile(tool: (typeof TOOLS)[number]) {
-  if (tool.siteRoute) return path.join(repo, "app", tool.route.replace(/\{(\w+)\}/g, "[project]"), "route.ts");
+  if (tool.siteRoute) return path.join(repo, "app", tool.route.replace("{org}", "[org]").replace(/\{(\w+)\}/g, "[project]"), "route.ts");
   return path.join(repo, "app/api/v1", tool.route.replace(/\{(\w+)\}/g, "[$1]"), "route.ts");
 }
 
 /** How the agent reference titles a tool's route. */
 function docHeading(tool: (typeof TOOLS)[number]) {
-  return tool.siteRoute ? `${tool.method} ${tool.route.replace(/\{\w+\}/, "{project}")}` : `${tool.method} /api/v1${tool.route}`;
+  return tool.siteRoute ? `${tool.method} ${tool.route.replace("{projectId}", "{project}")}` : `${tool.method} /api/v1${tool.route}`;
 }
 
 describe("tool table matches the API", () => {
@@ -43,7 +43,8 @@ describe("tool table matches the API", () => {
   });
 
   it.each(TOOLS.map((tool) => [tool.name, tool] as const))("%s routes every input field somewhere", (_name, tool) => {
-    const pathKeys = [...tool.route.matchAll(/\{(\w+)\}/g)].map((match) => match[1]);
+    // `{org}` is the key's own organisation, which the client fills in (client.ts).
+    const pathKeys = [...tool.route.matchAll(/\{(\w+)\}/g)].map((match) => match[1]).filter((key) => key !== "org");
     const routed = new Set<string>([
       ...pathKeys,
       ...(tool.query ?? []),
@@ -129,15 +130,15 @@ describe("buildRequest", () => {
   });
 
   it("sends the tested commit with a test result, and rejects a malformed one before calling the API", () => {
-    const withSha = buildRequest(tool("ziki_submit_test_result"), { id: "i", goodToMerge: true, summary: "Good.", description: "Tested.", headSha: "a1b2c3d4e5f6" }, { projectId: "p" });
-    expect(withSha.body).toEqual({ goodToMerge: true, summary: "Good.", description: "Tested.", headSha: "a1b2c3d4e5f6" });
-    const without = buildRequest(tool("ziki_submit_test_result"), { id: "i", goodToMerge: true, summary: "Good.", description: "Tested." }, { projectId: "p" });
-    expect(without.body).toEqual({ goodToMerge: true, summary: "Good.", description: "Tested." });
+    const withSha = buildRequest(tool("ziki_submit_test_result"), { id: "i", goodToMerge: true, summary: "Good.", description: "Tested.", files: [{ path: "lib/x.ts", lines: "4" }], headSha: "a1b2c3d4e5f6" }, { projectId: "p" });
+    expect(withSha.body).toEqual({ goodToMerge: true, summary: "Good.", description: "Tested.", files: [{ path: "lib/x.ts", lines: "4" }], headSha: "a1b2c3d4e5f6" });
+    const without = buildRequest(tool("ziki_submit_test_result"), { id: "i", goodToMerge: true, summary: "Good.", description: "Tested.", files: [{ path: "lib/x.ts", lines: "4" }] }, { projectId: "p" });
+    expect(without.body).toEqual({ goodToMerge: true, summary: "Good.", description: "Tested.", files: [{ path: "lib/x.ts", lines: "4" }] });
     // A bare verdict is refused before the API is called (#review-entries).
     expect(() => buildRequest(tool("ziki_submit_test_result"), { id: "i", goodToMerge: true }, { projectId: "p" })).toThrow();
     expect(() => buildRequest(tool("ziki_merge_fix"), { id: "i", verdict: "accept" }, { projectId: "p" })).toThrow();
     for (const bad of ["not-a-sha", "abc12", "g1b2c3d4e5f6", "a".repeat(65)]) {
-      expect(() => buildRequest(tool("ziki_submit_test_result"), { id: "i", goodToMerge: true, summary: "Good.", description: "Tested.", headSha: bad }, { projectId: "p" })).toThrow();
+      expect(() => buildRequest(tool("ziki_submit_test_result"), { id: "i", goodToMerge: true, summary: "Good.", description: "Tested.", files: [{ path: "lib/x.ts", lines: "4" }], headSha: bad }, { projectId: "p" })).toThrow();
     }
   });
 

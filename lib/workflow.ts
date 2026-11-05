@@ -58,6 +58,8 @@ export async function workflowFor(
         managerVoteWeight: true,
         awardThreshold: true,
         acceptThreshold: true,
+        stakeLimit: true,
+        stakeInProgressLimit: true,
       },
     })) as Partial<ProjectWorkflowValues> | null;
   } catch (error) {

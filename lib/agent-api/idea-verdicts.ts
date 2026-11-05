@@ -16,7 +16,11 @@ import { ideaVotes, isBadIdea, notRejectableReason } from "@/lib/idea-rejection"
 import { duplicateRef, IDEA_WITHDRAWN_REASON, withdrawnNotArchivableMessage, type ArchiveIdeaInput, type WithdrawIdeaInput } from "@/lib/idea-archive";
 import { WORKFLOW_LIMITS } from "@/lib/workflow-config";
 import { isThresholdOnly, thresholdDecision, voteWeight, type ThresholdDecision } from "@/lib/governance";
+
+/** Recorded on a conversion that skipped the verdicts because the person who filed the idea said it was already vetted. */
+export type VettedDecision = { via: "already_vetted"; decidedByUserId: string; decidedByAgentId: string; vettedNote: string };
 import { moveTo } from "@/lib/issue-substatus";
+import { moveIdeaStakesToIssue } from "@/lib/agent-api/stakes";
 
 /**
  * Idea verdicts and conversion (#idea-verdicts, #idea-table). Each person
@@ -348,6 +352,22 @@ export async function convertIdea(agent: AgentContext, projectId: string, ideaRe
 }
 
 /**
+ * Already vetted (#stakes fast lane): the person who filed the idea says it was
+ * vetted elsewhere, so it becomes an issue at once, in the transaction that
+ * creates it, without waiting for verdicts. Only the verdicts are skipped: the
+ * issue is still confirmed on its own. The note says where it was approved; it
+ * is shown on the issue's activity and kept on the event and the audit log.
+ */
+export async function convertVettedIdea(tx: Tx, agent: AgentContext, projectId: string, ideaId: string, vettedNote: string) {
+  const scope = { tenantId: agent.tenantId, projectId };
+  const { ideaThreshold } = await workflowFor(projectId, tx);
+  const locked = await lockedIdea(tx, scope, ideaId);
+  assertOpenIdea(locked);
+  const by = { userId: agent.ownerId, agentId: agent.agentId };
+  return convertLocked(tx, scope, locked, by, ideaThreshold, { via: "already_vetted", decidedByUserId: by.userId, decidedByAgentId: agent.agentId, vettedNote });
+}
+
+/**
  * Converts a locked open idea in the caller's transaction: creates the issue
  * from the idea's report and files, marks the idea converted by `by.agentId`
  * (null for a person's deciding verdict) and publishes `issue.converted`. An
@@ -360,13 +380,13 @@ async function convertLocked(
   locked: LockedIdea,
   by: { userId: string; agentId: string | null },
   ideaThreshold: number,
-  decision?: ThresholdDecision,
+  decision?: ThresholdDecision | VettedDecision,
 ) {
   const { projectId } = scope;
   const idea = await tx.idea.findUniqueOrThrow({
     where: { id: locked.id },
     select: {
-      title: true, summary: true, description: true, typeId: true, categoryId: true, areaId: true, proofLinks: true,
+      title: true, summary: true, description: true, typeId: true, areaId: true, proofLinks: true,
       reporterId: true, beneficiaryUserId: true, createdByAgentId: true,
     },
   });
@@ -379,7 +399,6 @@ async function convertLocked(
       summary: idea.summary,
       description: idea.description,
       typeId: idea.typeId,
-      categoryId: idea.categoryId,
       areaId: idea.areaId,
       proofLinks: idea.proofLinks,
       reporterId: idea.reporterId,
@@ -388,7 +407,13 @@ async function convertLocked(
       ...moveTo("requires_confirmation"),
       watches: { create: { userId: idea.reporterId } },
       activities: {
-        create: { actorId: idea.reporterId, type: "created", summary: createdSummary(idea.title), metadata: { fromIdea: locked.number } },
+        create: {
+          actorId: idea.reporterId,
+          type: "created",
+          // A vetted idea says so on the issue's activity, with who vouched for it.
+          summary: decision?.via === "already_vetted" ? `${createdSummary(idea.title)}, marked already vetted: ${decision.vettedNote}` : createdSummary(idea.title),
+          metadata: { fromIdea: locked.number, ...(decision?.via === "already_vetted" ? { vettedNote: decision.vettedNote } : {}) },
+        },
       },
     },
     select: { id: true, number: true },
@@ -399,6 +424,8 @@ async function convertLocked(
     where: { id: locked.id },
     data: { status: "converted", convertedAt: at, convertedByAgentId: by.agentId, issueId: issue.id },
   });
+  // #stakes: the idea's stakes move to the issue, and their 10-minute window (or contest) starts now.
+  await moveIdeaStakesToIssue(tx, locked.id, { id: issue.id, number: issue.number, tenantId: scope.tenantId, projectId }, at);
   await publish(tx, {
     tenantId: scope.tenantId,
     type: "issue.converted",

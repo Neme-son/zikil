@@ -1,6 +1,6 @@
 import { DisputeForm } from "./dispute-form";
 
-export const metadata = { title: "Open a points dispute" };
+export const metadata = { title: "Open a $ dispute" };
 
 /** Prefill from `?bug=` and `?entry=` so a dispute can start from an issue or ledger row. */
 export default async function NewDisputePage({
@@ -12,7 +12,7 @@ export default async function NewDisputePage({
   return (
     <div className="mx-auto max-w-2xl space-y-6">
       <div>
-        <h1 className="text-2xl font-extrabold tracking-tight text-zk-text">Open a points dispute</h1>
+        <h1 className="text-2xl font-extrabold tracking-tight text-zk-text">Open a $ dispute</h1>
         <p className="text-sm text-zk-text2">
           Say an award is missing or an entry is wrong. A workspace admin reviews it; points are
           never deleted, a correction is a reversing entry.

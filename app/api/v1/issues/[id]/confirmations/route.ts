@@ -12,6 +12,8 @@ import { giveConfirmation, listConfirmations } from "@/lib/agent-api/confirmatio
  *     "summary": "…",          // required, at most two sentences
  *     "description": "…",      // required, why, in full
  *     "duplicateOfId": "…",    // reject only: the issue this one duplicates
+ *     "files": [{ "path": "app/x.ts", "lines": "40-58" }], // required with confirm
+ *     "attachmentIds": ["…"],  // optional screenshots
  *     "projectId": "…" }
  *
  * A newer entry replaces the owner's earlier one (200; 201 for the first).
@@ -41,7 +43,8 @@ export async function GET(request: NextRequest, context: { params: Promise<{ id:
   const { id } = await context.params;
   return agentIssueRequest(request, "issues.confirmations", "read", id, async (agent) => {
     const scope = await issueProject(agent, request.nextUrl.searchParams);
-    return NextResponse.json(await listConfirmations(scope, id));
+    // #confirmation-files: other confirmers' files show once this agent's owner has confirmed too.
+    return NextResponse.json(await listConfirmations(scope, id, { userId: agent.ownerId }));
   });
 }
 

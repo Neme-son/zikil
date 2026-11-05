@@ -26,6 +26,8 @@ export type BidEntryView = {
   /** An open bid whose bidder already holds the project's limit of offers and claims (#bidder-capacity). */
   atCapacity?: boolean;
   withdrawnAt?: Date | string | null;
+  /** When it was made (the Activity panel's "bid" row). */
+  createdAt?: Date | string;
   updatedAt: Date | string;
   replies: EntryReplyView[];
 };
@@ -105,7 +107,10 @@ export function IssueBidsPanel({
   canAward = false,
   awardThreshold,
   at,
+  bidAction,
 }: {
+  /** The Bid button, while the viewer can bid and has not (#one-click-bid). */
+  bidAction?: React.ReactNode;
   bids: BidEntryView[];
   /** When this step started, at the far right of its title (#issue-timeline). */
   at?: Date | string | null;
@@ -136,7 +141,7 @@ export function IssueBidsPanel({
   }
   return (
     <section id="bids" aria-labelledby="bids-heading" className="mb-4 scroll-mt-24" data-testid="bids">
-      <StepTitle id="bids-heading" title="Bids" count={bids.length} at={at}>
+      <StepTitle id="bids-heading" title="Bids" count={bids.length} at={at} action={bidAction}>
         {openCount > 0 && openCount < bids.length ? (
           <span className="font-normal normal-case tracking-normal">· {openCount} active</span>
         ) : null}
@@ -148,35 +153,16 @@ export function IssueBidsPanel({
 
 /** Each bid on its own card: its state, who it is for, votes, summary, description and replies. */
 function BidList({ bids, canAward = false, awardThreshold }: { bids: BidEntryView[]; canAward?: boolean; awardThreshold?: number }) {
+  const withdrawn = sortedBids(bids).filter((bid) => bidState(bid) === "withdrawn");
   return (
     <>
       {bids.length === 0 ? (
         <p className="m-0 text-[13px] text-zk-muted">No bids yet.</p>
       ) : (
         <ul className="m-0 flex list-none flex-col gap-2.5 p-0">
-          {sortedBids(bids).map((bid) => {
+          {sortedBids(bids).filter((bid) => bidState(bid) !== "withdrawn").map((bid) => {
             const state = bidState(bid);
-            if (QUIET_STATES.has(state)) {
-              // Released and withdrawn bids are one quiet line: who, and the summary cut to fit; no description or replies.
-              return (
-                <li
-                  key={bid.id}
-                  id={`bid-${bid.id}`}
-                  data-testid={`bid-${state}`}
-                  className="flex min-w-0 items-center gap-3 rounded-lg px-3 py-1.5 text-[13px] text-zk-muted"
-                >
-                  <span data-testid="bid-state" className={`w-[84px] shrink-0 rounded-md px-2 py-0.5 text-center text-[11px] font-bold ${stateChipClass[state]}`}>
-                    {STATE_LABEL[state]}
-                  </span>
-                  <span className="shrink-0 font-semibold text-zk-text2">{bid.agentName}</span>
-                  <span className="min-w-0 truncate" title={bid.summary}>{bid.summary}</span>
-                  {/* Right after the summary, as on the other bids. */}
-                  <span className="shrink-0 whitespace-nowrap text-xs">
-                    · <LocalTime date={bid.updatedAt} />
-                  </span>
-                </li>
-              );
-            }
+            if (QUIET_STATES.has(state)) return <QuietBid key={bid.id} bid={bid} state={state} />;
             return (
               // The same warm card as a confirmation entry.
               <li
@@ -220,8 +206,43 @@ function BidList({ bids, canAward = false, awardThreshold }: { bids: BidEntryVie
               </li>
             );
           })}
+          {withdrawn.length > 0 ? (
+            // All withdrawn bids together, behind one line: they no longer seek the task.
+            <li data-testid="bids-withdrawn">
+              <details className="group/withdrawn rounded-lg">
+                <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-1.5 text-[13px] text-zk-muted hover:text-zk-text2 [&::-webkit-details-marker]:hidden">
+                  <span aria-hidden="true" className="inline-block transition-transform group-open/withdrawn:rotate-90">›</span>
+                  {withdrawn.length} withdrawn {withdrawn.length === 1 ? "bid" : "bids"}
+                </summary>
+                <ul className="m-0 flex list-none flex-col p-0">
+                  {withdrawn.map((bid) => <QuietBid key={bid.id} bid={bid} state="withdrawn" />)}
+                </ul>
+              </details>
+            </li>
+          ) : null}
         </ul>
       )}
     </>
+  );
+}
+
+/** A bid that no longer holds or seeks the task (released or withdrawn): one quiet line, who and the summary cut to fit. */
+function QuietBid({ bid, state }: { bid: BidEntryView; state: BidState }) {
+  return (
+    <li
+      id={`bid-${bid.id}`}
+      data-testid={`bid-${state}`}
+      className="flex min-w-0 items-center gap-3 rounded-lg px-3 py-1.5 text-[13px] text-zk-muted"
+    >
+      <span data-testid="bid-state" className={`w-[84px] shrink-0 rounded-md px-2 py-0.5 text-center text-[11px] font-bold ${stateChipClass[state]}`}>
+        {STATE_LABEL[state]}
+      </span>
+      <span className="shrink-0 font-semibold text-zk-text2">{bid.agentName}</span>
+      <span className="min-w-0 truncate" title={bid.summary}>{bid.summary}</span>
+      {/* Right after the summary, as on the other bids. */}
+      <span className="shrink-0 whitespace-nowrap text-xs">
+        · <LocalTime date={bid.updatedAt} />
+      </span>
+    </li>
   );
 }

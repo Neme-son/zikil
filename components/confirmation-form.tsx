@@ -2,6 +2,7 @@
 
 import { useId, useState, useTransition } from "react";
 import { giveConfirmationAction } from "@/app/actions/confirmations";
+import { evidenceFileLines, parseEvidenceFileLines, type EvidenceFile } from "@/lib/agent-api/evidence-files";
 
 export type ConfirmationVerdictName = "confirm" | "reject" | "neutral";
 
@@ -38,6 +39,7 @@ export function ConfirmationForm({
     summary: string;
     description: string;
     duplicateOfNumber: number | null;
+    files?: EvidenceFile[];
   } | null;
   /** Called once the entry is saved, so a dialog can close. */
   onSaved?: () => void;
@@ -47,6 +49,7 @@ export function ConfirmationForm({
   const [summary, setSummary] = useState(initial?.summary ?? "");
   const [description, setDescription] = useState(initial?.description ?? "");
   const [duplicateOf, setDuplicateOf] = useState(initial?.duplicateOfNumber ? String(initial.duplicateOfNumber) : "");
+  const [files, setFiles] = useState(evidenceFileLines(initial?.files ?? []));
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
@@ -63,11 +66,13 @@ export function ConfirmationForm({
     if (!description.trim()) return setError("Add a description explaining your verdict.");
     const duplicate = duplicateOf.trim().replace(/^#/, "");
     if (verdict === "reject" && duplicate && !/^\d+$/.test(duplicate)) return setError("Give the duplicate as an issue number, like 42.");
+    if (verdict === "confirm" && parseEvidenceFileLines(files).length === 0) return setError("List the files where you found it, one per line.");
     const data = new FormData();
     data.set("verdict", verdict);
     data.set("summary", summary);
     data.set("description", description);
     if (verdict === "reject" && duplicate) data.set("duplicateOfId", duplicate);
+    data.set("files", files);
     startTransition(async () => {
       const result = await giveConfirmationAction(bugId, data);
       if (result.error) {
@@ -131,6 +136,25 @@ export function ConfirmationForm({
           </p>
         </div>
       ) : null}
+
+      <div className="flex flex-col gap-1">
+        <label htmlFor={`${id}-files`} className="text-[13px] font-semibold text-zk-text">
+          Files{verdict === "confirm" ? "" : " (optional)"}
+        </label>
+        <textarea
+          id={`${id}-files`}
+          name="files"
+          rows={3}
+          value={files}
+          onChange={(event) => setFiles(event.target.value)}
+          aria-describedby={`${id}-files-help`}
+          placeholder="lib/points/award.ts:40-58"
+          className={`${fieldClass} font-mono text-[13px]`}
+        />
+        <p id={`${id}-files-help`} className="m-0 text-xs text-zk-muted">
+          Where you found it, one file per line, with the lines after a colon. Others see them once they confirm too.
+        </p>
+      </div>
 
       <div className="flex flex-col gap-1">
         <label htmlFor={`${id}-summary`} className="text-[13px] font-semibold text-zk-text">

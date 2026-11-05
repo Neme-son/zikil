@@ -52,7 +52,7 @@ export function CreditAwardsForm() {
         </Button>
       </div>
       <p className="text-xs text-zk-muted">
-        Solver points need a resolved or closed issue with an assignee. Reporter points are
+        The solver&apos;s reward needs a resolved or closed issue with an assignee. The reporter&apos;s $ are
         withheld on duplicates. An award that is already in the ledger is not added again.
       </p>
       {error ? (

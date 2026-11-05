@@ -17,6 +17,18 @@ export const test = base.extend<Fixtures & Options>({
   width: async ({}, provide, testInfo) => provide(widthOf(testInfo.project.name)),
   me: async ({ as, width }, provide) => provide(as ? nameFor(as, width) : ""),
   storageState: async ({ as, width }, provide) => provide(as ? authFile(as, width) : { cookies: [], origins: [] }),
+  // Every test starts as a visitor who already answered the cookie banner
+  // (declined), so it never sits over the page being tested.
+  page: async ({ page }, provide) => {
+    await page.addInitScript(() => {
+      try {
+        window.localStorage.setItem("ziki-cookie-consent", JSON.stringify({ choice: "denied", at: Date.now() }));
+      } catch {
+        // Storage blocked: the banner shows, as it would for that visitor.
+      }
+    });
+    await provide(page);
+  },
   // Titles unique to this run, width and test, so parallel tests never
   // find each other's issues.
   uniq: async ({ width }, provide, testInfo) => {
@@ -27,8 +39,8 @@ export const test = base.extend<Fixtures & Options>({
 
 export { expect };
 
-/** The seeded project every spec works in (e2e/seed.ts); pages live under its slug (#project-urls). */
-export const PROJECT = "/zedu";
+/** The seeded project every spec works in (e2e/seed.ts); pages live under its organisation and slug (#project-urls). */
+export const PROJECT = "/zedu/zedu";
 
 /** Reports an issue through the form and returns its page URL. */
 export async function reportIssue(page: Page, title: string, description = "Steps: open the page, click Save. Expected it to save; it shows a blank page.") {

@@ -138,7 +138,8 @@ describe("grantMissingAward", () => {
         data: [
           expect.objectContaining({
             role: "solver",
-            points: 750,
+            // #rewards: the issue's reward; $1 before any estimate.
+            points: 1,
             sourceKey: "solver:bug-1:user-solver",
           }),
         ],
@@ -171,7 +172,7 @@ describe("grantMissingAward", () => {
     expect(first).toEqual({ ok: true, awarded: true });
     expect(second).toEqual({ ok: true, awarded: false });
     expect(rows).toHaveLength(1);
-    expect(rows[0]).toMatchObject({ points: 750 });
+    expect(rows[0]).toMatchObject({ points: 1 });
   });
 
   it("refuses to resolve a dispute that is already resolved", async () => {

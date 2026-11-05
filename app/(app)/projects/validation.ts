@@ -22,15 +22,28 @@ const optionalUrl = (check: (url: URL) => boolean, message: string) =>
     }, message),
   );
 
+/** A GitHub repository's address. The form's example (github.com/owner/repository) is not a real one. */
+const repoUrlSchema = optionalUrl((url) =>
+  url.protocol === "https:" && url.hostname === "github.com" && !url.port && !url.username && !url.password &&
+  /^\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+(?:\.git)?\/?$/.test(url.pathname) && !url.search && !url.hash &&
+  !/^\/owner\/repository(?:\.git)?\/?$/i.test(url.pathname),
+"Enter your GitHub repository's URL, such as https://github.com/your-org/your-repo.");
+
+/** The product's live site (#project-links). The example domains (example.com and the like) are not real sites. */
+const siteUrlSchema = optionalUrl((url) => url.protocol === "https:" && !url.username && !url.password &&
+  !/(^|\.)example\.(com|org|net)$/i.test(url.hostname),
+  "Enter your site's HTTPS address, such as https://yourproduct.com.");
+
+/** The site and GitHub repository, set from the panel above the list (#project-links). */
+export const projectLinksSchema = z.object({ siteUrl: siteUrlSchema, repoUrl: repoUrlSchema });
+
 export const projectSettingsSchema = z.object({
   name: z.string().trim().min(PROJECT_NAME_MIN, `Project name must be at least ${PROJECT_NAME_MIN} characters.`).max(PROJECT_NAME_MAX, `Project name must be ${PROJECT_NAME_MAX} characters or fewer.`),
   goal: z.string().trim().max(4000, "The project goal must be 4,000 characters or fewer.").transform((value) => value || null),
-  repoUrl: optionalUrl((url) =>
-    url.protocol === "https:" && url.hostname === "github.com" && !url.port && !url.username && !url.password &&
-    /^\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+(?:\.git)?\/?$/.test(url.pathname) && !url.search && !url.hash,
-  "Enter a GitHub repository URL, such as https://github.com/owner/repository."),
+  repoUrl: repoUrlSchema,
   stagingUrl: optionalUrl((url) => url.protocol === "https:",
     "Enter a valid HTTPS staging URL."),
+  siteUrl: siteUrlSchema,
 });
 
 const areaPathPattern = z.string().trim().min(1).max(256).refine(
@@ -62,7 +75,7 @@ export function urlSlugBase(name: string): string {
 
 /**
  * A project's slug base. Never a top-level route name: an issue's URL is
- * `/<project-slug>/<number>`, so a project called "Issues" gets `issues-project`.
+ * `/<org>/<project>/<number>`, so a project called "Issues" gets `issues-project`.
  */
 export function projectSlugBase(name: string): string {
   return unreservedProjectSlug(urlSlugBase(name));
@@ -86,20 +99,17 @@ export function nextProjectSlug(
 
 export function parseRewardConfigFromFormData(formData: FormData) {
   const hasCustomRewards =
-    formData.has("solverPoints") ||
     formData.has("reporterPoints") ||
     formData.has("reviewerPoints") ||
     formData.has("rewardGuidelines");
 
   if (!hasCustomRewards) return null;
 
-  const solver = formData.get("solverPoints");
   const reporter = formData.get("reporterPoints");
   const reviewer = formData.get("reviewerPoints");
   const guidelines = String(formData.get("rewardGuidelines") ?? "").trim();
 
   return {
-    solver: solver ? Number(solver) : undefined,
     reporter: reporter ? Number(reporter) : undefined,
     reviewer: reviewer ? Number(reviewer) : undefined,
     guidelines: guidelines || null,

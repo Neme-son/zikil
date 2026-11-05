@@ -1,12 +1,10 @@
 import type { Prisma, PrismaClient } from "@prisma/client";
 import { award } from "@/lib/points/award";
-import { POINTS_PER_DOLLAR } from "@/lib/points/rules";
 
 type Db = PrismaClient | Prisma.TransactionClient;
 
-/** What every new account gets: $0.67. */
-export const SIGNUP_BONUS_DOLLARS = 0.67;
-export const SIGNUP_BONUS_POINTS = Math.round(SIGNUP_BONUS_DOLLARS * POINTS_PER_DOLLAR);
+/** What every new account gets, in $ (#z-currency). */
+export const SIGNUP_BONUS_POINTS = 0.67;
 
 /**
  * The signup bonus (#signup-bonus). Points live in an organisation, so it is

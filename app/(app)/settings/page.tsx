@@ -3,7 +3,7 @@ import { ThemeSettings } from "@/components/theme-settings";
 import { parseTheme } from "@/lib/theme";
 import Link from "next/link";
 import { requireUser } from "@/lib/auth-helpers";
-import { firstProjectSlugFor } from "@/lib/project-route";
+import { firstProjectRefFor } from "@/lib/project-route";
 import { orgPath } from "@/lib/project-paths";
 import { prisma } from "@/lib/prisma";
 import { NotificationSettings } from "@/components/notification-settings";
@@ -82,7 +82,7 @@ export default async function SettingsPage(props: {
   searchParams?: Promise<{ section?: string | string[] | undefined }>;
 }) {
   const user = await requireUser();
-  const projectSlug = await firstProjectSlugFor(user.id);
+  const projectSlug = await firstProjectRefFor(user.id);
   const params = props.searchParams ? await props.searchParams : {};
   const section = parseSection(params.section);
   const agentsEnabled = isAgentPlatformEnabled();
@@ -295,7 +295,7 @@ export default async function SettingsPage(props: {
                   <div className="flex flex-col gap-0.5">
                     <LinkRow href="/settings/agents/connect" label="Connect your agent" />
                     <LinkRow href="/settings/agents/pair" label="Approve a pairing code" />
-                    <LinkRow href="/agents" label="Manage agents" />
+                    <LinkRow href="/agents/mine" label="Manage agents" />
                     <LinkRow href="/settings/connect" label="Create agent" />
                     <LinkRow href="/settings/webhooks" label="Webhooks" />
                     <LinkRow href="/settings/audit" label="Agent audit log" />

@@ -1,5 +1,5 @@
 import { beforeAll, describe, expect, it } from "vitest";
-import { confirm, feedItem, fileIdea, offeredTo, ok, refused, ziki, type Agent } from "./helpers";
+import { confirm, feedItem, FILES, fileIdea, offeredTo, ok, refused, ziki, type Agent } from "./helpers";
 
 /**
  * One report from idea to merge, through the CLI, with each agent class doing
@@ -33,7 +33,7 @@ describe("a report from idea to merge", () => {
 
   it("takes verdicts, not importance marks or confirmations, while it is an idea", async () => {
     await refused("bob", "mark-important", { id }, 404);
-    await refused("bob", "confirm-issue", { id, verdict: "confirm", summary: "Real.", description: "Reproduced it." }, 404);
+    await refused("bob", "confirm-issue", { id, verdict: "confirm", summary: "Real.", description: "Reproduced it.", files: FILES }, 404);
     expect((await refused("dana", "convert-idea", { id }, 409)).error).toBe("below_threshold");
   });
 
@@ -45,7 +45,7 @@ describe("a report from idea to merge", () => {
 
   it("scores good minus bad, and a newer verdict replaces the person's earlier one", async () => {
     const bad = await ok("bob", "give-idea-verdict", { id, opinion: "bad", summary: "Not needed.", description: "Saving already works for me." });
-    expect(bad).toMatchObject({ ideaScore: -1, replaced: false, pointsAwarded: 1 });
+    expect(bad).toMatchObject({ ideaScore: -1, replaced: false, pointsAwarded: 0.01 });
     const changed = await ok("bob", "give-idea-verdict", { id, opinion: "good", summary: "I was wrong. It fails on Firefox.", description: "Reproduced on Firefox 131." });
     expect(changed).toMatchObject({ ideaScore: 1, replaced: true, pointsAwarded: 0 });
     expect((await ok("cara", "give-idea-verdict", { id, opinion: "neutral", summary: "No strong view.", description: "Fine either way." })).ideaScore).toBe(1);
@@ -71,8 +71,13 @@ describe("a report from idea to merge", () => {
   });
 
   it("can be confirmed by the agent that filed it, counting 1 (#confirmation-weights)", async () => {
-    const own = await ok("ada", "confirm-issue", { id, verdict: "confirm", summary: "Mine.", description: "My own issue: lib/save.ts:42 sends the request twice." });
+    const own = await ok("ada", "confirm-issue", { id, verdict: "confirm", summary: "Mine.", description: "My own issue: lib/save.ts:42 sends the request twice.", files: FILES });
     expect(own).toMatchObject({ replaced: false, confirmed: false, confirmations: 1, confirmationsNeeded: 3 });
+  });
+
+  it("refuses a confirm without the files where it was found (#confirmation-files)", async () => {
+    const missing = await refused("bob", "confirm-issue", { id, verdict: "confirm", summary: "Real.", description: "Reproduced it." }, 400);
+    expect(missing).toMatchObject({ error: "invalid_request", field: "files" });
   });
 
   it("refuses a bare verdict", async () => {
@@ -103,7 +108,33 @@ describe("a report from idea to merge", () => {
     expect((await ok("ada", "get-issue", { id })).issue).toMatchObject({ status: "open", substatus: "open", confirmed: true, holder: null });
     expect((await ok("ada", "list-confirmations", { id })).entries).toHaveLength(4);
     // Entries belong to Requires confirmation: an Open issue takes none.
-    expect((await refused("dana", "confirm-issue", { id, verdict: "confirm", summary: "Late.", description: "Too late." }, 409)).error).toBe("not_confirming");
+    expect((await refused("dana", "confirm-issue", { id, verdict: "confirm", summary: "Late.", description: "Too late.", files: FILES }, 409)).error).toBe("not_confirming");
+  });
+
+  it("hides other confirmers' files until you confirm, and lets a confirmer penalise bad ones (#confirmation-penalties)", async () => {
+    type Entry = { id: string; by: string; verdict: string; onBehalfOfUserId: string; files: unknown; filesHidden: boolean; fileCount: number; penalty: unknown; agentReputation: number | null };
+    // dana never confirmed: every confirm's files are hidden from her.
+    const unseen = (await ok("dana", "list-confirmations", { id })).entries as Entry[];
+    const confirms = unseen.filter((entry) => entry.verdict === "confirm");
+    expect(confirms.length).toBeGreaterThan(1);
+    for (const entry of confirms) expect(entry).toMatchObject({ files: null, filesHidden: true, fileCount: 1 });
+    // cara confirmed, so she sees them all.
+    const seen = (await ok("cara", "list-confirmations", { id })).entries as Entry[];
+    for (const entry of seen.filter((e) => e.verdict === "confirm")) expect(entry.files).toEqual([{ path: "lib/save.ts", lines: "42" }]);
+
+    // cara penalises a confirm given for someone else.
+    const caraOwner = (await ok("cara", "whoami")).owner_id as string;
+    const target = seen.find((entry) => entry.verdict === "confirm" && entry.onBehalfOfUserId !== caraOwner)!;
+    expect(target).toBeTruthy();
+
+    expect((await refused("dana", "penalise-confirmation", { id: target.id, reason: "irrelevant", description: "I haven't confirmed." }, 403)).error).toBe("not_a_confirmer");
+    const before = target.agentReputation ?? 0;
+    const penalty = await ok("cara", "penalise-confirmation", { id: target.id, reason: "irrelevant", description: "lib/save.ts:42 is the logger, not the save handler." });
+    expect(penalty).toMatchObject({ confirmationId: target.id, reason: "irrelevant", targetReputation: before - 10 });
+    expect((await refused("cara", "penalise-confirmation", { id: target.id, reason: "empty", description: "Again." }, 409)).error).toBe("already_penalised");
+    const after = ((await ok("ada", "list-confirmations", { id })).entries as (Entry & { replies: { id: string }[] })[]).find((entry) => entry.id === target.id)!;
+    expect(after.penalty).toMatchObject({ reason: "irrelevant" });
+    expect(after.replies.map((reply) => reply.id)).toContain(penalty.commentId);
   });
 
   it("is marked important with a plain toggle, no reason (#importance)", async () => {
@@ -166,7 +197,7 @@ describe("a report from idea to merge", () => {
   it("gets its work delivered by the claim holder only, as In progress's entry, and moves to Delivered", async () => {
     const other = solver === "cara" ? "bob" : "cara";
     // Nothing to judge before the work is delivered.
-    expect((await refused(other, "submit-test-result", { id, goodToMerge: false, summary: "Too early.", description: "Nothing delivered." }, 409)).error).toBe("not_delivered");
+    expect((await refused(other, "submit-test-result", { id, goodToMerge: false, summary: "Too early.", description: "Nothing delivered.", files: FILES }, 409)).error).toBe("not_delivered");
     // A delivery explains itself: a bare one is refused by the API (sent raw; the CLI asks for the flags itself).
     const { projectId } = (await ok(solver, "get-issue", { id })).issue;
     const bare = await ziki("request", "POST", `/api/v1/issues/${id}/delivery?projectId=${projectId}`, "--body", JSON.stringify({ pullRequestUrl: delivery.pullRequestUrl, testResults: "1 passed" }), "--as", solver);
@@ -187,7 +218,7 @@ describe("a report from idea to merge", () => {
   });
 
   it("is judged by independent owners, not by the solver, by what the latest report says of its PR", async () => {
-    const verdict = { summary: "Good to merge.", description: "Verified on the branch: Save works again." };
+    const verdict = { summary: "Good to merge.", description: "Verified on the branch: Save works again.", files: FILES };
     await refused(solver, "submit-test-result", { id, goodToMerge: true, ...verdict }, 403);
     const testers = (["bob", "cara", "eli"] as const).filter((agent) => agent !== solver).slice(0, 2);
     // #review-entries: a bare verdict is refused, and old clients are told notes is gone.
@@ -207,9 +238,9 @@ describe("a report from idea to merge", () => {
     expect(first).toMatchObject({ error: "not_ready", missing: "deployment_verification" });
     expect(first.todo).toBeTruthy();
     // "Not good to merge" is always recorded, and giving it again replaces it.
-    const fail = await ok(testers[1], "submit-test-result", { id, goodToMerge: false, summary: "Not good to merge yet.", description: "Save still fails on the second click." });
+    const fail = await ok(testers[1], "submit-test-result", { id, goodToMerge: false, summary: "Not good to merge yet.", description: "Save still fails on the second click.", files: FILES });
     expect(fail.verdict).toMatchObject({ goodToMerge: false, summary: "Not good to merge yet." });
-    const again = await ok(testers[1], "submit-test-result", { id, goodToMerge: false, summary: "Still not good to merge.", description: "Retested: the second click still fails." });
+    const again = await ok(testers[1], "submit-test-result", { id, goodToMerge: false, summary: "Still not good to merge.", description: "Retested: the second click still fails.", files: FILES });
     expect(again).toMatchObject({ changed: true, verdict: { id: fail.verdict.id, summary: "Still not good to merge." } });
     const reply = await ok("ada", "comment", { id, summary: "A short comment.", body: "Which browser was this in?", testVerdictId: fail.verdict.id });
     expect(reply.comment).toMatchObject({ testVerdictId: fail.verdict.id, parentId: null });
@@ -258,7 +289,7 @@ describe("a report from idea to merge", () => {
     expect((await ok("ada", "get-issue", { id })).issue.substatus).toBe("requires_review");
     // A working agent's not-good judgement (1) on top of eli's (2) reaches the 3 needed.
     const testers = (["bob", "cara", "eli"] as const).filter((agent) => agent !== solver).slice(0, 2);
-    await ok(testers[0], "submit-test-result", { id, goodToMerge: false, summary: "Not good to merge.", description: "The second click still fails here too." });
+    await ok(testers[0], "submit-test-result", { id, goodToMerge: false, summary: "Not good to merge.", description: "The second click still fails here too.", files: FILES });
     const issue = (await ok("ada", "get-issue", { id })).issue;
     expect(issue).toMatchObject({ status: "open", pullRequestUrl: null, holder: null });
     // The deliveries stay on the issue as its history.

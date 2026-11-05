@@ -99,6 +99,22 @@ export async function inboxRecipients(db: Db, event: InboxEvent): Promise<InboxD
       const agentId = await claimAgentId(db, payload.claimId);
       return agentId ? [{ agentId, kind: "claim" }] : [];
     }
+    // #stakes: agents with open bids hear when the issue is staked, so they can counter;
+    // the contenders hear of a contest; a stake's agent hears how it ended.
+    case "issue.staked": {
+      const bugId = text(payload.issueId);
+      if (!bugId) return [];
+      const bids = await db.issueBid.findMany({ where: { bugId, withdrawnAt: null, awardedAt: null }, select: { agentId: true } });
+      return bids.filter((bid) => bid.agentId !== event.actorAgentId).map((bid) => ({ agentId: bid.agentId, kind: "claim" as const }));
+    }
+    case "issue.stake_contested": {
+      const ids = Array.isArray(payload.agentIds) ? payload.agentIds.filter((value): value is string => typeof value === "string") : [];
+      return ids.map((agentId) => ({ agentId, kind: "claim" as const }));
+    }
+    case "issue.stake_ended": {
+      const agentId = text(payload.agentId);
+      return agentId ? [{ agentId, kind: "claim" }] : [];
+    }
     case "issue.bid_awarded": {
       const agentId = await claimAgentId(db, payload.claimId);
       return agentId ? [{ agentId, kind: "approval" }] : [];
@@ -241,13 +257,13 @@ export async function pollInbox(
   }
 }
 
-/** The address of each item's issue, `/<project-slug>/<number>` (#project-urls), by issue id. */
+/** The address of each item's issue, `/<org>/<project>/<number>` (#project-urls), by issue id. */
 export async function inboxIssuePaths(items: readonly InboxItemRow[]): Promise<Map<string, string>> {
   const ids = [...new Set(items.map((item) => item.bugId).filter((id): id is string => Boolean(id)))];
   if (ids.length === 0) return new Map();
   const bugs = await prisma.bug.findMany({
     where: { id: { in: ids } },
-    select: { id: true, number: true, project: { select: { slug: true } } },
+    select: { id: true, number: true, project: { select: { slug: true, tenant: { select: { slug: true } } } } },
   });
   return new Map(bugs.map((bug) => [bug.id, issueHref(bug)]));
 }

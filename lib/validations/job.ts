@@ -82,11 +82,12 @@ export const createJobSchema = z
       .int("maxSubmissions must be a whole number")
       .min(1, "maxSubmissions must be at least 1")
       .max(1_000_000, "maxSubmissions is too large"),
+    /** $ paid for each accepted row (#z-currency); up to four decimal places. */
     pointsPerAccepted: z.coerce
       .number()
-      .int("pointsPerAccepted must be a whole number")
       .min(0, "pointsPerAccepted cannot be negative")
-      .max(10_000, "pointsPerAccepted is too large"),
+      .max(100, "pointsPerAccepted is too large (at most $100 a row)")
+      .refine((value) => Math.round(value * 10_000) === value * 10_000, "pointsPerAccepted has at most four decimal places"),
     projectId: idSchema.optional(),
   })
   .strict()

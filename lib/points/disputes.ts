@@ -5,7 +5,7 @@ import { award, type PointAward } from "./award";
 import { getProjectRewardConfig } from "./platform-rewards";
 import {
   calculateReporterPoints,
-  calculateSolverPoints,
+  solverReward,
   type ProjectRewardConfig,
 } from "./project-rewards";
 import { pointSourceKey, pointsNumber, type PointAmount, type PointRole } from "./rules";
@@ -64,6 +64,8 @@ export type DisputableBug = {
   reporterId: string;
   assigneeId: string | null;
   projectId?: string | null;
+  /** #rewards: what solving it pays. */
+  reward?: number | { toNumber(): number } | null;
 };
 
 export type DisputeRow = {
@@ -80,7 +82,7 @@ export type GrantResult = { ok: true; awarded: boolean } | { ok: false; error: s
 
 /** The canonical entry for the award a "missing" dispute asks for; null when there is nobody to award. */
 export function missingAwardEntry(
-  bug: Pick<DisputableBug, "id" | "tenantId" | "reporterId" | "assigneeId">,
+  bug: Pick<DisputableBug, "id" | "tenantId" | "reporterId" | "assigneeId" | "reward">,
   role: DisputeRole,
   rewardConfig?: ProjectRewardConfig | null,
 ): PointAward | null {
@@ -100,7 +102,7 @@ export function missingAwardEntry(
     userId: bug.assigneeId,
     bugId: bug.id,
     role: "solver",
-    points: calculateSolverPoints(rewardConfig),
+    points: solverReward(bug.reward),
     sourceKey: pointSourceKey("solver", bug.id, bug.assigneeId),
   };
 }
@@ -242,6 +244,7 @@ export async function correctEntry(
     role: entry.role,
     points: -pointsNumber(entry.points),
     sourceKey: correctionSourceKey(entry.id),
+    exact: true,
   });
   await db.pointDispute.update({
     where: { id: dispute.id },
@@ -284,7 +287,7 @@ const disputeSelect = {
   createdAt: true,
   pointEntryId: true,
   requestedRole: true,
-  bug: { select: { id: true, number: true, title: true, project: { select: { slug: true } } } },
+  bug: { select: { id: true, number: true, title: true, project: { select: { slug: true, tenant: { select: { slug: true } } } } } },
   user: { select: { id: true, name: true } },
   pointEntry: { select: { id: true, points: true, role: true } },
 } satisfies Prisma.PointDisputeSelect;
@@ -303,7 +306,7 @@ export type DisputeView = {
   bugId: string;
   bugNumber: number;
   bugTitle: string;
-  /** The issue's address, `/<project-slug>/<number>`. */
+  /** The issue's address, `/<org>/<project>/<number>`. */
   bugPath: string;
   openerId: string;
   openerName: string;

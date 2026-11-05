@@ -49,12 +49,15 @@ export function StepTitle({
   count,
   at,
   children,
+  action,
 }: {
   id?: string;
   title: string;
   count?: number;
   at: Date | string | null | undefined;
   children?: React.ReactNode;
+  /** A control beside the heading (not inside it), e.g. the Bid button. */
+  action?: React.ReactNode;
 }) {
   return (
     <div className="mb-3 flex items-center gap-3">
@@ -63,6 +66,7 @@ export function StepTitle({
         {count === undefined ? null : <span className="font-mono font-normal normal-case tracking-normal">{count}</span>}
         {children}
       </h3>
+      {action}
       <StepDate at={at} />
     </div>
   );

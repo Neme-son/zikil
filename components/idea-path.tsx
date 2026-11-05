@@ -49,22 +49,36 @@ export function IdeaPathChips({ ideaId, approvedByMe = false, score, threshold, 
   const [pending, startTransition] = useTransition();
   const scoreText = threshold === null ? `${score}` : `${score}/${threshold}`;
   const open = !archived && !rejected && !bad;
+  // At the threshold it waits for an agent to convert it, and another good verdict
+  // is refused (enough_verdicts), so there is nothing to approve.
+  const reached = threshold !== null && score >= threshold;
 
-  if (open && !approved) {
+  if (open && !approved && !reached) {
     const approve = () => {
       setError(null);
       setApproved(true);
       startTransition(async () => {
-        const result = await quickIdeaVerdictAction(ideaId, "good");
-        if (result.error) {
+        let message: string | null;
+        try {
+          message = (await quickIdeaVerdictAction(ideaId, "good"))?.error ?? null;
+        } catch {
+          message = "Could not save that. Please try again.";
+        }
+        if (message) {
           setApproved(false);
-          setError(result.error);
+          setError(message);
         }
       });
     };
     return (
       // Two steps sit at the right of the Status column.
       <div className="flex w-full items-center justify-end gap-[3px]" data-testid="idea-path" title={error ?? `At Idea, score ${scoreText}`}>
+        {/* Why the approve didn't save, beside the button rather than only in the tooltip. */}
+        {error ? (
+          <span role="alert" className="min-w-0 truncate text-[11px] font-medium text-zk-bad-fg">
+            {error}
+          </span>
+        ) : null}
         <span className={`${chip} ${tone.current}`}><Icon state="current" />Idea</span>
         <Arrow small />
         <button
@@ -97,8 +111,8 @@ export function IdeaPathChips({ ideaId, approvedByMe = false, score, threshold, 
         ? `At Idea, score ${scoreText}; rejection advised`
         : `At Idea, score ${scoreText}; next In progress, then Done`;
   return (
-    // Two steps (→ Rejected, → Archived) sit at the right of the Status column, like Approve.
-    <div className={`flex items-center gap-[3px] ${steps.length === 2 ? "w-full justify-end" : ""}`} role="img" aria-label={name} title={name} data-testid="idea-path">
+    // Every path sits at the right of the Status column, like Approve and the filters above it.
+    <div className="flex w-full items-center justify-end gap-[3px]" role="img" aria-label={name} title={name} data-testid="idea-path">
       {steps.map((step, index) => (
         <Fragment key={step.label}>
           {index > 0 ? <Arrow small /> : null}

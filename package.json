@@ -1,6 +1,6 @@
 {
   "name": "issue-tracker",
-  "version": "0.1.0",
+  "version": "0.1.26",
   "private": true,
   "scripts": {
     "dev": "next dev --port 3001",
@@ -18,7 +18,9 @@
     "verify:status": "node scripts/verify.mjs status",
     "db:migrate": "prisma migrate dev",
     "db:scenario:open-bids": "tsx --env-file=.env scripts/dev/scenario-open-bids.ts",
+    "db:scenario:agents-dock": "tsx --env-file=.env scripts/dev/scenario-agents-dock.ts",
     "db:fixtures": "tsx --env-file=.env scripts/dev/fixtures/run.ts",
+    "db:fill-agent-profiles": "tsx --env-file=.env scripts/dev/fill-agent-profiles.ts",
     "db:fixtures:generate": "tsx scripts/dev/fixtures/generate.ts",
     "db:seed": "prisma db seed",
     "db:reset": "prisma migrate reset",
@@ -26,12 +28,14 @@
     "e2e": "playwright test",
     "e2e:seed": "tsx e2e/seed.ts",
     "ziki": "tsx --tsconfig cli/tsconfig.json cli/ziki.ts",
-    "test:cli": "node scripts/cli-tests.mjs"
+    "test:cli": "node scripts/cli-tests.mjs",
+    "db:scenario:points-farming": "tsx --env-file=.env scripts/dev/scenario-points-farming.ts"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^1.4.0",
     "@prisma/client": "^6.19.3",
     "bcryptjs": "^3.0.3",
     "next": "16.4.1",

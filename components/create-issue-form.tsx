@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState, useTransition } from "react";
 import { unstable_rethrow } from "next/navigation";
-import { newIssuePath } from "@/lib/project-paths";
+import { newIssuePath, type ProjectRef } from "@/lib/project-paths";
 import { createBugAction, type ActionResult } from "@/app/actions/issues";
 import { submitFailureMessage } from "@/lib/submit-error";
 import { ErrorSummary, FieldError, useFieldErrors } from "@/components/ui/field-errors";
@@ -21,13 +21,13 @@ import { buildDraftKey, saveDraftToStorage } from "@/lib/form-drafts";
 import { reportedFromLine } from "@/lib/reported-from";
 import { DraftBanner } from "@/components/draft-banner";
 import { useConfirm } from "@/components/ui/confirm-dialog";
+import { ClaudeWorking } from "@/components/claude-working";
 import { initialDescription, templateSwitch } from "@/lib/issue-templates";
 
 /** Must match the title limit enforced by createBugSchema. */
 const TITLE_MAX_LENGTH = 200;
 
 type UserOption = { id: string; name: string; role: AppRole; image?: string | null };
-type CategoryOption = { id: string; name: string };
 type TypeOption = {
   id: string;
   name: string;
@@ -40,14 +40,12 @@ type TypeOption = {
 const FIELD_LABELS: Record<string, string> = {
   title: "Title",
   typeId: "Type",
-  categoryId: "Platform",
   description: "Description",
   proofLinks: "GitHub PR",
 };
 
 export function CreateIssueForm({
   users,
-  categories = [],
   types = [],
   currentUserId,
   projectId,
@@ -59,13 +57,12 @@ export function CreateIssueForm({
 }: {
   users: UserOption[];
   assigneeUsers?: UserOption[];
-  categories?: CategoryOption[];
   types?: TypeOption[];
   isAdmin: boolean;
   currentUserId?: string;
   projectId?: string | null;
   /** The project the form was opened in, for the full report page link. */
-  projectSlug: string;
+  projectSlug: ProjectRef;
   /**
    * "page": the full report page (detailed by default, with a link to a
    * quick report). "modal": the quick report opened over the current page.
@@ -117,7 +114,6 @@ export function CreateIssueForm({
       title: "",
       typeId: defaultTypeId,
       description: initialDescription(templateOf(defaultTypeId)),
-      categoryId: "",
       proofLinks: "",
     },
   );
@@ -174,7 +170,6 @@ export function CreateIssueForm({
         if (projectId) formData.set("projectId", projectId);
         if (mode === "detailed") {
           formData.set("typeId", values.typeId);
-          formData.set("categoryId", values.categoryId);
           formData.set("proofLinks", values.proofLinks);
         }
         startTransition(async () => {
@@ -349,31 +344,6 @@ export function CreateIssueForm({
           {mode === "detailed" ? (
             <div className="space-y-1.5">
               <label
-                htmlFor="categoryId"
-                className="text-sm font-medium text-slate-700"
-              >
-                Platform
-              </label>
-              <Select
-                id="categoryId"
-                name="categoryId"
-                value={values.categoryId}
-                onChange={(event) => setValue("categoryId", event.target.value)}
-                {...errs.attrs("categoryId")}
-              >
-                <option value="">Select a platform</option>
-                {categories.map((cat) => (
-                  <option key={cat.id} value={cat.id}>
-                    {cat.name}
-                  </option>
-                ))}
-              </Select>
-              <FieldError formId={errs.formId} field="categoryId" errors={errs.fieldErrors} />
-            </div>
-          ) : null}
-          {mode === "detailed" ? (
-            <div className="space-y-1.5">
-              <label
                 htmlFor="proofLinks"
                 className="text-sm font-medium text-slate-700"
               >
@@ -441,6 +411,8 @@ export function CreateIssueForm({
           {pending ? "Creating…" : isUploading ? "Uploading…" : "Create issue"}
         </Button>
       )}
+      {/* While the idea goes to Claude to be written up, show the work happening. */}
+      {pending ? <ClaudeWorking className="mt-3" /> : null}
     </form>
   );
 }

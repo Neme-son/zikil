@@ -161,8 +161,8 @@ async function main() {
         create: { tenantId: tenant.id, userId: ALICE_ID, role: "owner" },
         update: {},
       });
-      // Some points of her own in this workspace, so the header shows a balance (2121 points).
-      for (const [key, role, value] of [["solver", "solver", 1500], ["reporter", "reporter", 450], ["reviewer", "reviewer", 171]] as const) {
+      // Some $ of her own in this workspace, so the header shows a balance ($21.21).
+      for (const [key, role, value] of [["solver", "solver", 15], ["reporter", "reporter", 4.5], ["reviewer", "reviewer", 1.71]] as const) {
         await db.pointEntry.upsert({
           where: { sourceKey: `${P}-points-alice-${key}` },
           create: { tenantId: tenant.id, userId: ALICE_ID, role, points: value, sourceKey: `${P}-points-alice-${key}` },

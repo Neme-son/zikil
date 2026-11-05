@@ -17,35 +17,64 @@ describe("the workspace around the issues", () => {
   });
 
   describe("project notes", () => {
-    it("are saved against the version you read, so concurrent edits don't overwrite each other", async () => {
-      const before = await ok("ada", "get-notes", { id: projectId });
-      const version = before.notes?.version ?? before.version ?? 0;
-      const saved = await ok("ada", "save-notes", { id: projectId, body: "# Conventions\n\nUse pnpm.", expectedVersion: version, reason: "Start the notes." });
-      expect(JSON.stringify(saved)).toContain("Use pnpm.");
-      await refused("ada", "save-notes", { id: projectId, body: "# Stale", expectedVersion: version, reason: "Stale write." }, 409);
+    /** The current notes version, 0 when there are none yet. */
+    const notesVersion = async () => {
+      const read = await ok("bob", "get-notes", { id: projectId });
+      return (read.notes?.version ?? read.version ?? 0) as number;
+    };
+    const comment = async (body: string) => {
+      const posted = await ok("bob", "comment-on-notes", { id: projectId, body });
+      const commentId = (posted.comment?.id ?? posted.id) as string;
+      expect(commentId, JSON.stringify(posted)).toBeTruthy();
+      return commentId;
+    };
+
+    it("take no direct edits from any agent: the notes route only reads (#notes-promote)", async () => {
+      const direct = await ziki("request", "PUT", `/api/v1/projects/${projectId}/notes`, "--body", JSON.stringify({ body: "# Direct", expectedVersion: 0, reason: "Direct edit." }), "--as", "ada");
+      expect(direct.code).toBe(1);
+      expect(direct.json?.status).toBe(405);
     });
 
     it("take comments, upvotes and their removal", async () => {
-      const posted = await ok("bob", "comment-on-notes", { id: projectId, body: "Should we also document the release steps?" });
-      const commentId = posted.comment?.id ?? posted.id;
-      expect(commentId, JSON.stringify(posted)).toBeTruthy();
+      const commentId = await comment("Should we also document the release steps?");
       await ok("cara", "upvote-note-comment", { id: projectId, commentId });
       await ok("cara", "remove-note-comment-upvote", { id: projectId, commentId });
       expect(JSON.stringify(await ok("ada", "list-note-comments", { id: projectId }))).toContain("release steps");
     });
 
-    it("keep their history, which a merger agent or a workspace admin's agent can restore", async () => {
-      const current = await ok("ada", "get-notes", { id: projectId });
-      const version = current.notes?.version ?? current.version;
-      await ok("ada", "save-notes", { id: projectId, body: "# Conventions\n\nUse pnpm and Node 22.", expectedVersion: version, reason: "Add the Node version." });
-      const revisions = await ok("ada", "list-note-revisions", { id: projectId });
+    it("change only when a merger agent promotes a comment, which then leaves the discussion", async () => {
+      const commentId = await comment("Use pnpm, never npm: the lockfile is pnpm-lock.yaml.");
+      const version = await notesVersion();
+      const promotion = { id: projectId, commentId, body: "# Conventions\n\nUse pnpm.", expectedVersion: version, reason: "Upvoted and true." };
+      // A working agent can't, whoever its owner is.
+      await refused("bob", "promote-note-comment", promotion, 403);
+      await refused("ada", "promote-note-comment", promotion, 403);
+      const promoted = await ok("eli", "promote-note-comment", promotion);
+      expect(promoted).toMatchObject({ version: version + 1, comment: { id: commentId, promotedInVersion: version + 1 } });
+      expect(JSON.stringify(await ok("bob", "get-notes", { id: projectId }))).toContain("Use pnpm.");
+      // Retired: out of the discussion, listed with status=promoted, and not promoted twice.
+      expect(JSON.stringify(await ok("bob", "list-note-comments", { id: projectId }))).not.toContain(commentId);
+      expect(JSON.stringify(await ok("bob", "list-note-comments", { id: projectId, status: "promoted" }))).toContain(commentId);
+      await refused("eli", "promote-note-comment", { ...promotion, expectedVersion: version + 1 }, 409);
+    });
+
+    it("refuse a promotion against notes that changed since they were read", async () => {
+      const commentId = await comment("Run pnpm db:migrate, never db:seed, on a shared database.");
+      const stale = (await notesVersion()) - 1;
+      await refused("eli", "promote-note-comment", { id: projectId, commentId, body: "# Stale", expectedVersion: stale, reason: "Stale write." }, 409);
+    });
+
+    it("keep their history, which only a merger agent restores", async () => {
+      const commentId = await comment("Node 22 is required; Node 26 breaks the jsdom theme tests.");
+      await ok("eli", "promote-note-comment", { id: projectId, commentId, body: "# Conventions\n\nUse pnpm and Node 22.", expectedVersion: await notesVersion(), reason: "Add the Node version." });
+      const revisions = await ok("bob", "list-note-revisions", { id: projectId });
       const list = revisions.revisions ?? revisions.items ?? [];
       expect(list.length, JSON.stringify(revisions)).toBeGreaterThanOrEqual(2);
       const oldest = list[list.length - 1];
-      const latest = await ok("ada", "get-notes", { id: projectId });
-      // bob's owner is a plain member and bob is a working agent: no edit rights.
-      await refused("bob", "restore-note-revision", { id: projectId, revisionId: oldest.id, expectedVersion: latest.notes?.version ?? latest.version, reason: "Roll back." }, 403);
-      const restored = await ok("eli", "restore-note-revision", { id: projectId, revisionId: oldest.id, expectedVersion: latest.notes?.version ?? latest.version, reason: "Roll back." });
+      const restore = { id: projectId, revisionId: oldest.id, expectedVersion: await notesVersion(), reason: "Roll back." };
+      await refused("bob", "restore-note-revision", restore, 403);
+      await refused("ada", "restore-note-revision", restore, 403);
+      const restored = await ok("eli", "restore-note-revision", restore);
       expect(JSON.stringify(restored)).toContain("Use pnpm.");
     });
   });

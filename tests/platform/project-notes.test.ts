@@ -1,17 +1,17 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-/** Project notes (#732): only workspace admins and admin agents edit the official notes, each save is a revision, stale saves are refused, and everyone in the project may comment and vote once. */
+/** Project notes (#732): only workspace admins (in the app) and merger agents (by promoting a comment, #notes-promote) change the official notes, each save is a revision, stale saves are refused, and everyone in the project may comment and vote once. */
 const db = vi.hoisted(() => ({
   project: { findFirst: vi.fn() }, membership: { findUnique: vi.fn() },
   projectNotes: { findUnique: vi.fn(), create: vi.fn(), updateMany: vi.fn(), findUniqueOrThrow: vi.fn() },
   projectNoteRevision: { create: vi.fn(), findFirst: vi.fn(), findMany: vi.fn() },
-  projectNoteComment: { create: vi.fn(), findFirst: vi.fn(), findMany: vi.fn() },
+  projectNoteComment: { create: vi.fn(), findFirst: vi.fn(), findMany: vi.fn(), updateMany: vi.fn() },
   projectNoteCommentVote: { findUnique: vi.fn(), upsert: vi.fn(), deleteMany: vi.fn(), count: vi.fn() },
   pointEntry: { createMany: vi.fn() },
   agentAuditEvent: { create: vi.fn() }, $transaction: vi.fn(),
 }));
 vi.mock("@/lib/prisma", () => ({ prisma: db }));
-import { agentNotesActor, saveProjectNotes,
+import { agentNotesActor, saveProjectNotes, promoteNoteComment,
   addNoteComment, voteNoteComment, restoreProjectNotes, type NotesActor } from "@/lib/project-notes";
 import type { AgentContext } from "@/lib/agents/require-agent";
 
@@ -37,6 +37,12 @@ describe("project notes access", () => {
   });
   it("does not confer workspace authority from a site admin title", async () => {
     expect((await agentNotesActor({ ...agent, ownerRole: "admin" }, "project")).canEdit).toBe(false);
+  });
+  it("gives no working agent edit rights, even one a workspace admin owns; only a merger agent (#notes-promote)", async () => {
+    db.membership.findUnique.mockResolvedValue({ role: "admin" });
+    expect((await agentNotesActor(agent, "project")).canEdit).toBe(false);
+    expect((await agentNotesActor({ ...agent, level: "manager" }, "project")).canEdit).toBe(false);
+    expect((await agentNotesActor({ ...agent, level: "merger" }, "project")).canEdit).toBe(true);
   });
 });
 
@@ -67,6 +73,31 @@ describe("official notes and history", () => {
     db.projectNoteRevision.findFirst.mockResolvedValue(null);
     await expect(restoreProjectNotes(actor, "foreign", { expectedVersion: 2, reason: "Restore" })).rejects.toMatchObject({ status: 404 });
     expect(db.projectNoteRevision.findFirst).toHaveBeenCalledWith({ where: { id: "foreign", projectId: "project" } });
+  });
+});
+
+describe("promoting a notes comment (#notes-promote)", () => {
+  const merger: NotesActor = { ...actor, agent: { ...agent, level: "merger" } };
+  it("refuses any agent but a merger before touching the notes", async () => {
+    await expect(promoteNoteComment({ ...actor, agent: { ...agent, level: "manager" } }, "c1", input)).rejects.toMatchObject({ status: 403 });
+    expect(db.$transaction).not.toHaveBeenCalled();
+  });
+  it("saves the next version and retires the comment and its replies in the same step", async () => {
+    db.projectNoteComment.findFirst.mockResolvedValue({ id: "c1", retiredAt: null, promotedInVersion: null });
+    await expect(promoteNoteComment(merger, "c1", input)).resolves.toMatchObject({ version: 1, comment: { id: "c1", promotedInVersion: 1 } });
+    expect(db.projectNoteRevision.create).toHaveBeenCalledWith({ data: expect.objectContaining({ version: 1, reason: expect.stringContaining("c1") }) });
+    expect(db.projectNoteComment.updateMany).toHaveBeenCalledWith({
+      where: { OR: [{ id: "c1" }, { parentId: "c1" }], projectId: "project", retiredAt: null },
+      data: expect.objectContaining({ promotedInVersion: 1, promotedByAgentId: "agent" }),
+    });
+  });
+  it("refuses a comment already promoted, and a stale version, without retiring anything", async () => {
+    db.projectNoteComment.findFirst.mockResolvedValue({ id: "c1", retiredAt: new Date(), promotedInVersion: 2 });
+    await expect(promoteNoteComment(merger, "c1", input)).rejects.toMatchObject({ status: 409 });
+    db.projectNoteComment.findFirst.mockResolvedValue({ id: "c2", retiredAt: null, promotedInVersion: null });
+    db.projectNotes.updateMany.mockResolvedValue({ count: 0 });
+    await expect(promoteNoteComment(merger, "c2", { ...input, expectedVersion: 3 })).rejects.toMatchObject({ status: 409 });
+    expect(db.projectNoteComment.updateMany).not.toHaveBeenCalled();
   });
 });
 
@@ -106,7 +137,7 @@ describe("agent discussion", () => {
     db.projectNoteCommentVote.findUnique.mockResolvedValue({ value: 1 });
     await voteNoteComment(actor, "comment", -1);
     const paid = db.pointEntry.createMany.mock.calls.map(([args]) => args.data[0]);
-    expect(paid.map((entry: { points: number }) => Number(entry.points))).toEqual([1, -2]);
+    expect(paid.map((entry: { points: number }) => Number(entry.points))).toEqual([0.01, -0.02]);
     expect(paid.every((entry: { userId: string; agentId: string }) => entry.userId === "author" && entry.agentId === "author-agent")).toBe(true);
   });
 

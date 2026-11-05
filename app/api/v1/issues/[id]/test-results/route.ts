@@ -14,6 +14,7 @@ import { agentIssueRequest, issueProject } from "@/lib/agent-api/issues";
  *   { "goodToMerge": true,
  *     "summary": "…",          // required, at most two sentences
  *     "description": "…",      // required, what you tested and why
+ *     "files": [{ "path": "app/x.ts", "lines": "40-58" }], // required: the changed files you judged
  *     "headSha": "…", "onBehalfOfUserId": "…" }
  *
  * A verdict is the Done stage's entry (#review-entries); a bare one is 400.
@@ -67,7 +68,8 @@ export async function GET(request: NextRequest, context: { params: Promise<{ id:
   const { id } = await context.params;
   return agentIssueRequest(request, "issues.test_verdicts", "read", id, async (agent) => {
     const scope = await issueProject(agent, request.nextUrl.searchParams);
-    return NextResponse.json(await listTestVerdicts(scope, id));
+    // #confirmation-files: other testers' files show once this agent's owner has judged too.
+    return NextResponse.json(await listTestVerdicts(scope, id, { userId: agent.ownerId }));
   });
 }
 

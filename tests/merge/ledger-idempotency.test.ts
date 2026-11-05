@@ -11,7 +11,7 @@ vi.mock("@/lib/agent-api/pull-request-report", () => ({
   reportedClosedUnmerged: reports.reportedClosedUnmerged,
 }));
 
-import { award, awardDispatcher, awardSolver } from "@/lib/points/award";
+import { award, awardDispatcher, solverAward } from "@/lib/points/award";
 import { correct } from "@/lib/points/correct";
 
 /** An in-memory ledger with the unique `sourceKey` the database enforces. */
@@ -39,16 +39,17 @@ describe("points ledger (#428)", () => {
     expect(await awardDispatcher(db, { id: "bug-1", tenantId: "tenant-zedu" }, "another-owner")).toBe(false);
     expect(rows).toEqual([{
       tenantId: "tenant-zedu", bugId: "bug-1", userId: "dispatcher-owner",
-      role: "dispatcher", points: 60, sourceKey: "dispatcher:bug-1",
+      role: "dispatcher", points: 0.6, sourceKey: "dispatcher:bug-1",
     }]);
   });
 
-  it("awards solver points once, even when resolved again", async () => {
+  it("awards the solver the issue's reward once, even when resolved again", async () => {
     const { db, rows } = fakeLedger();
-    expect(await awardSolver(db, issue)).toBe(true);
-    expect(await awardSolver(db, issue)).toBe(false);
+    const entry = solverAward({ ...issue, reward: 5 })!;
+    expect(await award(db, entry)).toBe(true);
+    expect(await award(db, entry)).toBe(false);
     expect(rows).toHaveLength(1);
-    expect(rows[0]).toMatchObject({ points: 750, role: "solver" });
+    expect(rows[0]).toMatchObject({ points: 5, role: "solver" });
   });
 
   it("skips duplicates in the database instead of failing", async () => {

@@ -1,4 +1,4 @@
-import { SOLVER_POINTS, REPORTER_POINTS, REVIEWER_POINTS } from "@/lib/points/rules";
+import { formatZ, REPORTER_POINTS, REVIEWER_POINTS } from "@/lib/points/rules";
 import type { ProjectRewardConfig } from "@/lib/points/project-rewards";
 
 interface ProjectRewardRulesDisplayProps {
@@ -15,12 +15,10 @@ export function ProjectRewardRulesDisplay({
   customized,
 }: ProjectRewardRulesDisplayProps) {
   const fallback = defaults ?? {
-    solver: SOLVER_POINTS,
     reporter: REPORTER_POINTS,
     reviewer: REVIEWER_POINTS,
     guidelines: null,
   };
-  const solver = rewardConfig?.solver ?? fallback.solver;
   const reporter = rewardConfig?.reporter ?? fallback.reporter;
   const reviewer = rewardConfig?.reviewer ?? fallback.reviewer;
   const guidelines = rewardConfig?.guidelines ?? fallback.guidelines;
@@ -30,7 +28,7 @@ export function ProjectRewardRulesDisplay({
     <div className="rounded-[20px] border border-zk-border bg-zk-surface p-4 sm:p-5">
       <div className="flex items-center justify-between">
         <h3 className="text-sm font-semibold uppercase tracking-wide text-zk-text2">
-          Reward & Points Rules
+          Reward & $ Rules
         </h3>
         {isCustom ? (
           <span className="rounded-full bg-zk-tint px-2.5 py-0.5 text-xs font-medium text-zk-accent border border-zk-border">
@@ -46,15 +44,15 @@ export function ProjectRewardRulesDisplay({
       <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-3">
         <div className="flex items-center justify-between rounded-xl bg-zk-tint px-3 py-2 border border-zk-divider">
           <span className="text-xs font-medium text-zk-text2">Solver Reward</span>
-          <span className="text-sm font-bold text-zk-text">{solver} pts</span>
+          <span className="text-sm font-bold text-zk-text" title="Each issue's own reward, set by the agents' planning poker">$1–$10</span>
         </div>
         <div className="flex items-center justify-between rounded-xl bg-zk-tint px-3 py-2 border border-zk-divider">
           <span className="text-xs font-medium text-zk-text2">Reporter Bounty</span>
-          <span className="text-sm font-bold text-zk-text">{reporter} pts</span>
+          <span className="text-sm font-bold text-zk-text">{formatZ(reporter)}</span>
         </div>
         <div className="flex items-center justify-between rounded-xl bg-zk-tint px-3 py-2 border border-zk-divider">
           <span className="text-xs font-medium text-zk-text2">Reviewer Reward</span>
-          <span className="text-sm font-bold text-zk-text">{reviewer} pts</span>
+          <span className="text-sm font-bold text-zk-text">{formatZ(reviewer)}</span>
         </div>
       </div>
 

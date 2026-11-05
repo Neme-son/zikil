@@ -45,7 +45,7 @@ export function WalletAddressForm({ initialAddress }: { initialAddress: string }
 
   const hint =
     trimmed === ""
-      ? "An EVM address (0x followed by 40 hex characters) where your points could be sent one day. Leave it empty and save to clear it."
+      ? "An EVM address (0x followed by 40 hex characters) where your $ could be sent one day. Leave it empty and save to clear it."
       : valid
         ? "Looks like a valid EVM address."
         : `That doesn't look right — it should be 0x followed by 40 hex characters (${Math.max(0, trimmed.length - 2)}/40).`;

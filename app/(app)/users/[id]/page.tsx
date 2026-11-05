@@ -5,10 +5,12 @@ import { prisma } from "@/lib/prisma";
 import { bugInTenant, currentTenantIdFor } from "@/lib/tenant-context";
 import { pointTotals } from "@/lib/points/leaderboard";
 import { getPlatformRewardConfig } from "@/lib/points/platform-rewards";
-import { formatPoints } from "@/lib/points/rules";
+import { formatZ } from "@/lib/points/rules";
 import { pointBalance } from "@/lib/points/balance";
 import { decodePointCursor, pointEntries, pointEntriesQuerySchema } from "@/lib/points/entries";
 import { PointsLedger } from "@/components/points-ledger";
+import { PointsSources } from "@/components/points-sources";
+import { pointSources } from "@/lib/points/sources";
 import { PointsSummary } from "@/components/points-summary";
 import { requireUser } from "@/lib/auth-helpers";
 import { canViewProfile, canViewWallet } from "@/lib/profile-access";
@@ -66,13 +68,13 @@ export default async function ProfilePage({ params, searchParams }: ProfileProps
     }),
     prisma.bug.findMany({
       where: { reporterId: id, isDeleted: false, ...scope },
-      select: { id: true, number: true, title: true, status: true, createdAt: true, project: { select: { slug: true } } },
+      select: { id: true, number: true, title: true, status: true, createdAt: true, project: { select: { slug: true, tenant: { select: { slug: true } } } } },
       orderBy: { createdAt: "desc" },
       take: RECENT,
     }),
     prisma.bug.findMany({
       where: { assigneeId: id, isDeleted: false, ...scope },
-      select: { id: true, number: true, title: true, status: true, updatedAt: true, project: { select: { slug: true } } },
+      select: { id: true, number: true, title: true, status: true, updatedAt: true, project: { select: { slug: true, tenant: { select: { slug: true } } } } },
       orderBy: { updatedAt: "desc" },
       take: RECENT,
     }),
@@ -122,8 +124,13 @@ export default async function ProfilePage({ params, searchParams }: ProfileProps
   const assignedWork = tenantId && tenantMembership
     ? await teamAssignedWorkForMember(prisma, tenantId, person.id, agents)
     : [];
-  const manageLevels = tenantId && viewer.id !== person.id && (await isTenantAdmin(viewer, tenantId))
+  const viewerIsAdmin = tenantId ? await isTenantAdmin(viewer, tenantId) : false;
+  const manageLevels = tenantId && viewer.id !== person.id && viewerIsAdmin
     ? settableLevels({ isOwner: false, isTenantAdmin: true })
+    : null;
+  // #points-sources: where their points came from, for the person and the workspace's admins (to spot farming).
+  const sources = tenantId && (viewer.id === person.id || viewerIsAdmin)
+    ? await pointSources(prisma, { tenantId, userId: person.id })
     : null;
 
   return (
@@ -169,7 +176,7 @@ export default async function ProfilePage({ params, searchParams }: ProfileProps
           {balance ? (
             <>
               <p className="mt-1 text-2xl font-semibold tabular-nums text-zk-text">
-                {formatPoints(balance.lifetime.points)}
+                {formatZ(balance.lifetime.points)}
                 <span className="ml-1 text-sm font-normal text-zk-text2">
                   point{balance.lifetime.points === 1 ? "" : "s"}
                 </span>
@@ -188,6 +195,8 @@ export default async function ProfilePage({ params, searchParams }: ProfileProps
           ) : null}
         </section>
       ) : null}
+
+      {sources ? <PointsSources sources={sources} name={person.name ?? "this person"} /> : null}
 
       {tenantId && viewer.id === person.id ? (
         <PointsLedger page={ledger} profileId={person.id} from={ledgerQuery.success ? ledgerQuery.data.from : undefined} to={ledgerQuery.success ? ledgerQuery.data.to : undefined} error={ledgerError} />
@@ -233,7 +242,7 @@ function Stat({ label, value }: { label: string; value: number }) {
 type ProfileIssue = {
   id: string;
   number: number;
-  project: { slug: string };
+  project: { slug: string; tenant: { slug: string } };
   title: string;
   status: keyof typeof statusLabels;
 };

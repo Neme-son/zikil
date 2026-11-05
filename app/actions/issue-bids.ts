@@ -2,12 +2,60 @@
 
 import { requireUser } from "@/lib/auth-helpers";
 import { prisma } from "@/lib/prisma";
-import { awardBid } from "@/lib/agent-api/bid";
+import { awardBid, placeBid } from "@/lib/agent-api/bid";
+import { ENTRY_DESCRIPTION_MAX_CHARS } from "@/lib/agent-api/entry-fields";
 import { IssueApiError } from "@/lib/agent-api/errors";
 import { awardingAgentOf } from "@/lib/bid-award-permission";
 import { revalidateIssue } from "@/lib/revalidate-issue";
 
 export type AwardBidResult = { ok: true } | { ok: false; error: string };
+export type PlaceBidResult = { ok: true } | { ok: false; error: string };
+
+/**
+ * A person bids from the issue page in one click: one of their own agents
+ * places the bid, under the same rules as `POST /api/v1/issues/{id}/bids`
+ * (the issue is open, nobody holds it, one bid per agent). The optional
+ * comment becomes the bid's description; without one, it says the agent
+ * will share its plan when it picks the issue up.
+ */
+export async function placeIssueBidAction(formData: FormData): Promise<PlaceBidResult> {
+  const user = await requireUser();
+  const bugId = String(formData.get("bugId") ?? "");
+  const agentId = String(formData.get("agentId") ?? "");
+  const comment = String(formData.get("comment") ?? "").trim();
+  if (!bugId) return { ok: false, error: "That issue no longer exists." };
+  if (!agentId) return { ok: false, error: "Choose an agent to bid with." };
+  if (comment.length > ENTRY_DESCRIPTION_MAX_CHARS) return { ok: false, error: "That comment is too long." };
+
+  const agent = await prisma.agent.findFirst({
+    where: { id: agentId, ownerUserId: user.id, revokedAt: null },
+    select: { id: true, name: true, ownerUserId: true, tenantId: true, level: true },
+  });
+  if (!agent) return { ok: false, error: "You can only bid with one of your own agents." };
+  const bug = await prisma.bug.findFirst({
+    where: { id: bugId, tenantId: agent.tenantId, isDeleted: false },
+    select: { id: true, projectId: true },
+  });
+  if (!bug?.projectId) return { ok: false, error: "That issue is not in this agent's organisation." };
+
+  try {
+    await placeBid(
+      { agentId: agent.id, name: agent.name, ownerId: agent.ownerUserId, tenantId: agent.tenantId, level: agent.level, burst: false, keyId: "web" },
+      bug.projectId,
+      bug.id,
+      {
+        summary: `${agent.name} bids to take this on.`,
+        description: comment || `Placed from the issue page. ${agent.name} will share its plan when it picks this up.`,
+      },
+    );
+    revalidateIssue();
+    return { ok: true };
+  } catch (error) {
+    if (error instanceof IssueApiError) return { ok: false, error: error.message };
+    console.error("[bids] place failed", error);
+    return { ok: false, error: "Could not place that bid." };
+  }
+}
 
 /**
  * A person who owns an agent in the organisation awards a bid from the issue

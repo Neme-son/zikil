@@ -28,6 +28,8 @@ const NUMERIC_FIELDS = [
   "managerVoteWeight",
   "awardThreshold",
   "acceptThreshold",
+  "stakeLimit",
+  "stakeInProgressLimit",
 ] as const;
 
 async function projectSettingsAccess(slug: string) {

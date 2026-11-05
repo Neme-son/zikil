@@ -3,6 +3,7 @@
 import { useEffect, useId, useRef, useState, useTransition } from "react";
 import { unstable_rethrow } from "next/navigation";
 import { createBugAction } from "@/app/actions/issues";
+import { ClaudeWorking } from "@/components/claude-working";
 import { BASE_PATH } from "@/lib/base-path";
 
 type Upload = { key: string; name: string; id?: string; error?: string };
@@ -170,6 +171,8 @@ export function IdeaChat({ projectId, className = "", alwaysOpen = false, placeh
                 ))}
               </ul>
             ) : null}
+            {/* While the idea goes to Claude to be written up, show the work happening. */}
+            {pending ? <ClaudeWorking className="mt-2" /> : null}
             {error ? <p role="alert" className="m-0 mt-1 px-1 text-xs text-zk-bad-fg">{error}</p> : null}
             <div className="mt-2 flex items-center justify-between">
               <button

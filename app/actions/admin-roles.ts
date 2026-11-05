@@ -28,7 +28,7 @@ export async function setSiteRoleAction(
     nextRole,
   });
   if (!result.ok) return result;
-  revalidatePath("/admin/users");
+  revalidatePath("/superadmin/users");
   revalidatePath(`/users/${targetUserId}`);
   return { ok: true };
 }

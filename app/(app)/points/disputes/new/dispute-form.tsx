@@ -98,12 +98,12 @@ export function DisputeForm({
             id="pointEntryId"
             name="pointEntryId"
             defaultValue={defaultEntryId}
-            placeholder="Entry id from your points list"
+            placeholder="Entry id from your ledger"
             required
             aria-invalid={error?.field === "pointEntryId" || undefined}
           />
           <p className="text-xs text-zk-muted">
-            Find it under “Your points entries” on the disputes page, then press Dispute.
+            Find it under “Your ledger entries” on the disputes page, then press Dispute.
           </p>
         </div>
       )}
@@ -117,7 +117,7 @@ export function DisputeForm({
           name="reason"
           rows={3}
           maxLength={1000}
-          placeholder="I resolved #42 on Tuesday but no solver points appeared."
+          placeholder="I resolved #42 on Tuesday but no solver $ appeared."
           required
           aria-invalid={error?.field === "reason" || undefined}
           aria-describedby={error ? "dispute-form-error" : undefined}

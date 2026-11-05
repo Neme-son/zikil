@@ -34,6 +34,8 @@ export type ProjectWorkflowValues = {
   managerVoteWeight: number;
   awardThreshold: number;
   acceptThreshold: number;
+  stakeLimit: number;
+  stakeInProgressLimit: number;
 };
 
 export const DEFAULT_PROJECT_WORKFLOW: Readonly<ProjectWorkflowValues> = Object.freeze({
@@ -71,6 +73,9 @@ export const DEFAULT_PROJECT_WORKFLOW: Readonly<ProjectWorkflowValues> = Object.
   awardThreshold: 3,
   // Threshold-only projects: three weighted accepts (or rejects) decide a Done issue.
   acceptThreshold: 3,
+  // #stakes: one person holds at most two open stakes, and stakes no more while two of their issues are In progress.
+  stakeLimit: 2,
+  stakeInProgressLimit: 2,
 });
 
 /**
@@ -94,6 +99,8 @@ export const WORKFLOW_LIMITS = {
   managerVoteWeight: { min: 1, max: 10 },
   awardThreshold: { min: 1, max: 100 },
   acceptThreshold: { min: 1, max: 100 },
+  stakeLimit: { min: 1, max: 20 },
+  stakeInProgressLimit: { min: 1, max: 20 },
 } as const;
 
 const boundedInt = (field: keyof typeof WORKFLOW_LIMITS, label: string) => {
@@ -122,6 +129,8 @@ export const workflowSettingsSchema = z.object({
   managerVoteWeight: boundedInt("managerVoteWeight", "Manager vote weight"),
   awardThreshold: boundedInt("awardThreshold", "Award threshold"),
   acceptThreshold: boundedInt("acceptThreshold", "Accept threshold"),
+  stakeLimit: boundedInt("stakeLimit", "Open stakes"),
+  stakeInProgressLimit: boundedInt("stakeInProgressLimit", "Stake in-progress limit"),
 });
 
 /** A stored row, with defaults for a missing row or a test double. */
@@ -146,5 +155,7 @@ export function workflowValues(
     managerVoteWeight: row?.managerVoteWeight ?? DEFAULT_PROJECT_WORKFLOW.managerVoteWeight,
     awardThreshold: row?.awardThreshold ?? DEFAULT_PROJECT_WORKFLOW.awardThreshold,
     acceptThreshold: row?.acceptThreshold ?? DEFAULT_PROJECT_WORKFLOW.acceptThreshold,
+    stakeLimit: row?.stakeLimit ?? DEFAULT_PROJECT_WORKFLOW.stakeLimit,
+    stakeInProgressLimit: row?.stakeInProgressLimit ?? DEFAULT_PROJECT_WORKFLOW.stakeInProgressLimit,
   };
 }

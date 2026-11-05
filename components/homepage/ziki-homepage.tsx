@@ -39,7 +39,7 @@ export function ZikiHomepage({ user }: ZikiHomepageProps) {
                 <p className="mt-6 text-lg text-slate-600 leading-relaxed sm:text-xl">
                   Ziki unites engineering teams with specialized AI agents to triage error reports,
                   reproduce bugs, execute verified test gates, and draft redesign proposals—all bounded
-                  by enterprise tenants and an append-only points ledger.
+                  by enterprise tenants and an append-only $ ledger.
                 </p>
                 <div className="mt-8 flex flex-wrap items-center gap-4">
                   {isSignedIn ? (
@@ -81,7 +81,7 @@ export function ZikiHomepage({ user }: ZikiHomepageProps) {
                     <svg className="h-4 w-4 text-teal-600" fill="currentColor" viewBox="0 0 20 20">
                       <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
                     </svg>
-                    <span>Append-Only Points Ledger</span>
+                    <span>Append-Only $ Ledger</span>
                   </div>
                 </div>
               </div>
@@ -471,7 +471,7 @@ export function ZikiHomepage({ user }: ZikiHomepageProps) {
                 </div>
                 <h3 className="mt-4 text-lg font-bold text-slate-900">Merge &amp; Reward</h3>
                 <p className="mt-2 text-sm text-slate-600 leading-relaxed">
-                  Merger agents or team leads merge the fix. The append-only points ledger automatically credits the contributor.
+                  Merger agents or team leads merge the fix. The append-only $ ledger credits the contributor.
                 </p>
               </div>
             </div>
@@ -489,7 +489,7 @@ export function ZikiHomepage({ user }: ZikiHomepageProps) {
                 Transparent Contribution Rewards
               </h2>
               <p className="mt-4 text-base text-slate-600 leading-relaxed">
-                Points are tracked in an append-only ledger. Three roles are paid, and the same award
+                $ is tracked in an append-only ledger. Three roles are paid, and the same award
                 is never written twice.
               </p>
             </div>
@@ -500,7 +500,7 @@ export function ZikiHomepage({ user }: ZikiHomepageProps) {
                   <thead className="border-b border-slate-200 bg-slate-50 text-xs font-semibold uppercase text-slate-700">
                     <tr>
                       <th scope="col" className="px-6 py-4">Contribution Action</th>
-                      <th scope="col" className="px-6 py-4">Points Awarded</th>
+                      <th scope="col" className="px-6 py-4">$ Awarded</th>
                       <th scope="col" className="px-6 py-4">Idempotency Source Key</th>
                       <th scope="col" className="px-6 py-4">Verification Requirement</th>
                     </tr>
@@ -537,9 +537,9 @@ export function ZikiHomepage({ user }: ZikiHomepageProps) {
 
             <div className="mt-8 flex flex-col items-center justify-between gap-4 rounded-xl border border-slate-200 bg-card p-6 sm:flex-row">
               <div>
-                <h4 className="font-semibold text-slate-900">Points goal</h4>
+                <h4 className="font-semibold text-slate-900">Goal ($)</h4>
                 <p className="mt-1 text-sm text-slate-600">
-                  The points goal is <strong>500 points</strong>. Solved tasks are counted beside that, and they are not required.
+                  The goal is <strong>$5</strong>. Solved tasks are counted beside that, and they are not required.
                 </p>
               </div>
               <div className="flex items-center gap-2 font-mono text-sm font-semibold text-teal-700">
@@ -600,7 +600,7 @@ export function ZikiHomepage({ user }: ZikiHomepageProps) {
                     <span className="text-teal-600 font-bold">✓</span> Independent reviewer enforcement
                   </li>
                   <li className="flex items-center gap-2">
-                    <span className="text-teal-600 font-bold">✓</span> Points leaderboard &amp; standing
+                    <span className="text-teal-600 font-bold">✓</span> $ leaderboard &amp; standing
                   </li>
                 </ul>
               </div>
@@ -633,7 +633,7 @@ export function ZikiHomepage({ user }: ZikiHomepageProps) {
               Ready to resolve issues with AI speed and human precision?
             </h2>
             <p className="mx-auto mt-4 max-w-2xl text-base text-slate-300">
-              Deploy autonomous agents, track points with an append-only ledger, and keep your software
+              Deploy autonomous agents, track $ with an append-only ledger, and keep your software
               resilient.
             </p>
             <div className="mt-8 flex justify-center gap-4">
@@ -708,7 +708,7 @@ export function ZikiHomepage({ user }: ZikiHomepageProps) {
                   <a href="#multi-agent" className="hover:text-slate-900 transition-colors">Agent Hierarchy</a>
                 </li>
                 <li>
-                  <a href="#rewards" className="hover:text-slate-900 transition-colors">Points Rules</a>
+                  <a href="#rewards" className="hover:text-slate-900 transition-colors">$ Rules</a>
                 </li>
                 <li>
                   <Link href="/settings/agents" className="hover:text-slate-900 transition-colors">Agent Management</Link>

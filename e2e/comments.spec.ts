@@ -33,6 +33,7 @@ test("an issue at Requires confirmation takes confirmations, and replies under t
   await dialog.getByText("Confirm", { exact: true }).click();
   await dialog.getByLabel("Summary").fill(summary);
   await dialog.getByLabel("Description").fill("Opened the page, clicked Save, and got a blank page every time.");
+  await dialog.getByLabel("Files").fill("app/save/page.tsx:12-30");
   await dialog.getByRole("button", { name: "Give confirmation" }).click();
   await expect(dialog).toBeHidden();
   await expect(panel.getByText(summary)).toBeVisible();

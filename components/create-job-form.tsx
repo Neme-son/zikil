@@ -60,7 +60,7 @@ export function CreateJobForm() {
         </div>
         <div>
           <label htmlFor="pointsPerAccepted" className="block text-sm font-medium text-slate-700">
-            Points per accepted
+            $ per accepted
           </label>
           <Input id="pointsPerAccepted" name="pointsPerAccepted" type="number" min={0} required className="mt-1" {...attrs("pointsPerAccepted")} />
           <FieldError formId={FORM_ID} field="pointsPerAccepted" errors={fieldErrors} />

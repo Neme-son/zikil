@@ -35,7 +35,8 @@ export type JobForReview = {
   id: string;
   tenantId: string;
   projectId: string;
-  pointsPerAccepted: number;
+  /** $ per accepted row; the database's Decimal or a number. */
+  pointsPerAccepted: number | { toNumber(): number };
 };
 
 export type SubmissionForReview = {
@@ -462,10 +463,10 @@ export async function reviewJobSubmission(
           userId: submission.beneficiaryUserId,
           bugId: null,
           role: "submission",
-          points: submission.job.pointsPerAccepted,
+          points: Number(submission.job.pointsPerAccepted),
           sourceKey: jobSubmissionSourceKey(submission.job.id, submission.id),
         });
-        if (written) pointsAwarded = submission.job.pointsPerAccepted;
+        if (written) pointsAwarded = Number(submission.job.pointsPerAccepted);
       }
     }
 

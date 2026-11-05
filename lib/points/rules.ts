@@ -1,40 +1,78 @@
 /**
- * Point rules for the contributor ledger (#428). Amounts are the original
- * epic (#422) figures multiplied by 30. The points goal stays at 500.
- * Super admins can override them.
+ * The contributor ledger's rules (#428). Ziki has one currency, the $
+ * (#z-currency): every ledger amount, award, goal and setting is in $, and
+ * $ is all anyone is shown. Super admins can override the amounts.
  */
 
-/** Solver points for a resolved issue: one amount for every issue. */
-export const SOLVER_POINTS = 750;
+/** The currency's symbol. */
+export const Z_SYMBOL = "$";
 
-/** Reporter points, once the bug is accepted as real and not a duplicate. */
-export const REPORTER_POINTS = 150;
+/**
+ * An issue's reward (#rewards): what solving it pays, from $1 (easy) to $10
+ * (expensive). Agents estimate it (planning poker); the reward is the average
+ * of their estimates, fixed once `REWARD_MAX_ESTIMATES` are in. Until the
+ * first estimate it is `REWARD_DEFAULT`.
+ */
+export const REWARD_MIN = 1;
+export const REWARD_MAX = 10;
+export const REWARD_DEFAULT = 1;
+export const REWARD_MAX_ESTIMATES = 15;
 
-/** Reviewer points, when a "good to merge" verdict is accepted. */
-export const REVIEWER_POINTS = 300;
+/** Reporter award, once the bug is accepted as real and not a duplicate. */
+export const REPORTER_POINTS = 1.5;
+
+/** Reviewer award, when a "good to merge" verdict is accepted. */
+export const REVIEWER_POINTS = 3;
 
 /**
  * Reviewer points for an independent "real" accept that confirms the issue.
  * Separate from the merge verdict so the same person can earn both.
  */
-export const CONFIRMATION_REVIEWER_POINTS = 90;
+export const CONFIRMATION_REVIEWER_POINTS = 0.9;
 
 /** Triager points for clearing a report as not a duplicate. */
-export const TRIAGER_CLEAR_POINTS = 30;
+export const TRIAGER_CLEAR_POINTS = 0.3;
+
+/** Confirmers paid in full: the first three to confirm an issue. */
+export const CONFIRMATION_FULL_PAY_COUNT = 3;
+/** After them, this many more are paid, each half the one before; later confirmations earn nothing. */
+export const CONFIRMATION_HALVING_COUNT = 3;
+
+/**
+ * What share of the confirmation awards the confirmer at `index` (0 = first)
+ * earns (#confirmation-pay): the first three in full, the next three 1/2, 1/4
+ * and 1/8, and nobody after them, so piling onto a confirmed issue pays nothing.
+ */
+export function confirmationPayFactor(index: number): number {
+  if (index < 0) return 0;
+  if (index < CONFIRMATION_FULL_PAY_COUNT) return 1;
+  const halving = index - CONFIRMATION_FULL_PAY_COUNT + 1;
+  return halving <= CONFIRMATION_HALVING_COUNT ? 0.5 ** halving : 0;
+}
+
+/** The confirmation award for the confirmer at `index`: the base amount scaled by `confirmationPayFactor`. */
+export function confirmationPointsAt(index: number, base: number): number {
+  const factor = confirmationPayFactor(index);
+  return factor > 0 && base > 0 ? roundPoints(base * factor) : 0;
+}
 
 /** Triager points for marking a report as a duplicate of another issue. */
-export const DUPLICATE_MARKER_POINTS = 150;
+export const DUPLICATE_MARKER_POINTS = 1.5;
 
-/** Ledger awards keep this many decimal places. */
-export const POINT_DECIMALS = 2;
+/** Ledger amounts keep this many decimal places ($0.1125 is the smallest confirmation share). */
+export const POINT_DECIMALS = 4;
 
-/** Points shown as money in the header: this many points make a dollar. */
-export const POINTS_PER_DOLLAR = 100;
-
-/** A points balance as dollars, e.g. 2121 points → "$21.21". */
-export function formatPointsAsDollars(points: number): string {
-  const dollars = points / POINTS_PER_DOLLAR;
-  return `$${dollars.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+/**
+ * An amount as people see it: "$12", "$0.90", "-$1.50". Whole amounts show
+ * no decimals; others two (a share smaller than $0.01 still shows as $0.01).
+ */
+export function formatZ(value: number): string {
+  const amount = roundPoints(value);
+  const abs = Math.abs(amount);
+  const whole = Number.isInteger(abs);
+  const shown = !whole && abs > 0 && abs < 0.01 ? 0.01 : abs;
+  const text = shown.toLocaleString("en-US", { minimumFractionDigits: whole ? 0 : 2, maximumFractionDigits: whole ? 0 : 2 });
+  return `${amount < 0 ? "-" : ""}${Z_SYMBOL}${text}`;
 }
 
 /**
@@ -73,21 +111,12 @@ export function pointsNumber(value: PointAmount | string | bigint | null | undef
   return roundPoints(raw);
 }
 
-/** Display form: 10 stays "10", 0.5 stays "0.5", and float noise is trimmed. */
-export function formatPoints(value: number): string {
-  const rounded = roundPoints(value);
-  if (rounded === 0) return "0";
-  return rounded
-    .toFixed(POINT_DECIMALS)
-    .replace(/(\.\d*?)0+$/, "$1")
-    .replace(/\.$/, "");
-}
 
 /**
  * The next reviewer's award, given the previous reviewer's award.
- * Take 90% of the previous award, rounded to 2 decimal places.
- * When rounding would leave the amount unchanged, step down by 0.01.
- * The result never falls below 0.01, so every later action still earns points.
+ * Take 90% of the previous award, rounded to the ledger's decimal places.
+ * When rounding would leave the amount unchanged, step down by the smallest award.
+ * The result never falls below it, so every later action still earns something.
  * The first reviewer still receives the full base amount.
  */
 export function diminishedReviewerPoints(previous: number): number {
@@ -110,21 +139,21 @@ export function reviewerPointsAt(index: number, firstAward: number): number {
   return points;
 }
 
-/** The goal is this many points. Solved tasks are counted, not required. */
-export const TARGET_POINTS = 500;
+/** The goal, in $. Solved tasks are counted, not required. */
+export const TARGET_POINTS = 5;
 
-export const DISPATCHER_POINTS = 60;
+export const DISPATCHER_POINTS = 0.6;
 
-/** Largest award a super admin can store for one action. */
-export const POINT_AWARD_MAX = 1_000_000;
+/** Largest award, in $, a super admin can store for one action. */
+export const POINT_AWARD_MAX = 10_000;
 
-/** Largest points goal a super admin can store. */
-export const POINT_TARGET_MAX = 100_000_000;
+/** Largest goal, in $, a super admin can store. */
+export const POINT_TARGET_MAX = 1_000_000;
 
 export type PointRole = "solver" | "reporter" | "reviewer" | "triager" | "submission" | "dispatcher" | "idea" | "signup" | "comment" | "vote";
 
 /** Paid for a person's first importance mark on an issue, and their first bid vote on an issue (#vote-points). */
-export const VOTE_POINTS = 1;
+export const VOTE_POINTS = 0.01;
 
 /** Idempotency key for an importance mark: once per person per issue, even if they unmark and mark again. */
 export function importanceSourceKey(bugId: string, userId: string): string {
@@ -137,7 +166,7 @@ export function bidVoteSourceKey(bugId: string, userId: string): string {
 }
 
 /** Paid to a comment's author for each upvote from another person (#comment-votes). */
-export const COMMENT_UPVOTE_POINTS = 1;
+export const COMMENT_UPVOTE_POINTS = 0.01;
 
 /**
  * Idempotency key for one change of a person's vote on a note comment: up +1,
@@ -154,7 +183,7 @@ export function commentUpvoteSourceKey(commentId: string, voterUserId: string): 
 }
 
 /** Paid once per person per idea for their first opinion on it: a validation or a comment (#work-feed). */
-export const IDEA_CONTRIBUTION_POINTS = 1;
+export const IDEA_CONTRIBUTION_POINTS = 0.01;
 
 /** Idempotency key for an idea contribution, so each person earns once per idea. */
 export function ideaContributionSourceKey(ideaId: string, userId: string): string {

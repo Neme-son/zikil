@@ -68,8 +68,8 @@ export function DisputeAwardDialog({ bugNumber, roles }: { bugNumber: number; ro
             Dispute award
           </h2>
           <p className="text-[13px] text-zk-text2">
-            Say your points award for this issue is missing. A workspace admin reviews it; it isn&apos;t posted to the
-            issue. For a wrong points entry, use the{" "}
+            Say your $ award for this issue is missing. A workspace admin reviews it; it isn&apos;t posted to the
+            issue. For a wrong ledger entry, use the{" "}
             <Link href={`/points/disputes/new?bug=${bugNumber}`} className="font-bold text-zk-accent underline">
               disputes page
             </Link>
@@ -104,7 +104,7 @@ export function DisputeAwardDialog({ bugNumber, roles }: { bugNumber: number; ro
             value={reason}
             onChange={(event) => setReason(event.target.value)}
             disabled={pending}
-            placeholder="e.g. I resolved this on Tuesday but no solver points appeared."
+            placeholder="e.g. I resolved this on Tuesday but no solver $ appeared."
             {...(error ? { "aria-invalid": true, "aria-describedby": "dispute-reason-error" } : {})}
             className="w-full rounded-xl border border-zk-border bg-zk-surface px-3 py-2 text-[13px] text-zk-text focus:border-electric-blue-strong focus:outline-none focus:ring-1 focus:ring-electric-blue-strong"
           />

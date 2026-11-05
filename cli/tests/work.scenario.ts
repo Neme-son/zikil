@@ -4,12 +4,15 @@ import { confirm, fileIdea, fileIssue, offeredTo, ok, refused, ziki, type Agent 
 
 type Item = { kind: string; key: string; minimumRole: string; canAct: boolean; blockedReason?: string; points?: number; issue?: { id: string }; idea?: { id: string }; actions: { name: string; cli: string }[] };
 
-/** The one work list every agent watches: `/<project-slug>/work`, or `pnpm ziki work`. */
+/** The one work list every agent watches: `/<org>/<project>/work`, or `pnpm ziki work`. */
 describe("the work feed", () => {
   let slug: string;
+  let org: string;
 
   beforeAll(async () => {
-    slug = (await ok("ada", "whoami")).project_slug;
+    const me = await ok("ada", "whoami");
+    slug = me.project_slug;
+    org = me.org_slug;
   });
 
   const work = async (agent: Agent) => (await ok(agent, "work")) as { items: Item[]; ask: string[]; workUrl: string; pollAfterSeconds: number; agent: { level: string } };
@@ -40,7 +43,7 @@ describe("the work feed", () => {
 
   it("is what a connecting agent is told to watch", async () => {
     const me = await ok("bob", "whoami");
-    expect(me.work_url).toMatch(new RegExp(`/${slug}/work$`));
+    expect(me.work_url).toMatch(new RegExp(`/${org}/${slug}/work$`));
     expect(me.next_step).toMatch(/work_url/);
     const feed = await work("bob");
     expect(feed.workUrl).toBe(me.work_url);
@@ -49,7 +52,7 @@ describe("the work feed", () => {
 
   it("answers at the short URL, and 304 when nothing changed", async () => {
     const { serverUrl, agents } = readKeyring();
-    const url = `${serverUrl}/${slug}/work`;
+    const url = `${serverUrl}/${org}/${slug}/work`;
     const headers = { Authorization: `Bearer ${agents.bob.key}` };
     const first = await fetch(url, { headers });
     expect(first.status).toBe(200);
@@ -65,21 +68,21 @@ describe("the work feed", () => {
     const bobs = await work("bob");
     const item = itemFor(bobs.items, "idea", idea);
     expect(item, "the new idea is in bob's list straight away").toBeTruthy();
-    expect(item!.points).toBe(1);
+    expect(item!.points).toBe(0.01);
     expect(item!.actions.map((action) => action.name)).toEqual(["give_idea_verdict"]);
     expect(bobs.ask.join(" ")).toMatch(/verdict/);
     expect(itemFor((await work("ada")).items, "idea", idea), "an owner may give a verdict on their own idea").toBeTruthy();
   });
 
-  it("pays 1 point for the first verdict on an idea, once per person; an idea is not an issue to comment on", async () => {
+  it("pays $0.01 for the first verdict on an idea, once per person; an idea is not an issue to comment on", async () => {
     const idea = await fileIdea("ada", "Work feed: an idea worth one point");
     // An idea takes only verdicts: there is no issue to comment on.
     await refused("bob", "comment", { id: idea, summary: "A short comment.", body: "A plain comment on an idea." }, 404);
     expect(await ideaPoints("bob", idea)).toBe(0);
     await ok("bob", "give-idea-verdict", { id: idea, opinion: "good", summary: "It keeps the draft.", description: "The current flow loses the draft on reload." });
-    expect(await ideaPoints("bob", idea)).toBe(1);
+    expect(await ideaPoints("bob", idea)).toBe(0.01);
     await ok("bob", "give-idea-verdict", { id: idea, opinion: "neutral", summary: "On second thought, unsure.", description: "Changing my verdict pays nothing more." });
-    expect(await ideaPoints("bob", idea)).toBe(1);
+    expect(await ideaPoints("bob", idea)).toBe(0.01);
     expect(itemFor((await work("bob")).items, "idea", idea), "given a verdict, so it leaves bob's list").toBeUndefined();
   });
 
@@ -107,7 +110,7 @@ describe("the work feed", () => {
     expect(await offeredTo(issue)).toBeNull();
     const ready = itemFor((await work("bob")).items, "ready_issue", issue);
     expect(ready, "ready issues are listed to bid on").toBeTruthy();
-    expect(ready!.actions.map((action) => action.name)).toEqual(["bid"]);
+    expect(ready!.actions.map((action) => action.name)).toEqual(["stake", "bid"]);
     const bid = await ok("bob", "bid", { id: issue, summary: "I can fix this.", description: "I will reproduce it, fix it and add a test." });
     // dana's vote counts 3, the award threshold: any agent may then award the bid.
     await ok("dana", "vote-bid", { id: bid.bid_id });

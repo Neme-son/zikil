@@ -121,7 +121,6 @@ export function AdminIssueTypesManager({
     if (type._count.bugs > 0) {
       setError(null);
       setInUse({
-        kind: "type",
         id: type.id,
         name: type.name,
         // The list filters types through the tag filter, by name.
@@ -303,7 +302,7 @@ export function AdminIssueTypesManager({
 
       {/* #211: `overflow-hidden` clipped the Actions column on narrow screens,
           making Delete unreachable. Scroll instead, matching the users table
-          in app/(app)/admin/users/page.tsx. */}
+          in app/(app)/superadmin/users/page.tsx. */}
       <div className="overflow-x-auto overflow-y-hidden rounded-xl border border-slate-200 bg-card shadow-sm">
         <table className="min-w-full divide-y divide-slate-200 text-sm">
           <thead className="bg-slate-50 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
@@ -371,9 +370,8 @@ export function AdminIssueTypesManager({
                       type="button"
                       disabled={pending}
                       onClick={() => handleDelete(type)}
-                      // Clickable when in use, like the platform page: it
-                      // explains why it cannot delete rather than looking
-                      // dead (#314). So no not-allowed cursor either.
+                      // Clickable when in use: it explains why it cannot
+                      // delete rather than looking dead (#314). So no not-allowed cursor either.
                       className={`inline-flex min-h-11 items-center text-xs font-medium hover:underline sm:min-h-0 ${
                         type._count.bugs > 0
                           ? "text-slate-600 hover:text-slate-800"

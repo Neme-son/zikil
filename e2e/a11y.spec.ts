@@ -61,7 +61,7 @@ test.describe("accessibility", () => {
       await page.goto(`${PROJECT}/org/members`);
       await expectNoA11yViolations(page);
 
-      await page.goto(`${PROJECT}/org/platforms`);
+      await page.goto(`${PROJECT}/org/types`);
       await expectNoA11yViolations(page);
     });
   });
@@ -70,7 +70,7 @@ test.describe("accessibility", () => {
     test.use({ as: "super" });
 
     test("the site admin screen", async ({ page }) => {
-      await page.goto("/admin/users");
+      await page.goto("/superadmin/users");
       await expectNoA11yViolations(page);
     });
   });

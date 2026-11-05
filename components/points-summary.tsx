@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { formatPoints, pointsProgress, TARGET_POINTS } from "@/lib/points/rules";
+import { formatZ, pointsProgress, TARGET_POINTS } from "@/lib/points/rules";
 
 function ProgressRow({
   label,
@@ -17,7 +17,7 @@ function ProgressRow({
       <div className="flex items-baseline justify-between text-sm">
         <span className="font-medium text-zk-text2">{label}</span>
         <span className="tabular-nums text-zk-text2">
-          {formatPoints(value)} / {target}
+          {formatZ(value)} / {formatZ(target)}
         </span>
       </div>
       <div
@@ -49,19 +49,19 @@ export function PointsSummary({
     <section className="rounded-[20px] border border-zk-border bg-zk-surface p-4 sm:p-5" aria-labelledby="points-heading">
       <div className="flex flex-wrap items-baseline justify-between gap-2">
         <h2 id="points-heading" className="text-sm font-semibold uppercase tracking-wide text-zk-muted">
-          Points
+          $ earned
         </h2>
         <Link href="/workers" className="text-sm font-medium text-zk-accent hover:underline">
           Leaderboard
         </Link>
       </div>
-      <p className="mt-1 text-3xl font-semibold tabular-nums text-zk-text">{formatPoints(points)}</p>
+      <p className="mt-1 text-3xl font-semibold tabular-nums text-zk-text">{formatZ(points)}</p>
       <p className="text-sm text-zk-text2">
         {solvedTasks} solved task{solvedTasks === 1 ? "" : "s"}
         {progress.targetMet ? " · Goal reached" : ""}
       </p>
       <div className="mt-4">
-        <ProgressRow label="Points" value={points} target={targetPoints} percent={progress.pointsPercent} />
+        <ProgressRow label="$" value={points} target={targetPoints} percent={progress.pointsPercent} />
       </div>
     </section>
   );

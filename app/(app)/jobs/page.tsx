@@ -4,6 +4,7 @@ import { requireUser } from "@/lib/auth-helpers";
 import { currentTenantAccess } from "@/lib/tenant-access";
 import { currentTenantIdFor } from "@/lib/tenant-context";
 import { CreateJobForm } from "@/components/create-job-form";
+import { formatZ } from "@/lib/points/rules";
 
 export const dynamic = "force-dynamic";
 
@@ -59,7 +60,7 @@ export default async function JobsPage() {
                 <p className="text-sm font-semibold text-zk-text">{job.brief}</p>
                 <p className="mt-1 text-xs text-zk-muted">
                   {job._count.submissions}/{job.maxSubmissions} submitted ·{" "}
-                  {job.pointsPerAccepted} pts per accepted · deduped on{" "}
+                  {formatZ(Number(job.pointsPerAccepted))} per accepted · deduped on{" "}
                   <code className="rounded bg-zk-chip px-1.5 py-0.5 font-mono text-[11px] text-zk-text2">
                     {job.dedupeKey}
                   </code>

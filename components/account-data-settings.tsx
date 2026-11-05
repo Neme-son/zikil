@@ -38,7 +38,7 @@ export function AccountDataSettings() {
           <h2 className="m-0 text-lg font-bold text-zk-text">Download your data</h2>
           <p className="m-0 text-[13px] leading-relaxed text-zk-muted">
             Export a complete JSON file of issues you&apos;ve filed, comments you&apos;ve posted,
-            votes you&apos;ve cast and points you&apos;ve earned.
+            votes you&apos;ve cast and $ you&apos;ve earned.
           </p>
         </div>
         <a

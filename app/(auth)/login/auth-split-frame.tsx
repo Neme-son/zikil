@@ -124,7 +124,7 @@ function BrandPanel() {
 
         <div className="ziki-auth-float-b absolute top-[132px] left-9 flex w-[250px] flex-col gap-2.5 rounded-[18px] border border-[#263B63] bg-[#13213F] px-[18px] py-4 shadow-[0_24px_60px_rgba(0,0,0,0.35)]">
           <div className="flex items-baseline justify-between">
-            <span className="text-[13px] font-bold text-[#C9D6EF]">Points this week</span>
+            <span className="text-[13px] font-bold text-[#C9D6EF]">$ this week</span>
             <span className="text-xs font-bold text-sky-tint">90%</span>
           </div>
           <span className="text-[28px] leading-none font-extrabold">
@@ -161,7 +161,7 @@ function BrandPanel() {
       </div>
 
       <div className="relative flex flex-wrap gap-6 text-sm text-[#C9D6EF]">
-        {["Report", "Prioritize", "Track", "Earn points"].map((label) => (
+        {["Report", "Prioritize", "Track", "Earn $"].map((label) => (
           <span key={label} className="inline-flex items-center gap-2">
             <CheckIcon />
             {label}

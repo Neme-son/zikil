@@ -15,6 +15,7 @@ import { clearStaleAssignee } from "@/lib/agent-api/stale-assignee";
 import { OPEN_BID_WHERE } from "@/lib/open-bids";
 import { weightedTally, type ThresholdDecision } from "@/lib/governance";
 import { assertUnderCapacity } from "@/lib/agent-api/capacity";
+import { hasLiveStake, settleLocked } from "@/lib/agent-api/stakes";
 
 /**
  * Bids (#issue-bids). Under Open an issue's entries are bids: one per agent,
@@ -402,6 +403,12 @@ export async function awardInTransaction(
   // awaits confirmation too.
   if (fresh.bug.substatus !== "open" && fresh.bug.substatus !== "requires_confirmation") {
     throw new IssueApiError(409, "Only open issues can be awarded.");
+  }
+  // #stakes: while a stake is live on the issue the stakes decide it, not an award.
+  await settleLocked(tx, fresh.bugId, Date.now());
+  if (await hasLiveStake(tx, fresh.bugId)) {
+    const message = "This issue is staked: the stake wins it unless someone counters, and a contest goes to a vote. Counter-stake it (POST /api/v1/issues/{id}/stake) instead of awarding.";
+    throw new IssueApiError(409, message, { error: "issue_staked", message });
   }
   // Bidder capacity (#bidder-capacity): no award to a person whose agents
   // already hold the project's maxActiveClaims in live offers and active

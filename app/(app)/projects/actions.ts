@@ -6,14 +6,15 @@ import { requireUser } from "@/lib/auth-helpers";
 import { fieldError, fromZodError } from "@/lib/form-errors";
 import { prisma } from "@/lib/prisma";
 import type { Prisma } from "@prisma/client";
-import { refererProjectSlug } from "@/lib/referer-path";
-import { ideasPath, orgPath } from "@/lib/project-paths";
+import { refererProjectRef } from "@/lib/referer-path";
+import { ideasPath, orgPath, projectRef } from "@/lib/project-paths";
 import { currentTenantIdFor, NO_TENANT_MESSAGE } from "@/lib/tenant-context";
 import { isTenantAdmin } from "@/lib/agents/membership";
 import { isSuperAdmin, type AppRole } from "@/lib/roles";
 import { createMissionSchema, createTestMissions } from "@/lib/missions";
 import {
   nextProjectSlug,
+  projectLinksSchema,
   projectNameSchema,
   projectSettingsSchema,
   projectSlugBase,
@@ -34,7 +35,7 @@ export type ProjectActionResult = {
 
 /** Back to the org's Projects page the action came from (#project-urls), with a message. */
 async function projectsMessage(key: "error" | "notice", message: string): Promise<string> {
-  const slug = await refererProjectSlug();
+  const slug = await refererProjectRef();
   return slug ? `${orgPath(slug, "projects")}?${key}=${encodeURIComponent(message)}` : "/home";
 }
 
@@ -87,12 +88,13 @@ export async function updateProjectAction(
     goal: formData.get("goal"),
     repoUrl: formData.get("repoUrl"),
     stagingUrl: formData.get("stagingUrl"),
+    siteUrl: formData.get("siteUrl") ?? "",
   });
   if (!parsed.success) return fromZodError(parsed.error, "Check the project settings.");
   const slug = String(formData.get("slug") ?? "").trim();
   const project = await prisma.project.findFirst({
     where: { tenantId, slug },
-    select: { id: true, name: true, goal: true, repoUrl: true, stagingUrl: true, rewardConfig: true },
+    select: { id: true, name: true, goal: true, repoUrl: true, stagingUrl: true, siteUrl: true, rewardConfig: true },
   });
   if (!project) return { error: "Project not found." };
 
@@ -101,7 +103,7 @@ export async function updateProjectAction(
   const rewardConfig = rawReward ? parseProjectRewardConfig(rawReward, platformBase) : undefined;
 
   const changes: Record<string, { from: unknown; to: unknown }> = {};
-  for (const field of ["name", "goal", "repoUrl", "stagingUrl"] as const) {
+  for (const field of ["name", "goal", "repoUrl", "stagingUrl", "siteUrl"] as const) {
     if (project[field] !== parsed.data[field]) {
       changes[field] = { from: project[field], to: parsed.data[field] };
     }
@@ -133,6 +135,43 @@ export async function updateProjectAction(
   revalidatePath(`/projects/${slug}/settings`);
   revalidatePath("/", "layout");
   return {};
+}
+
+/**
+ * The panel above the list (#project-links): set the project's live site and
+ * GitHub repository in one step. Same rules as the settings page: workspace
+ * owners and admins only, validated the same way, recorded in the project's
+ * audit log.
+ */
+export async function saveProjectLinksAction(
+  _previous: ProjectActionResult | undefined,
+  formData: FormData,
+): Promise<ProjectActionResult> {
+  const user = await requireUser();
+  const tenantId = await currentTenantIdFor(user.id);
+  if (!tenantId) return { error: NO_TENANT_MESSAGE };
+  if (!(await isTenantAdmin(user, tenantId))) return { error: "Only workspace owners and admins can set these." };
+
+  const parsed = projectLinksSchema.safeParse({ siteUrl: formData.get("siteUrl") ?? "", repoUrl: formData.get("repoUrl") ?? "" });
+  if (!parsed.success) return fromZodError(parsed.error, "Check the addresses.");
+  const slug = String(formData.get("slug") ?? "").trim();
+  const project = await prisma.project.findFirst({ where: { tenantId, slug }, select: { id: true, siteUrl: true, repoUrl: true } });
+  if (!project) return { error: "Project not found." };
+
+  const changes: Record<string, { from: unknown; to: unknown }> = {};
+  for (const field of ["siteUrl", "repoUrl"] as const) {
+    if (project[field] !== parsed.data[field]) changes[field] = { from: project[field], to: parsed.data[field] };
+  }
+  if (Object.keys(changes).length > 0) {
+    await prisma.$transaction(async (tx) => {
+      await tx.project.update({ where: { id: project.id }, data: parsed.data });
+      await tx.projectAuditEvent.create({
+        data: { tenantId, projectId: project.id, actorUserId: user.id, action: "settings.updated", changes: changes as Prisma.InputJsonValue },
+      });
+    });
+  }
+  revalidatePath("/", "layout");
+  return { message: "Saved." };
 }
 
 /** Create a route/role/viewport mission set for a project (#619). */
@@ -224,7 +263,8 @@ export async function createProjectAction(
 
   revalidatePath("/", "layout");
   // A new project opens on its own page (#project-urls).
-  redirect(ideasPath(slug));
+  const tenant = await prisma.tenant.findUnique({ where: { id: tenantId }, select: { slug: true } });
+  redirect(tenant ? ideasPath(projectRef(tenant.slug, slug)) : "/home");
 }
 
 /** Archive or restore a project the tenant owner owns. */

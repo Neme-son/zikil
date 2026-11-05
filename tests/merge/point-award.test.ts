@@ -10,7 +10,10 @@ vi.mock("@/lib/agent-api/pull-request-report", () => ({
   reportedClosedUnmerged: reports.reportedClosedUnmerged,
 }));
 
-import { awardDispatcher, awardSolver, solverAward } from "@/lib/points/award";
+vi.mock("@/lib/agent-api/events", () => ({ publish: vi.fn(async () => ({ id: "evt" })) }));
+
+import { awardDispatcher, solverAward, solverAwardFor } from "@/lib/points/award";
+import { holdPayout, releasePayoutIfLive } from "@/lib/points/payout";
 import {
   confirmationReviewerSourceKey,
   CONFIRMATION_REVIEWER_POINTS,
@@ -35,6 +38,13 @@ function fakeLedger() {
   return { rows, db: { pointEntry: { createMany } } as never, createMany };
 }
 
+/** A database whose issues have a reward and a pull request (#rewards). */
+function issueDb(bugs: Record<string, { reward: number; pullRequestUrl?: string | null }>) {
+  return {
+    bug: { findUnique: vi.fn(async ({ where }: { where: { id: string } }) => (bugs[where.id] ? { pullRequestUrl: null, ...bugs[where.id] } : null)) },
+  } as never;
+}
+
 const issue = { id: "bug-1", tenantId: "tenant-zedu", assigneeId: "user-1" };
 
 describe("points ledger (#428)", () => {
@@ -45,64 +55,54 @@ describe("points ledger (#428)", () => {
     expect(rows).toEqual([]);
   });
 
-  it("builds the flat solver award for the assignee", () => {
-    expect(solverAward(issue)).toEqual({
+  it("pays the solver the issue's reward, in $, $1 before any estimate (#rewards)", () => {
+    expect(solverAward({ ...issue, reward: 6.5 })).toEqual({
       tenantId: "tenant-zedu",
       userId: "user-1",
       bugId: "bug-1",
       role: "solver",
-      points: 750,
+      points: 6.5,
       sourceKey: "solver:bug-1:user-1",
     });
+    expect(solverAward(issue)?.points).toBe(1);
+    // Never outside $1–$10.
+    expect(solverAward({ ...issue, reward: 40 })?.points).toBe(10);
   });
 
   it("awards nobody when the issue has no assignee", async () => {
-    const { db, createMany } = fakeLedger();
     expect(solverAward({ ...issue, assigneeId: null })).toBeNull();
-    expect(await awardSolver(db, { ...issue, assigneeId: null })).toBe(false);
-    expect(createMany).not.toHaveBeenCalled();
+    expect(await solverAwardFor(issueDb({ "bug-1": { reward: 5 } }), { ...issue, assigneeId: null })).toBeNull();
   });
 
-  it("pays the same flat amount for every issue, or the project's own amount", async () => {
-    const { db, rows } = fakeLedger();
-    await awardSolver(db, { ...issue, id: "bug-2" });
-    await awardSolver(db, { ...issue, id: "bug-3" });
-    await awardSolver(db, {
-      ...issue,
-      id: "bug-4",
-      rewardConfig: { solver: 900, reporter: 150, reviewer: 300, guidelines: null },
-    });
-    expect(rows.map((r) => r.points)).toEqual([750, 750, 900]);
+  it("reads each issue's own reward", async () => {
+    const db = issueDb({ "bug-2": { reward: 2 }, "bug-3": { reward: 9.25 } });
+    expect((await solverAwardFor(db, { ...issue, id: "bug-2" }))?.points).toBe(2);
+    expect((await solverAwardFor(db, { ...issue, id: "bug-3" }))?.points).toBe(9.25);
   });
 
-  it("does not award solver points when the linked pull request is reported closed without being merged (#642)", async () => {
-    const { db, rows } = fakeLedger();
-    const result = await awardSolver(db, {
-      ...issue,
-      pullRequestUrl: "https://github.com/zedu/web/pull/closed-1",
-    });
-    expect(result).toBe(false);
-    expect(rows).toEqual([]);
+  it("does not award the solver when the linked pull request is reported closed without being merged (#642)", async () => {
+    const db = issueDb({ "bug-1": { reward: 5, pullRequestUrl: "https://github.com/zedu/web/pull/closed-1" } });
+    expect(await solverAwardFor(db, issue)).toBeNull();
   });
 });
 
 describe("point rules (#428)", () => {
   it("pays every later reviewer a little less, and never stops paying", () => {
     expect([0, 1, 2, 3, 4, 5].map((index) => reviewerPointsAt(index, 5))).toEqual([
-      5, 4.5, 4.05, 3.65, 3.29, 2.96,
+      5, 4.5, 4.05, 3.645, 3.2805, 2.9525,
     ]);
     expect(reviewerPointsAt(1, 5)).toBe(diminishedReviewerPoints(5));
     expect([0, 1, 2, 3, 4, 5].map((index) => reviewerPointsAt(index, 10))).toEqual([
-      10, 9, 8.1, 7.29, 6.56, 5.9,
+      10, 9, 8.1, 7.29, 6.561, 5.9049,
     ]);
     expect([0, 1, 2, 3].map((index) => reviewerPointsAt(index, CONFIRMATION_REVIEWER_POINTS))).toEqual([
-      90, 81, 72.9, 65.61,
+      0.9, 0.81, 0.729, 0.6561,
     ]);
     expect(diminishedReviewerPoints(1)).toBe(0.9);
-    expect(diminishedReviewerPoints(0.05)).toBe(0.04);
+    expect(diminishedReviewerPoints(0.05)).toBe(0.045);
     expect(diminishedReviewerPoints(MIN_POINT_AWARD)).toBe(MIN_POINT_AWARD);
 
-    const tail = Array.from({ length: 80 }, (_, index) => reviewerPointsAt(index, 5));
+    const tail = Array.from({ length: 200 }, (_, index) => reviewerPointsAt(index, 5));
     for (let index = 1; index < tail.length; index += 1) {
       expect(tail[index]).toBeGreaterThan(0);
       expect(tail[index]).toBeLessThanOrEqual(tail[index - 1]);
@@ -122,4 +122,37 @@ describe("point rules (#428)", () => {
     expect(confirmationReviewerSourceKey("bug-1", "user-1")).not.toBe(pointSourceKey("reviewer", "bug-1", "user-1"));
   });
 
+});
+
+describe("payouts wait for the work to be live (#live-payout)", () => {
+  /** One issue, its held payout and its deployment reports, with an in-memory ledger. */
+  function payoutDb(reporters: string[]) {
+    const ledger = fakeLedger();
+    const bug = { id: "bug-1", number: 1, tenantId: "tenant-zedu", projectId: "p1", assigneeId: "solver", heldPayout: null as unknown, payoutReleasedAt: null as Date | null };
+    const db = {
+      pointEntry: (ledger.db as unknown as { pointEntry: unknown }).pointEntry,
+      bug: {
+        findUniqueOrThrow: vi.fn(async () => ({ ...bug })),
+        update: vi.fn(async ({ data }: { data: Record<string, unknown> }) => Object.assign(bug, data)),
+      },
+      deploymentReport: { findMany: vi.fn(async () => reporters.map((onBehalfOfUserId) => ({ onBehalfOfUserId }))) },
+    };
+    return { db: db as never, bug, rows: ledger.rows, reporters };
+  }
+  const solver = { tenantId: "tenant-zedu", userId: "solver", bugId: "bug-1", role: "solver" as const, points: 6, sourceKey: "solver:bug-1:solver" };
+  const tester = { tenantId: "tenant-zedu", userId: "tester", bugId: "bug-1", role: "reviewer" as const, points: 3, sourceKey: "reviewer:bug-1:tester" };
+
+  it("holds what resolving earned until three people other than the solver report it deployed", async () => {
+    const { db, rows, reporters } = payoutDb(["solver", "a", "b"]);
+    expect(await holdPayout(db, "bug-1", [solver, tester])).toEqual({ held: 2, paid: false });
+    expect(rows).toEqual([]);
+    // The solver's own report doesn't count: two independent reports are not enough.
+    expect(await releasePayoutIfLive(db, "bug-1")).toBe(false);
+    reporters.push("c");
+    expect(await releasePayoutIfLive(db, "bug-1")).toBe(true);
+    expect(rows.map((row) => [row.userId, row.points])).toEqual([["solver", 6], ["tester", 3]]);
+    // Paid once: a later report pays nothing more.
+    expect(await releasePayoutIfLive(db, "bug-1")).toBe(false);
+    expect(rows).toHaveLength(2);
+  });
 });

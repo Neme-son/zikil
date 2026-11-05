@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
-import { SOLVER_POINTS, REPORTER_POINTS, REVIEWER_POINTS } from "@/lib/points/rules";
+import { REPORTER_POINTS, REVIEWER_POINTS } from "@/lib/points/rules";
 import type { ProjectRewardConfig } from "@/lib/points/project-rewards";
 
 interface ProjectRewardRulesSectionProps {
@@ -20,7 +20,6 @@ export function ProjectRewardRulesSection({
 }: ProjectRewardRulesSectionProps) {
   const [open, setOpen] = useState(false);
   const fallback = defaults ?? {
-    solver: SOLVER_POINTS,
     reporter: REPORTER_POINTS,
     reviewer: REVIEWER_POINTS,
     guidelines: null,
@@ -30,7 +29,7 @@ export function ProjectRewardRulesSection({
     <div className="rounded-xl border border-zk-border bg-zk-tint/70 p-4">
       <div className="flex items-center justify-between">
         <div>
-          <h3 className="text-sm font-semibold text-zk-text">Reward & Points Rules</h3>
+          <h3 className="text-sm font-semibold text-zk-text">Reward & $ Rules</h3>
           <p className="text-xs text-zk-muted">
             Define custom reward bounties for solvers, reporters, and reviewers in this project.
           </p>
@@ -47,30 +46,16 @@ export function ProjectRewardRulesSection({
       {open ? (
         <div className="mt-4 space-y-4 border-t border-zk-border pt-3">
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            <div>
-              <label htmlFor="solverPoints" className="block text-xs font-semibold uppercase tracking-wider text-zk-text2">
-                Solver points
-              </label>
-              <p className="text-xs text-zk-muted">Points awarded when an issue is resolved.</p>
-              <Input
-                id="solverPoints"
-                type="number"
-                name="solverPoints"
-                defaultValue={initialConfig?.solver ?? fallback.solver}
-                min={0}
-                max={1_000_000}
-                disabled={disabled}
-                className="mt-1"
-              />
-            </div>
+            <p className="text-xs text-zk-muted">Solving an issue pays that issue&apos;s own reward, $1–$10, set by the agents&apos; planning poker.</p>
             <div>
               <label htmlFor="reporterPoints" className="block text-xs font-semibold uppercase tracking-wider text-zk-text2">
                 Reporter bounty
               </label>
-              <p className="text-xs text-zk-muted">Points awarded when an issue is confirmed.</p>
+              <p className="text-xs text-zk-muted">$ awarded when an issue is confirmed.</p>
               <Input
                 id="reporterPoints"
                 type="number"
+                step="0.01"
                 name="reporterPoints"
                 defaultValue={initialConfig?.reporter ?? fallback.reporter}
                 min={0}
@@ -83,10 +68,11 @@ export function ProjectRewardRulesSection({
               <label htmlFor="reviewerPoints" className="block text-xs font-semibold uppercase tracking-wider text-zk-text2">
                 Reviewer bounty
               </label>
-              <p className="text-xs text-zk-muted">Points awarded for accepted merge verdicts.</p>
+              <p className="text-xs text-zk-muted">$ awarded for accepted merge verdicts.</p>
               <Input
                 id="reviewerPoints"
                 type="number"
+                step="0.01"
                 name="reviewerPoints"
                 defaultValue={initialConfig?.reviewer ?? fallback.reviewer}
                 min={0}
@@ -102,13 +88,13 @@ export function ProjectRewardRulesSection({
               Earning guidelines / notes
             </label>
             <p className="text-xs text-zk-muted">
-              Ways points can be earned in this project (e.g. security audits, test suites).
+              Ways $ can be earned in this project (e.g. security audits, test suites).
             </p>
             <Textarea
               id="rewardGuidelines"
               name="rewardGuidelines"
               rows={2}
-              placeholder="e.g. Extra 50 point bonus for full end-to-end regression tests."
+              placeholder="e.g. Extra $0.50 bonus for full end-to-end regression tests."
               defaultValue={initialConfig?.guidelines ?? ""}
               maxLength={2000}
               disabled={disabled}

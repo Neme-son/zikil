@@ -20,8 +20,6 @@ export const structureInputSchema = z
     actualBehavior: z.string().trim().optional(),
     environment: z.string().trim().optional(),
     description: z.string().trim().max(5000).optional(),
-    platform: z.string().trim().optional(),
-    categoryId: idSchema.optional(),
     type: z.string().trim().optional(),
     typeId: idSchema.optional(),
     duplicateOfId: idSchema.optional(),
@@ -30,40 +28,6 @@ export const structureInputSchema = z
   .strict();
 
 export type StructureInput = z.infer<typeof structureInputSchema>;
-
-/**
- * Heuristic platform inference matching text against available category names.
- */
-export function inferPlatform(
-  text: string,
-  categories: { id: string; name: string }[],
-): string | null {
-  const lower = text.toLowerCase();
-
-  // Keyword mappings
-  const platformKeywords: Record<string, string[]> = {
-    mobile: ["mobile", "ios", "iphone", "ipad", "android", "apk"],
-    web: ["web", "browser", "chrome", "firefox", "safari", "edge", "website", "frontend"],
-    desktop: ["desktop", "macos", "mac", "windows", "linux", "electron"],
-  };
-
-  for (const cat of categories) {
-    const catNameLower = cat.name.toLowerCase();
-    // Direct name match
-    if (lower.includes(catNameLower)) return cat.id;
-
-    // Check keyword groups
-    for (const [group, keywords] of Object.entries(platformKeywords)) {
-      if (catNameLower.includes(group)) {
-        if (keywords.some((kw) => lower.includes(kw))) {
-          return cat.id;
-        }
-      }
-    }
-  }
-
-  return null;
-}
 
 /**
  * Heuristic issue type inference matching text against available types.
@@ -134,7 +98,6 @@ export type StructureResult = {
   structured: boolean;
   potentialDuplicates: SimilarIssue[];
   inferred: {
-    categoryId: string | null;
     typeId: string | null;
   };
 };
@@ -163,7 +126,6 @@ export async function structureIssue(
       description: true,
       projectId: true,
       tenantId: true,
-      categoryId: true,
       typeId: true,
       duplicateOfId: true,
       status: true,
@@ -197,32 +159,14 @@ export async function structureIssue(
     potentialDuplicates = potentialDuplicates.filter((m) => m.id !== bug.id);
   }
 
-  // Load available platforms and types
-  const [categories, types] = await Promise.all([
-    prisma.category.findMany({
-      where: { tenantId: agent.tenantId, isActive: true },
-      select: { id: true, name: true },
-    }),
-    prisma.issueType.findMany({
-      where: { tenantId: agent.tenantId, isActive: true },
-      select: { id: true, name: true },
-    }),
-  ]);
+  // Load available types
+  const types = await prisma.issueType.findMany({
+    where: { tenantId: agent.tenantId, isActive: true },
+    select: { id: true, name: true },
+  });
 
   const fullText = `${queryTitle} ${input.description || bug.description} ${input.actualBehavior || ""} ${input.stepsToReproduce || ""}`;
 
-  // Resolve category / platform
-  let resolvedCategoryId = bug.categoryId;
-  if (input.categoryId) {
-    const matched = categories.find((c) => c.id === input.categoryId);
-    if (!matched) throw new IssueApiError(422, "Invalid platform categoryId.");
-    resolvedCategoryId = matched.id;
-  } else if (input.platform) {
-    const matched = categories.find((c) => c.name.toLowerCase() === input.platform?.toLowerCase());
-    resolvedCategoryId = matched ? matched.id : inferPlatform(input.platform, categories);
-  } else if (!resolvedCategoryId) {
-    resolvedCategoryId = inferPlatform(fullText, categories);
-  }
 
   // Resolve type
   let resolvedTypeId = bug.typeId;
@@ -271,7 +215,6 @@ export async function structureIssue(
       data: {
         title: queryTitle,
         description: structuredDesc,
-        categoryId: resolvedCategoryId,
         typeId: resolvedTypeId,
         duplicateOfId: resolvedDuplicateOfId,
         updatedAt: new Date(),
@@ -296,7 +239,6 @@ export async function structureIssue(
         issueId: bug.id,
         projectId,
         structuredByAgentId: agent.agentId,
-        categoryId: resolvedCategoryId,
         typeId: resolvedTypeId,
         duplicateOfId: resolvedDuplicateOfId,
       },
@@ -305,7 +247,6 @@ export async function structureIssue(
     });
 
     await audit(agent, "issue.structured", bug.id, {
-      categoryId: resolvedCategoryId,
       typeId: resolvedTypeId,
       duplicateOfId: resolvedDuplicateOfId,
     }, { db: tx, bugId: bug.id });
@@ -319,7 +260,6 @@ export async function structureIssue(
     structured: true,
     potentialDuplicates,
     inferred: {
-      categoryId: resolvedCategoryId,
       typeId: resolvedTypeId,
     },
   };

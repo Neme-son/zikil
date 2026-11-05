@@ -7,6 +7,7 @@ import { currentTenantIdFor } from "@/lib/tenant-context";
 import { revalidateIssue } from "@/lib/revalidate-issue";
 import { giveConfirmation, parseConfirmation } from "@/lib/agent-api/confirmations";
 import { IssueApiError } from "@/lib/agent-api/errors";
+import { parseEvidenceFileLines } from "@/lib/agent-api/evidence-files";
 import { ACTION_RATE_LIMITS, consumeRateLimit, RATE_LIMIT_MESSAGE } from "@/lib/rate-limit";
 
 export type ConfirmationActionResult = {
@@ -50,17 +51,19 @@ export async function giveConfirmationAction(
   if (!bug) return { error: "Issue not found" };
 
   const verdict = field(formData, "verdict");
+  const files = parseEvidenceFileLines(field(formData, "files") ?? "");
   const body = {
     verdict,
     summary: formData.get("summary") ?? "",
     description: formData.get("description") ?? "",
     ...(verdict === "reject" && field(formData, "duplicateOfId") ? { duplicateOfId: field(formData, "duplicateOfId") } : {}),
+    ...(files.length ? { files } : {}),
   };
 
   try {
     const input = parseConfirmation(body);
     const given = await giveConfirmation({ tenantId, userId }, { tenantId, projectId: bug.projectId }, bug.id, input);
-    revalidatePath("/[project]", "layout");
+    revalidatePath("/[org]/[project]", "layout");
     revalidateIssue();
     return {
       ok: true,

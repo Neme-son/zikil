@@ -92,8 +92,9 @@ function reviewer(id: string, ownerId: string, level: "working" | "manager" | "m
   return { agentId: id, name: id, ownerId, tenantId: "tenant_zedu", level, burst: false, keyId: `key-${id}` };
 }
 
-const good = { goodToMerge: true, summary: "Good to merge.", description: "Tested on the branch: it works." };
-const notGood = (description: string) => ({ goodToMerge: false, summary: "Not good to merge.", description });
+const files = [{ path: "lib/save.ts", lines: "42" }];
+const good = { goodToMerge: true, summary: "Good to merge.", description: "Tested on the branch: it works.", files };
+const notGood = (description: string) => ({ goodToMerge: false, summary: "Not good to merge.", description, files });
 
 beforeEach(() => {
   vi.clearAllMocks();

@@ -8,6 +8,7 @@ const db = vi.hoisted(() => {
     issueBid: { findUnique: vi.fn(), findMany: vi.fn(), create: vi.fn(), update: vi.fn(), updateMany: vi.fn() },
     issueClaim: { findFirst: vi.fn(), count: vi.fn(), create: vi.fn(), update: vi.fn() },
     bidVote: { findMany: vi.fn(), deleteMany: vi.fn() },
+    issueStake: { findMany: vi.fn(async () => []), findFirst: vi.fn(async () => null) },
     agent: { findFirst: vi.fn() },
     projectWorkflow: { findUnique: vi.fn() },
     $queryRaw: vi.fn(),

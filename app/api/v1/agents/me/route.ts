@@ -5,8 +5,13 @@ import { NextResponse, type NextRequest } from "next/server";
 import { agentErrorResponse, requireAgent } from "@/lib/agents/require-agent";
 import { agentBudgetExceededResponse, consumeAgentBudget } from "@/lib/agents/rate-budget";
 import { withAgentBudgetHeaders } from "@/lib/agents/rate-budget-headers";
-import { listAgentProjectSummaries } from "@/lib/agent-api/projects";
+import { listAgentProjectSummaries, tenantSlugOf } from "@/lib/agent-api/projects";
+import { projectPath, projectRef } from "@/lib/project-paths";
 import { readAgentInstructions } from "@/lib/agent-messages";
+import { readAgentProfile, updateAgentProfile } from "@/lib/agents/profile";
+import { profileErrorResponse } from "@/lib/agent-api/agent-profiles";
+import { agentIssueRequest } from "@/lib/agent-api/issues";
+import { agentWorkStatus } from "@/lib/agents/work-gate";
 
 /**
  * GET /api/v1/agents/me — who this key belongs to (#427). Any level may call
@@ -24,9 +29,11 @@ export async function GET(req: NextRequest) {
       "read",
     );
     if (!budget.allowed) return agentBudgetExceededResponse(budget.retryAfterSeconds, budget);
-    const [projects, instructions] = await Promise.all([
+    const [projects, instructions, profile, orgSlug] = await Promise.all([
       listAgentProjectSummaries(agent.tenantId),
       readAgentInstructions(agent.agentId),
+      readAgentProfile(agent.agentId),
+      tenantSlugOf(agent.tenantId),
     ]);
     return withAgentBudgetHeaders(
       NextResponse.json({
@@ -34,16 +41,30 @@ export async function GET(req: NextRequest) {
         name: agent.name,
         owner_id: agent.ownerId,
         tenant_id: agent.tenantId,
+        // The organisation's slug, the first segment of every project address (`/<org>/<project>/work`).
+        org_slug: orgSlug,
         level: agent.level,
         project_id: agent.projectId ?? null,
         project_slug: agent.projectSlug ?? null,
         // #work-feed: the one URL to watch. A key for every project finds each one's under `projects`.
-        work_url: agent.projectSlug ? absoluteUrl(`/${agent.projectSlug}/work`) : null,
+        work_url: agent.projectSlug ? absoluteUrl(projectPath(projectRef(orgSlug, agent.projectSlug), "/work")) : null,
         // #owner-history: the owner's entries and comments, newest first, with how to replace each.
         history_url: absoluteUrl("/api/v1/agents/me/history"),
         next_step: WATCH_WORK_MESSAGE,
         projects,
         instructions,
+        // #agent-profile: who it says it is. Set with PATCH here, /me/skills and /me/picture.
+        profile: profile
+          ? { ...profile, picture_url: profile.picture_url ? absoluteUrl(profile.picture_url) : null }
+          : null,
+        profile_help_url: absoluteUrl("/llms.txt#agent-profile"),
+        // #agent-work-gate: whether this agent may work, and what to set up first when it may not.
+        work_status: agentWorkStatus({
+          username: profile?.username ?? "",
+          tagline: profile?.tagline ?? null,
+          about: profile?.about ?? null,
+          skillCount: profile?.skills.length ?? 0,
+        }),
       }),
       budget,
     );
@@ -52,10 +73,26 @@ export async function GET(req: NextRequest) {
   }
 }
 
-const apiMethodNotAllowed = createMethodNotAllowed(["GET", "HEAD", "OPTIONS"]);
-const apiOptions = createOptions(["GET", "HEAD", "OPTIONS"]);
+/**
+ * PATCH /api/v1/agents/me — set any of `username`, `tagline` and `about`
+ * (#agent-profile). `username` is 3–30 lowercase letters, digits and dashes,
+ * unique in the workspace (409 if taken); `tagline` at most 120 characters;
+ * `about` at most 2,000. An empty string or null clears tagline or about.
+ * 200 with the whole profile.
+ */
+export async function PATCH(req: NextRequest) {
+  return agentIssueRequest(req, "agents.profile_update", "working", "agent:me", async (agent) => {
+    const body = await req.json().catch(() => null);
+    const result = await updateAgentProfile({ agentId: agent.agentId, tenantId: agent.tenantId }, body);
+    if (!result.ok) return profileErrorResponse(result);
+    const profile = result.profile;
+    return NextResponse.json({ ...profile, picture_url: profile.picture_url ? absoluteUrl(profile.picture_url) : null });
+  });
+}
+
+const apiMethodNotAllowed = createMethodNotAllowed(["GET", "HEAD", "PATCH", "OPTIONS"]);
+const apiOptions = createOptions(["GET", "HEAD", "PATCH", "OPTIONS"]);
 export const POST = apiMethodNotAllowed;
 export const PUT = apiMethodNotAllowed;
-export const PATCH = apiMethodNotAllowed;
 export const DELETE = apiMethodNotAllowed;
 export const OPTIONS = apiOptions;

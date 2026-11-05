@@ -3,7 +3,7 @@ import { award, type PointAward } from "./award";
 import { getProjectRewardConfig } from "./platform-rewards";
 import {
   calculateReporterPoints,
-  calculateSolverPoints,
+  solverReward,
   type ProjectRewardConfig,
 } from "./project-rewards";
 import { pointSourceKey } from "./rules";
@@ -36,6 +36,11 @@ export type HistoricalBug = {
   createdAt?: Date;
   isConfirmed?: boolean;
   projectId?: string | null;
+  /** #rewards: what solving it pays. */
+  reward?: number | { toNumber(): number } | null;
+  /** #live-payout: a resolution still waiting for its deployment reports pays nothing yet. */
+  heldPayout?: unknown;
+  payoutReleasedAt?: Date | null;
 };
 
 /** Solver points are earned on `resolved` only — the same eligibility the
@@ -66,13 +71,14 @@ export function backfillEntries(
   if (bug.isDeleted) return [];
   const rewardConfig = options?.rewardConfig;
   const entries: PointAward[] = [];
-  if (SOLVER_ELIGIBLE.has(bug.status) && bug.assigneeId && !bug.duplicateOfId) {
+  const payoutHeld = Array.isArray(bug.heldPayout) && bug.heldPayout.length > 0 && !bug.payoutReleasedAt;
+  if (SOLVER_ELIGIBLE.has(bug.status) && bug.assigneeId && !bug.duplicateOfId && !payoutHeld) {
     entries.push({
       tenantId: bug.tenantId,
       userId: bug.assigneeId,
       bugId: bug.id,
       role: "solver",
-      points: calculateSolverPoints(rewardConfig),
+      points: solverReward(bug.reward),
       sourceKey: pointSourceKey("solver", bug.id, bug.assigneeId),
     });
   }
@@ -149,6 +155,9 @@ export async function backfillPoints(db: Db, options: BackfillOptions = {}): Pro
         createdByAgentId: true,
         createdAt: true,
         projectId: true,
+        reward: true,
+        heldPayout: true,
+        payoutReleasedAt: true,
       },
     });
     if (bugs.length === 0) break;

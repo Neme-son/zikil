@@ -5,12 +5,61 @@ import { ExpandableText } from "@/components/expandable-text";
 
 export type ActivityEntry = {
   id: string;
-  type: ActivityType;
+  /** An activity row's type, or "step" for a step entry (a confirmation, bid, award, delivery, judgement or merge review). */
+  type: ActivityType | "step";
   summary: string;
   createdAt: Date;
   actor: { name: string };
+  /** The person an agent acted for, named after it ("Mark's Claude for Mark"). */
+  actorFor?: string | null;
   metadata?: unknown;
 };
+
+type When = Date | string;
+const toDate = (at: When) => new Date(at);
+
+/**
+ * The issue's step entries as activity rows: each confirmation (not undone), bid and its
+ * withdrawal, award and release, delivery, judgement and merge review. An agent's entry
+ * names the agent, for its person; a person's own confirmation names the person.
+ */
+export function issueStepActivities(steps: {
+  confirmations: { id: string; verdict: string; agentName: string | null; by: string; undone: boolean; updatedAt: When }[];
+  bids: { id: string; agentName: string; by: string; createdAt?: When; updatedAt: When; withdrawnAt?: When | null }[];
+  claims: { id: string; agentName: string; personName: string; offeredAt: When | null; claimedAt: When | null; releasedAt: When | null }[];
+  deliveries: { id: string; agentName: string; by: string; updatedAt: When }[];
+  testVerdicts: { id: string; agentName: string; by: string; goodToMerge: boolean; updatedAt: When }[];
+  mergeReviews: { id: string; agentName: string; by: string; verdict: string; updatedAt: When }[];
+}): ActivityEntry[] {
+  const rows: ActivityEntry[] = [];
+  const add = (id: string, at: When, actor: string, actorFor: string | null, summary: string) =>
+    rows.push({ id, type: "step", summary, createdAt: toDate(at), actor: { name: actor }, actorFor });
+
+  for (const c of steps.confirmations) {
+    if (c.undone) continue;
+    const summary =
+      c.verdict === "confirm" ? "confirmed this issue" : c.verdict === "reject" ? "rejected this issue" : "gave a neutral confirmation";
+    if (c.agentName) add(`step-confirmation-${c.id}`, c.updatedAt, c.agentName, c.by, summary);
+    else add(`step-confirmation-${c.id}`, c.updatedAt, c.by, null, summary);
+  }
+  for (const b of steps.bids) {
+    add(`step-bid-${b.id}`, b.createdAt ?? b.updatedAt, b.agentName, b.by, "bid");
+    if (b.withdrawnAt) add(`step-bid-withdrawn-${b.id}`, b.withdrawnAt, b.agentName, b.by, "withdrew a bid");
+  }
+  for (const c of steps.claims) {
+    const awardedAt = c.offeredAt ?? c.claimedAt;
+    if (awardedAt) add(`step-award-${c.id}`, awardedAt, c.agentName, c.personName, "was awarded the issue");
+    if (c.releasedAt) add(`step-release-${c.id}`, c.releasedAt, c.agentName, c.personName, "released it");
+  }
+  for (const d of steps.deliveries) add(`step-delivery-${d.id}`, d.updatedAt, d.agentName, d.by, "delivered the work");
+  for (const v of steps.testVerdicts) {
+    add(`step-verdict-${v.id}`, v.updatedAt, v.agentName, v.by, v.goodToMerge ? "judged it good to merge" : "judged it not good to merge");
+  }
+  for (const r of steps.mergeReviews) {
+    add(`step-review-${r.id}`, r.updatedAt, r.agentName, r.by, r.verdict === "accept" ? "accepted it for merging" : "rejected it for merging");
+  }
+  return rows;
+}
 
 /** How many of the newest entries show before "Show earlier". */
 const SHOWN = 2;
@@ -70,8 +119,12 @@ function ActivityList({ entries, className }: { entries: ActivityEntry[]; classN
           />
           {/* One line: who did what, the time on the right. */}
           <div className="flex min-w-0 items-baseline gap-3 text-xs text-zk-text2">
-            <p className="m-0 min-w-0 flex-1 truncate" title={`${entry.actor.name} ${entry.summary}`}>
-              <span className="font-bold text-zk-text">{entry.actor.name}</span> {entry.summary}
+            <p
+              className="m-0 min-w-0 flex-1 truncate"
+              title={`${entry.actor.name}${entry.actorFor ? ` for ${entry.actorFor}` : ""} ${entry.summary}`}
+            >
+              <span className="font-bold text-zk-text">{entry.actor.name}</span>
+              {entry.actorFor ? <span className="text-zk-muted"> for {entry.actorFor}</span> : null} {entry.summary}
             </p>
             <LocalTime className="shrink-0 text-[11px] text-zk-muted" date={entry.createdAt} />
           </div>
