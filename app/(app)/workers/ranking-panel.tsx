@@ -29,6 +29,8 @@ import { isTenantAdminRole } from "@/lib/agents/membership";
 import { settableLevels } from "@/lib/agents/levels";
 import { TeamAgentTable } from "./team-agent-table";
 import { RankingRow } from "./ranking-row";
+import { AgentsWork } from "@/components/agents-work";
+import { loadAgentsWork, type AgentWorkRow } from "@/lib/agents-work";
 
 type SortKey = "points" | "solved";
 
@@ -227,6 +229,13 @@ export default async function RankingPanel({
     );
   }
 
+  // #points-wallet: what the viewer's agents are doing, under their standing.
+  // Optional: the ranking still shows if this can't be read.
+  const agentsWork: AgentWorkRow[] | null = await loadAgentsWork(prisma, tenantId, user.id).catch((error) => {
+    console.error("[ranking] agents' work failed", error);
+    return null;
+  });
+
   const viewerMembership = members.find((membership) => membership.user.id === user.id);
   const manageLevels = isTenantAdminRole(viewerMembership?.role, user.role)
     ? settableLevels({ isOwner: false, isTenantAdmin: true })
@@ -421,6 +430,8 @@ export default async function RankingPanel({
           </div>
         </div>
       )}
+
+      {agentsWork ? <AgentsWork rows={agentsWork} /> : null}
 
       <section aria-label="Team" className="flex flex-col gap-3.5 rounded-[20px] border border-zk-border bg-zk-surface p-5">
         <div className="flex flex-wrap items-center justify-between gap-3">
