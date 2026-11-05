@@ -5,7 +5,11 @@ import { currentTenantIdFor } from "@/lib/tenant-context";
 import { listOwnerQuestions, parseEscalationBody } from "@/lib/agent-questions";
 import { issueHref } from "@/lib/issue-ref";
 import { LocalTime } from "@/components/local-time";
-import { EscalationTypeBadge, QuickResolveButtons } from "./escalation-controls";
+import {
+  EscalationTypeBadge,
+  InlineAgentReplyBox,
+  QuickResolveButtons,
+} from "./escalation-controls";
 
 const VIEWS = [
   { value: "waiting", label: "Waiting" },
@@ -25,7 +29,7 @@ export async function EscalationsView({
 }) {
   const user = await requireUser();
   const tenantId = await currentTenantIdFor(user.id);
-  const [questions, proposals] = tenantId
+  const [questions, proposals, pausedClaims] = tenantId
     ? await Promise.all([
         listOwnerQuestions(user.id, tenantId),
         prisma.redesignProposal.findMany({
@@ -38,12 +42,32 @@ export async function EscalationsView({
             body: true,
             status: true,
             createdAt: true,
-            bug: { select: { number: true, title: true, project: { select: { slug: true, tenant: { select: { slug: true } } } } } },
+            bug: { select: { number: true, title: true, project: { select: { slug: true } } } },
             authorAgent: { select: { name: true } },
           },
         }),
+        prisma.issueClaim.findMany({
+          where: {
+            agent: { tenantId, ownerUserId: user.id },
+            status: "active",
+            releasedAt: null,
+            waitingOnOwnerSince: { not: null },
+          },
+          select: {
+            agentId: true,
+            bugId: true,
+            waitingOnOwnerSince: true,
+          },
+        }),
       ])
-    : [[], []];
+    : [[], [], []];
+
+  const pausedByAgentBug = new Map<string, Date>();
+  for (const claim of pausedClaims) {
+    if (claim.waitingOnOwnerSince) {
+      pausedByAgentBug.set(`${claim.agentId}:${claim.bugId}`, claim.waitingOnOwnerSince);
+    }
+  }
 
   const params = searchParams ? await searchParams : {};
   const view: View = VIEWS.some((v) => v.value === params.status) ? (params.status as View) : "waiting";
@@ -51,6 +75,8 @@ export async function EscalationsView({
   const rows = [
     ...questions.map((q) => {
       const parsed = parseEscalationBody(q.body);
+      const claimPausedSince =
+        !q.answeredAt && q.bugId ? (pausedByAgentBug.get(`${q.agent.id}:${q.bugId}`) ?? null) : null;
       return {
         id: q.id,
         kind: "question" as const,
@@ -60,6 +86,7 @@ export async function EscalationsView({
         body: parsed.cleanBody,
         createdAt: q.createdAt,
         waiting: !q.answeredAt,
+        claimPausedSince,
         answer: q.answer,
         bug: q.bug,
         href: `/inbox/escalations/${q.id}`,
@@ -74,6 +101,7 @@ export async function EscalationsView({
       body: p.body,
       createdAt: p.createdAt,
       waiting: p.status === "proposed",
+      claimPausedSince: null as Date | null,
       answer: null,
       bug: p.bug,
       href: `/redesigns/${p.id}`,
@@ -125,8 +153,8 @@ export async function EscalationsView({
                   <LocalTime date={item.createdAt} className="text-xs text-zk-muted" />
                 </div>
                 {item.waiting ? (
-                  <span className="inline-flex items-center rounded-full border border-zk-warn-bd bg-zk-warn-bg px-2.5 py-0.5 text-xs font-semibold text-zk-warn-fg">
-                    Waiting on you
+                  <span className="inline-flex items-center gap-1.5 rounded-full border border-zk-warn-bd bg-zk-warn-bg px-2.5 py-0.5 text-xs font-semibold text-zk-warn-fg">
+                    {item.claimPausedSince ? "Claim paused · Waiting on you" : "Waiting on you"}
                   </span>
                 ) : (
                   <span className="inline-flex items-center rounded-full bg-zk-ok-bg px-2.5 py-0.5 text-xs font-semibold text-zk-ok-fg">Resolved</span>
@@ -145,11 +173,14 @@ export async function EscalationsView({
               ) : null}
 
               {item.waiting && item.kind === "question" ? (
-                <div className="flex flex-wrap items-center justify-between gap-3 border-t border-zk-divider pt-2">
+                <div className="space-y-3 border-t border-zk-divider pt-3">
                   <QuickResolveButtons escalationId={item.id} />
-                  <Link href={item.href} className="text-xs font-semibold text-zk-accent hover:underline">
-                    Write a response →
-                  </Link>
+                  <InlineAgentReplyBox
+                    escalationId={item.id}
+                    agentName={item.title}
+                    cleanBody={item.body}
+                    escalationType={item.type}
+                  />
                 </div>
               ) : item.waiting ? (
                 <div className="border-t border-zk-divider pt-2">

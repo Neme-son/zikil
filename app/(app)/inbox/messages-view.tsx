@@ -3,12 +3,14 @@ import { prisma } from "@/lib/prisma";
 import { requireUser } from "@/lib/auth-helpers";
 import { currentTenantIdFor } from "@/lib/tenant-context";
 import { AGENT_MESSAGE_MAX, listAgentThread } from "@/lib/agent-messages";
+import { parseEscalationBody } from "@/lib/agent-questions";
 import { agentPicturePath } from "@/lib/agents/profile";
 import { issueHref } from "@/lib/issue-ref";
 import { MANAGE_AGENTS_HREF } from "@/lib/header-nav";
 import { LocalTime } from "@/components/local-time";
 import { AgentPicture } from "@/components/agent-picture";
 import { SendMessageForm } from "@/app/(app)/agent/[username]/message-forms";
+import { InlineAgentReplyBox } from "./escalation-controls";
 
 const link = "font-semibold text-zk-accent hover:underline";
 const muted = "text-sm text-zk-muted";
@@ -80,38 +82,47 @@ export async function MessagesView({ agent: selected }: { agent?: string }) {
           <p className={`mt-4 ${muted}`}>Nothing yet.</p>
         ) : (
           <ol className="mt-4 space-y-3">
-            {thread.entries.map((entry) =>
-              entry.kind === "question" ? (
-                <li key={`question-${entry.id}`} className="rounded-[16px] border border-zk-border bg-zk-chip/40 p-4">
-                  <p className="flex flex-wrap items-center justify-between gap-2 text-xs text-zk-muted">
-                    <span>
-                      <span className="font-semibold text-zk-text">{current.name}</span> asked
-                      {entry.bug ? (
-                        <>
-                          {" "}about{" "}
-                          <Link href={issueHref(entry.bug)} className={link}>
-                            {entry.bug.title}
-                          </Link>
-                        </>
-                      ) : null}
-                    </span>
-                    <LocalTime date={entry.createdAt} />
-                  </p>
-                  <p className="mt-1 whitespace-pre-wrap break-words text-sm text-zk-text">{entry.body}</p>
-                  {entry.answeredAt ? (
-                    <div className="mt-2 border-t border-zk-divider pt-2">
-                      <p className="text-xs text-zk-muted">
-                        You answered <LocalTime date={entry.answeredAt} />
-                      </p>
-                      <p className="mt-1 whitespace-pre-wrap break-words text-sm text-zk-text">{entry.answer}</p>
-                    </div>
-                  ) : (
-                    <Link href={`/inbox/escalations/${entry.id}`} className={`mt-2 inline-block text-sm ${link}`}>
-                      Answer →
-                    </Link>
-                  )}
-                </li>
-              ) : (
+            {thread.entries.map((entry) => {
+              if (entry.kind === "question") {
+                const parsed = parseEscalationBody(entry.body);
+                return (
+                  <li key={`question-${entry.id}`} className="rounded-[16px] border border-zk-border bg-zk-chip/40 p-4">
+                    <p className="flex flex-wrap items-center justify-between gap-2 text-xs text-zk-muted">
+                      <span>
+                        <span className="font-semibold text-zk-text">{current.name}</span> asked
+                        {entry.bug ? (
+                          <>
+                            {" "}about{" "}
+                            <Link href={issueHref(entry.bug)} className={link}>
+                              {entry.bug.title}
+                            </Link>
+                          </>
+                        ) : null}
+                      </span>
+                      <LocalTime date={entry.createdAt} />
+                    </p>
+                    <p className="mt-1 whitespace-pre-wrap break-words text-sm text-zk-text">{parsed.cleanBody}</p>
+                    {entry.answeredAt ? (
+                      <div className="mt-2 border-t border-zk-divider pt-2">
+                        <p className="text-xs text-zk-muted">
+                          You answered <LocalTime date={entry.answeredAt} />
+                        </p>
+                        <p className="mt-1 whitespace-pre-wrap break-words text-sm text-zk-text">{entry.answer}</p>
+                      </div>
+                    ) : (
+                      <div className="mt-3">
+                        <InlineAgentReplyBox
+                          escalationId={entry.id}
+                          agentName={current.name}
+                          cleanBody={parsed.cleanBody}
+                          escalationType={parsed.type}
+                        />
+                      </div>
+                    )}
+                  </li>
+                );
+              }
+              return (
                 <li key={`message-${entry.id}`} className="rounded-[16px] border border-zk-border bg-zk-tint/70 p-4 sm:ml-8">
                   <p className="flex flex-wrap items-center justify-between gap-2 text-xs text-zk-muted">
                     <span>
@@ -122,8 +133,8 @@ export async function MessagesView({ agent: selected }: { agent?: string }) {
                   </p>
                   <p className="mt-1 whitespace-pre-wrap break-words text-sm text-zk-text">{entry.body}</p>
                 </li>
-              ),
-            )}
+              );
+            })}
           </ol>
         )}
         <div className="mt-4 border-t border-zk-divider pt-4">
