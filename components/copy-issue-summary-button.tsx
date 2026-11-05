@@ -4,6 +4,7 @@ import { useState } from "react";
 import type { Substatus } from "@prisma/client";
 import { useToast } from "@/components/ui/toast";
 import { formatIssueSummary } from "@/lib/issue-share-summary";
+import { copyText } from "@/lib/clipboard";
 
 export type CopyIssueSummaryButtonProps = {
   issue: {
@@ -12,7 +13,9 @@ export type CopyIssueSummaryButtonProps = {
     substatus: Substatus;
     summary?: string | null;
     description?: string | null;
+    orgSlug?: string;
     projectSlug: string;
+    canonicalPath?: string;
     assigneeName?: string | null;
     pullRequestUrl?: string | null;
   };
@@ -30,28 +33,21 @@ export function CopyIssueSummaryButton({
 
   const handleCopy = async () => {
     const origin = typeof window !== "undefined" ? window.location.origin : "";
-    const url = origin ? `${origin}/${issue.projectSlug}/${issue.number}` : undefined;
+    const path =
+      issue.canonicalPath ||
+      (issue.orgSlug
+        ? `/${issue.orgSlug}/${issue.projectSlug}/${issue.number}`
+        : `/${issue.projectSlug}/${issue.number}`);
+    const url = origin ? `${origin}${path}` : path;
     const text = formatIssueSummary({ ...issue, url });
 
-    try {
-      if (navigator.clipboard?.writeText) {
-        await navigator.clipboard.writeText(text);
-      } else {
-        const textarea = document.createElement("textarea");
-        textarea.value = text;
-        textarea.style.position = "fixed";
-        textarea.style.opacity = "0";
-        document.body.appendChild(textarea);
-        textarea.focus();
-        textarea.select();
-        document.execCommand("copy");
-        document.body.removeChild(textarea);
-      }
+    const ok = await copyText(text);
+    if (ok) {
       setCopied(true);
       toast("Issue summary copied to clipboard.");
       onCopied?.();
       setTimeout(() => setCopied(false), 2000);
-    } catch {
+    } else {
       toast("Could not copy issue summary.", "error");
     }
   };

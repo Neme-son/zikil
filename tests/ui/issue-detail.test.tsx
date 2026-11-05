@@ -15,6 +15,7 @@ import { IssueBidsPanel, type BidEntryView } from "@/components/issue-bids";
 import { IssueConfirmationsPanel, type ConfirmationEntryView, type ConfirmationsData } from "@/components/issue-confirmations";
 import { CopyIssueSummaryButton } from "@/components/copy-issue-summary-button";
 import { formatIssueSummary } from "@/lib/issue-share-summary";
+import { ToastProvider } from "@/components/ui/toast";
 
 const PR = "https://github.com/emerjent/ziki/pull/42";
 
@@ -247,6 +248,19 @@ describe("CopyIssueSummaryButton (#copy-issue-summary)", () => {
     expect(text).toContain("Summary: Mobile viewport has sticky header collision.");
   });
 
+  it("constructs canonical workspace route when org and project differ", () => {
+    const text = formatIssueSummary({
+      number: 42,
+      title: "Export button unresponsive",
+      substatus: "open",
+      orgSlug: "acme-corp",
+      projectSlug: "platform",
+    });
+
+    expect(text).toContain("[PLATFORM #42] Export button unresponsive");
+    expect(text).toContain("Link: /acme-corp/platform/42");
+  });
+
   it("copies formatted issue summary to clipboard and shows feedback", async () => {
     const user = userEvent.setup();
     const writeText = vi.fn().mockResolvedValue(undefined);
@@ -262,7 +276,9 @@ describe("CopyIssueSummaryButton (#copy-issue-summary)", () => {
           number: 42,
           title: "Fix broken redirect",
           substatus: "open",
+          orgSlug: "acme",
           projectSlug: "zedu",
+          canonicalPath: "/acme/zedu/42",
           summary: "Redirect misses return parameter.",
         }}
       />,
@@ -274,6 +290,70 @@ describe("CopyIssueSummaryButton (#copy-issue-summary)", () => {
 
     expect(writeText).toHaveBeenCalledTimes(1);
     expect(writeText.mock.calls[0][0]).toContain("[ZEDU #42] Fix broken redirect");
+    expect(writeText.mock.calls[0][0]).toContain("/acme/zedu/42");
     expect(button).toHaveTextContent("Copied to clipboard");
+  });
+
+  it("falls back to execCommand when async clipboard API rejects with permission denied", async () => {
+    const user = userEvent.setup();
+    Object.defineProperty(navigator, "clipboard", {
+      value: {
+        writeText: vi.fn().mockRejectedValue(new Error("Permission denied")),
+      },
+      writable: true,
+      configurable: true,
+    });
+    const execCommand = vi.fn().mockReturnValue(true);
+    document.execCommand = execCommand;
+
+    render(
+      <CopyIssueSummaryButton
+        issue={{
+          number: 10,
+          title: "Fallback test",
+          substatus: "open",
+          projectSlug: "test",
+        }}
+      />,
+    );
+
+    const button = screen.getByTestId("copy-issue-summary");
+    await user.click(button);
+
+    expect(execCommand).toHaveBeenCalledWith("copy");
+    expect(button).toHaveTextContent("Copied to clipboard");
+  });
+
+  it("does not report success when clipboard copy fails", async () => {
+    const user = userEvent.setup();
+    Object.defineProperty(navigator, "clipboard", {
+      value: {
+        writeText: vi.fn().mockRejectedValue(new Error("Not allowed")),
+      },
+      writable: true,
+      configurable: true,
+    });
+    const execCommand = vi.fn().mockReturnValue(false);
+    document.execCommand = execCommand;
+
+    render(
+      <ToastProvider>
+        <CopyIssueSummaryButton
+          issue={{
+            number: 11,
+            title: "Failure test",
+            substatus: "open",
+            projectSlug: "test",
+          }}
+        />
+      </ToastProvider>,
+    );
+
+    const button = screen.getByTestId("copy-issue-summary");
+    await user.click(button);
+
+    expect(button).not.toHaveTextContent("Copied to clipboard");
+    expect(button).toHaveTextContent("Copy issue summary");
+    expect(screen.getByText("Could not copy issue summary.")).toBeInTheDocument();
   });
 });

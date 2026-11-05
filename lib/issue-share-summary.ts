@@ -8,6 +8,7 @@ export type IssueSummaryInput = {
   substatus: Substatus;
   summary?: string | null;
   description?: string | null;
+  orgSlug?: string;
   projectSlug: string;
   url?: string;
   assigneeName?: string | null;
@@ -21,7 +22,11 @@ export type IssueSummaryInput = {
 export function formatIssueSummary(issue: IssueSummaryInput): string {
   const num = formatIssueNumber(issue.number);
   const status = stateLabel(issue.substatus);
-  const href = issue.url || `/${issue.projectSlug}/${issue.number}`;
+  const href =
+    issue.url ||
+    (issue.orgSlug
+      ? `/${issue.orgSlug}/${issue.projectSlug}/${issue.number}`
+      : `/${issue.projectSlug}/${issue.number}`);
 
   const lines: string[] = [
     `[${issue.projectSlug.toUpperCase()} ${num}] ${issue.title}`,

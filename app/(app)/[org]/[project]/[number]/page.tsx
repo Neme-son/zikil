@@ -1225,7 +1225,9 @@ export default async function BugDetailPage({ params, searchParams }: BugPagePro
                     substatus: bug.substatus,
                     summary: bug.summary,
                     description: bug.description,
+                    orgSlug: bug.project.tenant.slug,
                     projectSlug: bug.project.slug,
+                    canonicalPath: issueHref(bug),
                     assigneeName: assignee?.name ?? null,
                     pullRequestUrl: bug.pullRequestUrl ?? null,
                   }}
