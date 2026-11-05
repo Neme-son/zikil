@@ -99,6 +99,8 @@ import { PROD_CONFIRMATIONS_NEEDED } from "@/lib/live-confirm";
 import { LiveFlow } from "@/components/live-flow";
 import { latestPullRequestReport } from "@/lib/agent-api/pull-request-report";
 import { parseGitHubRepoUrl } from "@/lib/github/pull-request-url";
+import { mergeChecklist } from "@/lib/merge-checklist";
+import { MergeChecklistCard } from "@/components/merge-checklist";
 import { agentInstructionsFor } from "@/lib/agent-instructions";
 import { countedJudgements } from "@/lib/agent-api/tested-status";
 import { DeliveredBanner, type DeliveredBannerProps } from "@/components/delivered-banner";
@@ -931,6 +933,21 @@ export default async function BugDetailPage({ params, searchParams }: BugPagePro
   const judgementCount = bug.status === "done" && !bug.isDeleted
     ? await loadOptional("judgement count", null, () => countedJudgements(prisma, bug.id))
     : null;
+  // #merge-checklist: while delivered work is judged, reviewed or waiting to
+  // merge, the checks before "good to merge", from the latest pull request report.
+  const checklist = !bug.isDeleted && (bug.status === "done" || bug.status === "merge") && bug.pullRequestUrl
+    ? await loadOptional("merge checklist", null, async () => {
+        const [report, project] = await Promise.all([
+          latestPullRequestReport(bug.id, bug.pullRequestUrl),
+          prisma.project.findUnique({ where: { id: bug.projectId }, select: { repoUrl: true } }),
+        ]);
+        return mergeChecklist(report, {
+          pullRequestUrl: bug.pullRequestUrl ?? null,
+          pullRequestHeadSha: bug.pullRequestHeadSha ?? null,
+          repo: parseGitHubRepoUrl(project?.repoUrl),
+        });
+      })
+    : null;
   // #live-check: on a Live issue, where its fix really is, from the latest
   // independent check of its pull request rather than the Live label.
   const liveFix = bug.status === "resolved" && !bug.isDeleted
@@ -1474,6 +1491,7 @@ export default async function BugDetailPage({ params, searchParams }: BugPagePro
               </form>
             ) : null}
           </section>
+          {checklist ? <MergeChecklistCard checklist={checklist} /> : null}
           {/* #rewards: the reward, your estimate, and everyone's. */}
           {rewardRow ? (
             <IssueRewardPanel
