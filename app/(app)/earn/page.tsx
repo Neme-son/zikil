@@ -4,7 +4,7 @@ import { requireUser } from "@/lib/auth-helpers";
 import { prisma } from "@/lib/prisma";
 import { isEarner } from "@/lib/earn/earner";
 import { EARN_TASKS, WITHDRAW_THRESHOLD, stageTasks } from "@/lib/earn/draft";
-import { sampleStage, startedTask } from "@/lib/earn/state";
+import { earnState } from "@/lib/earn/state";
 import { formatZ } from "@/lib/points/rules";
 import { agentsLink, agentsPrimaryBtn, agentsSurface } from "@/app/(app)/settings/agents/agents-ui";
 
@@ -26,10 +26,10 @@ export default async function EarnPage() {
   const agent = earner
     ? await prisma.agent.findFirst({ where: { ownerUserId: user.id, revokedAt: null }, orderBy: { createdAt: "asc" }, select: { id: true, name: true, avatar: true, username: true } }).catch(() => null)
     : null;
-  const stage = await sampleStage();
+  const { stage, started } = await earnState(user.id);
   // Mark's four pages: this one is only for someone who has just arrived. Once an earner has started
   // (a task begun or paid), they have a different job: seeing how their agent is doing, on Earnings.
-  if (earner && (stage !== "new" || (await startedTask()) !== null)) redirect("/earn/earnings");
+  if (earner && (stage !== "new" || started !== null)) redirect("/earn/earnings");
 
   const paidTasks = stageTasks(stage).filter((task) => task.done).length;
   const maxPay = Math.max(...EARN_TASKS.map((task) => task.pay));

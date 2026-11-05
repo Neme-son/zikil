@@ -108,7 +108,7 @@ import { PROJECT_ALL_PARAM, showsAllProjects } from "@/lib/issue-list-filters";
 import { ideaVoteTotals, NO_VOTES } from "@/lib/idea-vote-totals";
 import { EARN_PROJECT_SLUG, EARN_TASKS, tasksPaid } from "@/lib/earn/draft";
 import { isEarner } from "@/lib/earn/earner";
-import { sampleStage, startedTask } from "@/lib/earn/state";
+import { earnState } from "@/lib/earn/state";
 import { ZikiTasksTable } from "@/components/ziki-tasks-table";
 
 /* Distinct browser-tab title; the root layout appends "· Ziki". */
@@ -1020,13 +1020,14 @@ export async function IssuesList({
 
   // Earn (#earn-drafts, Mark's review): Ziki tasks live in the main list, as a green step
   // above Open, only for someone earning and only while tasks are left.
-  const earnStage = slug === EARN_PROJECT_SLUG && (await isEarner(user.id).catch(() => false)) ? await sampleStage() : null;
+  const earn = slug === EARN_PROJECT_SLUG && (await isEarner(user.id).catch(() => false)) ? await earnState(user.id) : null;
+  const earnStage = earn?.stage ?? null;
   const zikiTasksLeft = earnStage ? EARN_TASKS.length - tasksPaid(earnStage) : 0;
   const showZikiTasks = earnStage !== null && (zikiTasksLeft > 0 || zikiTasks);
   // The In Progress tab opens on the Ziki tasks (its link points there); Open and the rest stay normal.
   const onZikiTasks = zikiTasks;
 
-  const listContent = onZikiTasks && earnStage ? <ZikiTasksTable stage={earnStage} started={await startedTask()} /> : (
+  const listContent = onZikiTasks && earnStage ? <ZikiTasksTable stage={earnStage} started={earn?.started ?? null} /> : (
     <div className="space-y-4">
         {statusParam === "resolved" && !isDeletedView ? <LiveRefresh /> : null}
         {statusParam === "resolved" && liveTabChecks.size > 0 ? (

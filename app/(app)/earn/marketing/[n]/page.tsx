@@ -1,18 +1,18 @@
 import Link from "next/link";
-import { notFound, redirect } from "next/navigation";
+import { notFound } from "next/navigation";
 import { requireUser } from "@/lib/auth-helpers";
 import { prisma } from "@/lib/prisma";
 import { formatZ } from "@/lib/points/rules";
-import { EARN_TASKS, WITHDRAW_THRESHOLD, earnBalance, stageAfterPaying, tasksPaid, zikiTaskPath } from "@/lib/earn/draft";
-import { sampleStage, startedTask } from "@/lib/earn/state";
-import { EarnTaskWork } from "@/components/earn-task-work";
+import { EARN_TASKS, EARN_WORK, WITHDRAW_THRESHOLD, zikiTaskPath } from "@/lib/earn/draft";
+import { paidCount, taskStateFor, type EarnTaskState } from "@/lib/earn/progress";
+import { earnState, startIfAgentConnected } from "@/lib/earn/state";
+import { startEarnTaskAction } from "@/app/(app)/earn/actions";
+import { EarnSubmitForm } from "@/components/earn-submit-form";
 import { EarnTopStrip } from "@/components/earn-top-strip";
 import { EarnCelebrate } from "@/components/earn-celebrate";
 import { agentsLink, agentsPrimaryBtn, agentsSurface } from "@/app/(app)/settings/agents/agents-ui";
 
 export const metadata = { title: "Marketing task" };
-
-type State = "locked" | "open" | "in-progress" | "in-review" | "paid";
 
 /** The three beats of a task, in plain words (not the builders' Open, In progress, In review, Paid). */
 const BEATS = [
@@ -22,41 +22,42 @@ const BEATS = [
 ] as const;
 
 /**
- * One marketing task (#earn-drafts, Mark's call of 5 Nov): the earner's own
- * page for doing it, at /earn/marketing/<n>. Not an issue page: no number,
- * summary, stage tracker, reporter or assignee. It says what you do, what your
- * agent does, and what happens next; when it's paid, it celebrates.
+ * One marketing task (#earn-tasks): the earner's own page for doing it, at
+ * /earn/marketing/<n>. Not an issue page: no number, summary, stage tracker,
+ * reporter or assignee. It says what you do, what your agent does, and what
+ * happens next. Where it is comes from the earner's task row: started when
+ * their agent is connected (or when they press Start), in review once they
+ * send it in, paid once Ziki confirms it.
  */
 export default async function EarnTaskPage({
   params,
   searchParams,
 }: {
   params: Promise<{ n: string }>;
-  searchParams: Promise<{ step?: string; p?: string; celebrate?: string }>;
+  searchParams: Promise<{ celebrate?: string }>;
 }) {
   const { n: raw } = await params;
   const n = Number(raw);
   if (!Number.isInteger(n) || n < 1 || n > EARN_TASKS.length) notFound();
   const user = await requireUser();
   const query = await searchParams;
-  const stage = await sampleStage();
-  const started = await startedTask();
-  const paid = tasksPaid(stage);
+  await startIfAgentConnected(user.id);
+  const { rows, balance } = await earnState(user.id);
   const index = n - 1;
   const task = EARN_TASKS[index];
-  const here = zikiTaskPath(n);
-
-  // Draft: the step of the task comes from the address (?step=), since nothing is saved yet.
-  if (index === paid && (query.step === "in-progress" || query.step === "in-review") && started !== n) redirect(`/earn/start-task?n=${n}${query.step === "in-review" ? "&to=in-review" : ""}`);
-  const state: State =
-    index < paid ? "paid" : index > paid ? "locked" : query.step === "in-progress" || query.step === "in-review" ? query.step : started === n ? "in-progress" : "open";
-  const person = Number(query.p ?? 0) || 0;
+  const work = EARN_WORK[task.id];
+  const state: EarnTaskState = taskStateFor(rows, index);
+  const paid = paidCount(rows);
+  const row = await prisma.earnTaskProgress.findUnique({
+    where: { userId_taskKey: { userId: user.id, taskKey: task.id } },
+    select: { status: true, proof: true, note: true },
+  });
   const agent = await prisma.agent.findFirst({ where: { ownerUserId: user.id, revokedAt: null }, orderBy: { createdAt: "asc" }, select: { id: true, name: true, avatar: true } }).catch(() => null);
   const agentName = agent?.name ?? "Your agent";
-  const balance = earnBalance(stage);
   const next = EARN_TASKS[index + 1];
   const beat = state === "in-progress" ? 0 : state === "in-review" ? 1 : state === "paid" ? 2 : -1;
   const celebrate = state === "paid" && query.celebrate === "1" && index === paid - 1;
+  const sentBack = row?.status === "rejected";
 
   return (
     <div className="mx-auto max-w-3xl space-y-5">
@@ -74,73 +75,87 @@ export default async function EarnTaskPage({
 
       {celebrate ? <EarnCelebrate agent={agent} taskNumber={n} pay={task.pay} from={balance.earned - task.pay} to={balance.earned} total={WITHDRAW_THRESHOLD} /> : null}
 
-      <div>
-        <div className="min-w-0 space-y-5">
-          {/* Three plain beats, only once the task is under way. */}
-          {beat >= 0 ? (
-            <ol aria-label="Where this task is" className="m-0 grid list-none grid-cols-3 gap-2 p-0">
-              {BEATS.map((b, i) => (
-                <li key={b.key} className={`flex items-center gap-2 rounded-2xl px-3 py-2.5 text-xs font-bold ${i < beat || (i === beat && state === "paid") ? "bg-zk-ok-bg text-zk-ok-fg" : i === beat ? "bg-zk-info-bg text-zk-info-fg" : "bg-zk-chip text-zk-muted"}`}>
-                  <span aria-hidden="true" className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[11px] ${i < beat || (i === beat && state === "paid") ? "bg-zk-ok-fg text-white" : i === beat ? "bg-electric-blue-strong text-white" : "bg-zk-surface text-zk-muted"}`}>
-                    {i < beat || (i === beat && state === "paid") ? "✓" : i + 1}
-                  </span>
-                  {b.label}
-                </li>
-              ))}
-            </ol>
-          ) : null}
+      <div className="min-w-0 space-y-5">
+        {/* Three plain beats, only once the task is under way. */}
+        {beat >= 0 ? (
+          <ol aria-label="Where this task is" className="m-0 grid list-none grid-cols-3 gap-2 p-0">
+            {BEATS.map((b, i) => (
+              <li key={b.key} className={`flex items-center gap-2 rounded-2xl px-3 py-2.5 text-xs font-bold ${i < beat || (i === beat && state === "paid") ? "bg-zk-ok-bg text-zk-ok-fg" : i === beat ? "bg-zk-info-bg text-zk-info-fg" : "bg-zk-chip text-zk-muted"}`}>
+                <span aria-hidden="true" className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[11px] ${i < beat || (i === beat && state === "paid") ? "bg-zk-ok-fg text-white" : i === beat ? "bg-electric-blue-strong text-white" : "bg-zk-surface text-zk-muted"}`}>
+                  {i < beat || (i === beat && state === "paid") ? "✓" : i + 1}
+                </span>
+                {b.label}
+              </li>
+            ))}
+          </ol>
+        ) : null}
 
-          {state === "locked" ? (
-            <section className={`${agentsSurface} space-y-2 p-5 sm:p-6`}>
-              <h2 className="text-lg font-extrabold text-zk-text">Opens after task {n - 1}</h2>
-              <p className="text-sm text-zk-text2">Tasks go one at a time, and each builds on the one before.</p>
-              <Link href={zikiTaskPath(n - 1)} className={`text-sm ${agentsLink}`}>Go to task {n - 1}: {EARN_TASKS[n - 2].title} →</Link>
-            </section>
-          ) : state === "open" ? (
-            <section className={`${agentsSurface} space-y-3 p-5 sm:p-6`}>
-              <h2 className="text-lg font-extrabold text-zk-text">Ready when you are</h2>
-              <p className="text-sm text-zk-text2">Hand it to {agentName} and it gets going. You’ll do your part below once it’s started.</p>
-              <Link href={`/earn/start-task?n=${n}`} prefetch={false} className={agentsPrimaryBtn}>Give it to my agent</Link>
-            </section>
-          ) : state === "in-review" ? (
-            <section className={`${agentsSurface} space-y-2 p-5 sm:p-6`}>
-              <h2 className="text-lg font-extrabold text-zk-text">Ziki is checking it</h2>
-              <p className="text-sm text-zk-text2">Every task is checked before it pays. You’ll see it here the moment it’s paid.</p>
-              {/* Draft only: stands in for Ziki checking it. */}
-              {/* A plain link: a full page load, so the header's balance updates too. */}
-              <a href={`/earn/preview?state=${stageAfterPaying(stage)}&next=${encodeURIComponent(here)}&celebrate=1`} className={`text-xs ${agentsLink}`}>Draft: mark it checked and paid</a>
-            </section>
-          ) : state === "paid" ? (
-            <section className={`${agentsSurface} space-y-3 p-5 sm:p-6`}>
-              <h2 className="text-lg font-extrabold text-zk-text">Paid</h2>
-              <p className="text-sm text-zk-text2">+{formatZ(task.pay)} is in your balance.</p>
-              {next ? (
-                <Link href={zikiTaskPath(n + 1)} className={agentsPrimaryBtn}>Next: {next.title}</Link>
-              ) : (
-                <Link href="/earn/people" className={agentsPrimaryBtn}>All four done. See who you reached</Link>
-              )}
-            </section>
-          ) : null}
+        {state === "locked" ? (
+          <section className={`${agentsSurface} space-y-2 p-5 sm:p-6`}>
+            <h2 className="text-lg font-extrabold text-zk-text">Opens after task {n - 1}</h2>
+            <p className="text-sm text-zk-text2">Tasks go one at a time, and each builds on the one before.</p>
+            <Link href={zikiTaskPath(n - 1)} className={`text-sm ${agentsLink}`}>Go to task {n - 1}: {EARN_TASKS[n - 2].title} →</Link>
+          </section>
+        ) : state === "open" ? (
+          <section className={`${agentsSurface} space-y-3 p-5 sm:p-6`}>
+            <h2 className="text-lg font-extrabold text-zk-text">Ready when you are</h2>
+            {agent ? (
+              <p className="text-sm text-zk-text2">{agentName} is connected, so this starts on its own. Press Start if it hasn’t.</p>
+            ) : (
+              <p className="text-sm text-zk-text2">Connect your agent and it gets going on its own. Or start it yourself and do it by hand.</p>
+            )}
+            <div className="flex flex-wrap items-center gap-3">
+              <form action={startEarnTaskAction}>
+                <button type="submit" className={agentsPrimaryBtn}>Start this task</button>
+              </form>
+              {agent ? null : <Link href="/earn" className={`text-sm ${agentsLink}`}>Connect my agent</Link>}
+            </div>
+          </section>
+        ) : state === "in-review" ? (
+          <section className={`${agentsSurface} space-y-2 p-5 sm:p-6`}>
+            <h2 className="text-lg font-extrabold text-zk-text">Ziki is checking it</h2>
+            <p className="text-sm text-zk-text2">Every task is checked before it pays. You’ll see it here the moment it’s paid.</p>
+          </section>
+        ) : state === "paid" ? (
+          <section className={`${agentsSurface} space-y-3 p-5 sm:p-6`}>
+            <h2 className="text-lg font-extrabold text-zk-text">Paid</h2>
+            <p className="text-sm text-zk-text2">+{formatZ(task.pay)} is in your balance.</p>
+            {next ? (
+              <Link href={zikiTaskPath(n + 1)} className={agentsPrimaryBtn}>Next: {next.title}</Link>
+            ) : (
+              <Link href="/earn/earnings" className={agentsPrimaryBtn}>All four done. See your earnings</Link>
+            )}
+          </section>
+        ) : null}
 
-          {state === "in-progress" || state === "in-review" || state === "paid" ? (
-            <section aria-labelledby="task-work" className={`${agentsSurface} space-y-4 p-5 sm:p-6`}>
-              <h2 id="task-work" className="text-xs font-bold uppercase tracking-[0.06em] text-zk-muted">Your work</h2>
-              <EarnTaskWork
-                id={task.id}
-                agent={agent}
-                person={person}
-                done={state !== "in-progress"}
-                tabHref={(i) => `${here}?step=${state === "paid" ? "" : state}&p=${i}`}
-              />
-              {state === "in-progress" ? (
-                <div className="flex justify-end border-t border-zk-divider pt-4">
-                  <Link href={`${here}?step=in-review`} className={agentsPrimaryBtn}>Send for checking</Link>
-                </div>
-              ) : null}
-            </section>
-          ) : null}
-        </div>
-
+        {state === "in-progress" || state === "in-review" || state === "paid" ? (
+          <section aria-labelledby="task-work" className={`${agentsSurface} space-y-4 p-5 sm:p-6`}>
+            <h2 id="task-work" className="text-xs font-bold uppercase tracking-[0.06em] text-zk-muted">Your work</h2>
+            <dl className="m-0 grid gap-3 text-sm sm:grid-cols-2">
+              <div className="space-y-1">
+                <dt className="font-bold text-zk-text">{agentName} does</dt>
+                <dd className="m-0 text-zk-text2">{work.agent}</dd>
+              </div>
+              <div className="space-y-1">
+                <dt className="font-bold text-zk-text">You do</dt>
+                <dd className="m-0 text-zk-text2">{work.you}</dd>
+              </div>
+            </dl>
+            {sentBack && row?.note ? (
+              <p className="rounded-2xl bg-zk-warn-bg px-4 py-3 text-sm text-zk-warn-fg" role="status">
+                <span className="font-bold">Sent back:</span> {row.note}
+              </p>
+            ) : null}
+            {state === "in-progress" ? (
+              <EarnSubmitForm n={n} label={work.proofLabel} hint={work.proofHint} resend={sentBack} />
+            ) : row?.proof ? (
+              <div className="space-y-1">
+                <p className="text-sm font-bold text-zk-text">{work.proofLabel}</p>
+                <p className="whitespace-pre-wrap break-words rounded-2xl bg-zk-chip px-4 py-3 text-sm text-zk-text2">{row.proof}</p>
+              </div>
+            ) : null}
+          </section>
+        ) : null}
       </div>
     </div>
   );

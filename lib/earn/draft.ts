@@ -4,8 +4,11 @@
  * at WITHDRAW_THRESHOLD, which the starter tasks alone don't reach: the rest
  * comes when someone they reached starts using Ziki.
  *
- * DRAFT: there is no backend yet, so these pages show this sample earner.
- * The amounts are placeholders for Mark to set.
+ * Where someone is comes from the database (lib/earn/progress.ts and
+ * lib/earn/state.ts): their task rows and the points ledger. The amounts are
+ * placeholders for Mark to set. The sample people below and the preview
+ * stages only feed the People page and local demos; the preview cookie is
+ * ignored in production.
  */
 
 export const WITHDRAW_THRESHOLD = 30;
@@ -23,6 +26,34 @@ export const EARN_TASKS: EarnTask[] = [
   { id: "emails", title: "Send 10 emails", detail: "From your own email, with your link. CC Ziki so each one counts.", pay: 4, done: false },
   { id: "post", title: "Post about Ziki", detail: "Share your link on X, LinkedIn or your WhatsApp status.", pay: 5, done: false },
 ];
+
+/** Who does what on each task, and what to send back as proof. The agent does the work; the person checks it and sends it from their own accounts. */
+export const EARN_WORK: Record<EarnTaskId, { agent: string; you: string; proofLabel: string; proofHint: string }> = {
+  who: {
+    agent: "Suggests the kinds of business that could use Ziki.",
+    you: "Pick one and write a sentence about it: a place, a kind of business, a problem they have.",
+    proofLabel: "Who needs Ziki",
+    proofHint: "Bakeries in Lagos that take orders on Instagram but have no website",
+  },
+  research: {
+    agent: "Finds 10 businesses that match what you wrote.",
+    you: "Look the list over, then paste it: a name and a way to reach each one.",
+    proofLabel: "The 10 businesses",
+    proofHint: "One per line: name, where, email or website",
+  },
+  emails: {
+    agent: "Writes 10 emails, each with your link.",
+    you: `Send them from your own email, copying ${EARN_CC_ADDRESS} so each one counts. Then say who you sent to.`,
+    proofLabel: "Who you emailed",
+    proofHint: "The 10 addresses you sent to",
+  },
+  post: {
+    agent: "Writes a post with your link.",
+    you: "Share it on X, LinkedIn or your WhatsApp status, then paste the link to it.",
+    proofLabel: "Link to your post",
+    proofHint: "https://x.com/you/status/…",
+  },
+};
 
 export type Reached = { name: string; contact: string; emailed: string | null; opened: string | null; signedUp: string | null; started: string | null };
 
@@ -48,7 +79,11 @@ export const EARN_WORKSPACE_SLUG = "ziki-earn";
 /** The sample earner's personal link, which counts who comes through it. */
 export const EARN_LINK = "ziki.dev/r/chloe";
 
-/** Paid once, for signing up (Mark's review). */
+/**
+ * The welcome for coming to earn: paid once, to anyone who opens an earn page
+ * for the first time, new account or old (grantWelcome in lib/earn/progress.ts).
+ * Not the site's own sign-up bonus (lib/points/signup-bonus.ts).
+ */
 export const SIGNUP_BONUS = 5;
 
 /** The earner's project in that workspace: its main list holds the Ziki tasks step. */
@@ -64,8 +99,11 @@ export const EARN_PROJECT_SLUG = "ziki-earn";
 export type EarnStage = "new" | "task1" | "task2" | "task3" | "progress" | "unlocked";
 export const EARN_STAGES: EarnStage[] = ["new", "task1", "task2", "task3", "progress", "unlocked"];
 export const EARN_PREVIEW_COOKIE = "earn-preview";
-/** Draft: which task the earner pressed Start on (it is in progress until it is paid). */
-export const EARN_STARTED_COOKIE = "earn-started";
+
+/** Whether the demo stage switcher and the preview cookie work: never in production. */
+export function earnPreviewEnabled(): boolean {
+  return process.env.NODE_ENV !== "production";
+}
 
 const PAID_AT: Record<EarnStage, number> = { new: 0, task1: 1, task2: 2, task3: 3, progress: 4, unlocked: 4 };
 
@@ -74,9 +112,9 @@ export function tasksPaid(stage: EarnStage): number {
   return PAID_AT[stage];
 }
 
-/** The stage once one more task is paid (draft: Ziki "checks" it). */
-export function stageAfterPaying(stage: EarnStage): EarnStage {
-  const paid = tasksPaid(stage) + 1;
+/** The stage once this many tasks are paid, in order. */
+export function stageForPaid(paid: number): EarnStage {
+  if (paid <= 0) return "new";
   return paid >= EARN_TASKS.length ? "progress" : (`task${paid}` as EarnStage);
 }
 
@@ -99,8 +137,9 @@ export type WithdrawInfo = {
   next: { n: number; title: string; pay: number; href: string } | null;
 };
 
-export function withdrawInfo(stage: EarnStage): WithdrawInfo {
-  const balance = earnBalance(stage);
+/** `earned` is what the ledger says; without it the stage's own sum is used (demos). */
+export function withdrawInfo(stage: EarnStage, earned?: number): WithdrawInfo {
+  const balance = earnBalance(stage, earned);
   const tasks = stageTasks(stage);
   const nextIndex = tasks.findIndex((task) => !task.done);
   const left = Math.max(0, WITHDRAW_THRESHOLD - balance.earned);
@@ -112,11 +151,11 @@ export function withdrawInfo(stage: EarnStage): WithdrawInfo {
     fromTasks,
     fromPerson: balance.converted ? 0 : CONVERSION_BONUS,
     ways: [
-      { label: "You signed up", pay: SIGNUP_BONUS, done: true, next: false, href: null },
+      ...(SIGNUP_BONUS > 0 ? [{ label: "You signed up", pay: SIGNUP_BONUS, done: true, next: false, href: null }] : []),
       ...tasks.map((task, i) => ({ label: task.title, pay: task.pay, done: task.done, next: i === nextIndex, href: task.done ? null : zikiTaskPath(i + 1) })),
       { label: "Fix open-source issues", pay: CONVERSION_BONUS, done: balance.converted, next: nextIndex < 0 && !balance.converted, href: nextIndex < 0 ? "/earn/people" : null },
     ],
-    next: nextIndex < 0 ? null : { n: nextIndex + 1, title: tasks[nextIndex].title, pay: tasks[nextIndex].pay, href: `/earn/start-task?n=${nextIndex + 1}` },
+    next: nextIndex < 0 ? null : { n: nextIndex + 1, title: tasks[nextIndex].title, pay: tasks[nextIndex].pay, href: zikiTaskPath(nextIndex + 1) },
   };
 }
 
@@ -133,7 +172,8 @@ export function stageTasks(stage: EarnStage): EarnTask[] {
 
 /** The people reached at a stage: nobody yet when new; the closest one has started once unlocked. */
 export function stagePeople(stage: EarnStage): Reached[] {
-  if (!tasksDone(stage)) return [];
+  // Nobody is tracked yet: the sample people below exist only for demos, never for a real earner.
+  if (!earnPreviewEnabled() || !tasksDone(stage)) return [];
   return EARN_PEOPLE.map((person, i) => (stage === "unlocked" && i === 0 ? { ...person, started: "4 Nov" } : person));
 }
 
@@ -153,12 +193,16 @@ export type EarnBalance = {
   heldReason: string | null;
 };
 
-/** What the sample earner has at a stage: earned from finished tasks, nothing withdrawable until a conversion. */
-export function earnBalance(stage: EarnStage = "new"): EarnBalance {
+/**
+ * What an earner has at a stage: earned from finished tasks, nothing
+ * withdrawable until the threshold. `earnedOverride` is the ledger's figure for
+ * a real earner; without it the stage's own sum is used (demos).
+ */
+export function earnBalance(stage: EarnStage = "new", earnedOverride?: number): EarnBalance {
   const tasks = stageTasks(stage);
   const earned = SIGNUP_BONUS + tasks.filter((task) => task.done).reduce((sum, task) => sum + task.pay, 0);
   const converted = stage === "unlocked";
-  const total = earned + (converted ? CONVERSION_BONUS : 0);
+  const total = earnedOverride ?? earned + (converted ? CONVERSION_BONUS : 0);
   const tasksLeft = tasks.filter((task) => !task.done).reduce((sum, task) => sum + task.pay, 0);
   // Say exactly what's left: the tasks still open and, until it happens, one person starting.
   const needs = [

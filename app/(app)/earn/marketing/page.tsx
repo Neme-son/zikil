@@ -2,32 +2,25 @@ import Link from "next/link";
 import { requireUser } from "@/lib/auth-helpers";
 import { prisma } from "@/lib/prisma";
 import { formatZ } from "@/lib/points/rules";
-import { CONVERSION_BONUS, EARN_CC_ADDRESS, EARN_TASKS, earnBalance, stageTasks, zikiTaskPath } from "@/lib/earn/draft";
-import { sampleStage, startedTask } from "@/lib/earn/state";
+import { CONVERSION_BONUS, EARN_TASKS, EARN_WORK, stageTasks, zikiTaskPath } from "@/lib/earn/draft";
+import { earnState, startIfAgentConnected } from "@/lib/earn/state";
 import { EarnTopStrip } from "@/components/earn-top-strip";
 import { agentsLink, agentsPrimaryBtn, agentsSecondaryBtn, agentsSurface } from "@/app/(app)/settings/agents/agents-ui";
 
 export const metadata = { title: "Marketing tasks" };
 
-/** Who does what on each task: the agent does the work, you check it and send it from your own accounts. */
-const WORK: Record<string, { agent: string; you: string }> = {
-  who: { agent: "Suggests the kinds of business that could use Ziki.", you: "Pick one and write a sentence about it." },
-  research: { agent: "Finds 10 businesses that match what you wrote.", you: "Look the list over." },
-  emails: { agent: "Writes 10 emails, each with your link.", you: `Send them from your own email, copying ${EARN_CC_ADDRESS} so each one counts.` },
-  post: { agent: "Writes a post with your link.", you: "Share it on X, LinkedIn or your WhatsApp status." },
-};
-
 /**
- * Marketing (#earn-drafts, Mark's call of 5 Nov): the tasks an earner sees after
+ * Marketing (#earn-tasks, Mark's call of 5 Nov): the tasks an earner sees after
  * choosing Marketing on /earn, at their own URL. Not the builders' issue list: one task at a time, front and
  * centre, with who does what, and the road to the first withdrawal under it.
  */
 export default async function EarnTasksPage() {
   const user = await requireUser();
-  const [stage, started] = await Promise.all([sampleStage(), startedTask()]);
+  // With an agent connected, the next task starts on its own, before the state is read.
+  await startIfAgentConnected(user.id);
+  const { stage, started, balance } = await earnState(user.id);
   const agent = await prisma.agent.findFirst({ where: { ownerUserId: user.id, revokedAt: null }, orderBy: { createdAt: "asc" }, select: { name: true } }).catch(() => null);
   const tasks = stageTasks(stage);
-  const balance = earnBalance(stage);
   const index = tasks.findIndex((task) => !task.done);
   const current = index >= 0 ? tasks[index] : null;
   const ready = balance.withdrawable > 0;
@@ -80,18 +73,18 @@ export default async function EarnTasksPage() {
             <dl className="grid gap-3 sm:grid-cols-2">
               <div className="rounded-2xl bg-zk-tint/70 p-4">
                 <dt className="text-xs font-bold text-zk-muted">{agentName} does</dt>
-                <dd className="mt-1 text-sm leading-relaxed text-zk-text">{WORK[current.id].agent}</dd>
+                <dd className="mt-1 text-sm leading-relaxed text-zk-text">{EARN_WORK[current.id].agent}</dd>
               </div>
               <div className="rounded-2xl bg-zk-chip p-4">
                 <dt className="text-xs font-bold text-zk-muted">You do</dt>
-                <dd className="mt-1 text-sm leading-relaxed text-zk-text">{WORK[current.id].you}</dd>
+                <dd className="mt-1 text-sm leading-relaxed text-zk-text">{EARN_WORK[current.id].you}</dd>
               </div>
             </dl>
             <div className="flex flex-wrap items-center gap-3">
-              <Link href={inProgress ? zikiTaskPath(index + 1) : `/earn/start-task?n=${index + 1}`} className={agentsPrimaryBtn}>
-                {inProgress ? "Continue" : "Give it to my agent"}
+              <Link href={zikiTaskPath(index + 1)} className={agentsPrimaryBtn}>
+                {inProgress ? "Continue" : "Open the task"}
               </Link>
-              <span className="text-xs text-zk-muted">{inProgress ? `${agentName} is on it.` : `${agentName} is ready.`}</span>
+              <span className="text-xs text-zk-muted">{inProgress ? `${agentName} is on it.` : "Not started yet."}</span>
             </div>
           </section>
         ) : (

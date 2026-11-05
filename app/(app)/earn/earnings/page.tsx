@@ -2,8 +2,8 @@ import Link from "next/link";
 import { requireUser } from "@/lib/auth-helpers";
 import { prisma } from "@/lib/prisma";
 import { formatZ } from "@/lib/points/rules";
-import { CONVERSION_BONUS, SIGNUP_BONUS, WITHDRAW_THRESHOLD, earnAgentActivity, stageTasks, withdrawInfo } from "@/lib/earn/draft";
-import { sampleBalance } from "@/lib/earn/state";
+import { CONVERSION_BONUS, EARN_TASKS, SIGNUP_BONUS, WITHDRAW_THRESHOLD, earnAgentActivity, earnPreviewEnabled, stageTasks, withdrawInfo } from "@/lib/earn/draft";
+import { earnBalanceFor } from "@/lib/earn/state";
 import { EarnBar } from "@/components/earn-money";
 import { EarnWithdraw } from "@/components/earn-withdraw";
 import { EarnAgentPortrait } from "@/components/earn-agent";
@@ -21,16 +21,16 @@ export const metadata = { title: "Earnings" };
  */
 export default async function EarningsPage() {
   const user = await requireUser();
-  const balance = await sampleBalance();
+  const balance = await earnBalanceFor(user.id);
   const agent = await prisma.agent.findFirst({ where: { ownerUserId: user.id, revokedAt: null }, orderBy: { createdAt: "asc" }, select: { id: true, name: true, avatar: true, username: true } }).catch(() => null);
-  const info = withdrawInfo(balance.stage);
+  const info = withdrawInfo(balance.stage, balance.earned);
   const ready = balance.withdrawable > 0;
   const taskPay = stageTasks(balance.stage).filter((task) => task.done).reduce((sum, task) => sum + task.pay, 0);
   const fromPerson = balance.converted ? CONVERSION_BONUS : 0;
   const left = Math.max(0, WITHDRAW_THRESHOLD - balance.earned);
 
   const sources = [
-    { label: "Sign-up gift", amount: SIGNUP_BONUS },
+    ...(SIGNUP_BONUS > 0 ? [{ label: "Sign-up gift", amount: SIGNUP_BONUS }] : []),
     { label: "Market Ziki tasks", amount: taskPay },
     { label: "People you reached", amount: fromPerson },
   ];
@@ -142,19 +142,20 @@ export default async function EarningsPage() {
           ))}
         </ol>
         <p className="border-t border-zk-divider bg-zk-bg px-5 py-3 text-xs text-zk-text2">
-          These add up to $14 with your $5 sign-up. The last {formatZ(CONVERSION_BONUS)} comes from open-source tasks.{" "}
-          <Link href="/earn/people" className={agentsLink}>See the people you reached →</Link>
+          The four marketing tasks add up to {formatZ(EARN_TASKS.reduce((sum, task) => sum + task.pay, 0))}. The last {formatZ(CONVERSION_BONUS)} comes from open-source tasks.
         </p>
       </section>
 
-      {/* Draft only: see this page at the sample earner's other stages. */}
-      <p className="flex flex-wrap gap-x-3 border-t border-dashed border-zk-border pt-4 text-xs text-zk-muted">
-        Draft preview:
-        <Link href="/earn/preview?state=new&next=/earn/earnings" prefetch={false} className={agentsLink}>$5, just signed up</Link>
-        <Link href="/earn/preview?state=task2&next=/earn/earnings" prefetch={false} className={agentsLink}>$10, two tasks paid</Link>
-        <Link href="/earn/preview?state=progress&next=/earn/earnings" prefetch={false} className={agentsLink}>$19, tasks done</Link>
-        <Link href="/earn/preview?state=unlocked&next=/earn/earnings" prefetch={false} className={agentsLink}>$30, unlocked</Link>
-      </p>
+      {/* Development only: see this page at the demo stages. */}
+      {earnPreviewEnabled() ? (
+        <p className="flex flex-wrap gap-x-3 border-t border-dashed border-zk-border pt-4 text-xs text-zk-muted">
+          Demo stages:
+          <Link href="/earn/preview?state=new&next=/earn/earnings" prefetch={false} className={agentsLink}>Real data</Link>
+          <Link href="/earn/preview?state=task2&next=/earn/earnings" prefetch={false} className={agentsLink}>$10, two tasks paid</Link>
+          <Link href="/earn/preview?state=progress&next=/earn/earnings" prefetch={false} className={agentsLink}>$19, tasks done</Link>
+          <Link href="/earn/preview?state=unlocked&next=/earn/earnings" prefetch={false} className={agentsLink}>$30, unlocked</Link>
+        </p>
+      ) : null}
     </div>
   );
 }

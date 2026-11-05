@@ -22,14 +22,16 @@ export function ZikiTasksTable({ stage, started = null }: { stage: EarnStage; st
       </div>
       <ol className="m-0 list-none divide-y divide-zk-border p-0">
         {/* The first row is money she already has: the sign-up gift, paid before any task. */}
-        <li className="relative grid grid-cols-[4.5rem_minmax(0,1fr)_8rem] items-center gap-4 px-4 py-4 sm:px-6">
-          <span className="text-center font-mono text-base font-bold tabular-nums text-zk-muted">${SIGNUP_BONUS}</span>
-          <div className="min-w-0">
-            <p className="text-[15px] font-semibold text-zk-text">You signed up for Ziki</p>
-            <p className="mt-0.5 text-xs text-zk-muted">Your welcome gift. It is already in your balance.</p>
-          </div>
-          <span className="flex justify-end"><span className="inline-flex items-center rounded-full bg-zk-ok-bg px-3 py-1.5 text-xs font-bold text-zk-ok-fg">Paid</span></span>
-        </li>
+        {SIGNUP_BONUS > 0 ? (
+          <li className="relative grid grid-cols-[4.5rem_minmax(0,1fr)_8rem] items-center gap-4 px-4 py-4 sm:px-6">
+            <span className="text-center font-mono text-base font-bold tabular-nums text-zk-muted">${SIGNUP_BONUS}</span>
+            <div className="min-w-0">
+              <p className="text-[15px] font-semibold text-zk-text">You signed up for Ziki</p>
+              <p className="mt-0.5 text-xs text-zk-muted">Your welcome gift. It is already in your balance.</p>
+            </div>
+            <span className="flex justify-end"><span className="inline-flex items-center rounded-full bg-zk-ok-bg px-3 py-1.5 text-xs font-bold text-zk-ok-fg">Paid</span></span>
+          </li>
+        ) : null}
         {tasks.map((task, i) => {
           const next = i === nextIndex;
           return (
@@ -53,7 +55,7 @@ export function ZikiTasksTable({ stage, started = null }: { stage: EarnStage; st
                     In progress
                   </Link>
                 ) : next ? (
-                  <Link href={`/earn/start-task?n=${i + 1}`} prefetch={false} aria-label={`Start: ${task.title}`} className="inline-flex min-h-10 items-center rounded-full bg-electric-blue-strong px-5 text-sm font-bold text-white hover:bg-[#2552af] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-electric-blue focus-visible:ring-offset-2">
+                  <Link href={zikiTaskPath(i + 1)} aria-label={`Start: ${task.title}`} className="inline-flex min-h-10 items-center rounded-full bg-electric-blue-strong px-5 text-sm font-bold text-white hover:bg-[#2552af] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-electric-blue focus-visible:ring-offset-2">
                     Start
                   </Link>
                 ) : (
