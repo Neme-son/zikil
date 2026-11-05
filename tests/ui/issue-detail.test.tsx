@@ -13,6 +13,8 @@ vi.mock("@/app/actions/confirmations", () => ({ giveConfirmationAction: vi.fn() 
 import { MergeReviewsPanel, TestVerdictsPanel, type MergeReviewView, type TestVerdictView } from "@/components/issue-review-entries";
 import { IssueBidsPanel, type BidEntryView } from "@/components/issue-bids";
 import { IssueConfirmationsPanel, type ConfirmationEntryView, type ConfirmationsData } from "@/components/issue-confirmations";
+import { CopyIssueSummaryButton } from "@/components/copy-issue-summary-button";
+import { formatIssueSummary } from "@/lib/issue-share-summary";
 
 const PR = "https://github.com/emerjent/ziki/pull/42";
 
@@ -222,5 +224,56 @@ describe("IssueConfirmationsPanel past Requires confirmation", () => {
     const banner = screen.getByTestId("confirmation-banner");
     expect(banner).toHaveAttribute("data-confirmed", "true");
     expect(banner).toHaveTextContent(/Ada.*Bob/);
+  });
+});
+
+describe("CopyIssueSummaryButton (#copy-issue-summary)", () => {
+  it("formats a readable summary with title, status, link and excerpt", () => {
+    const text = formatIssueSummary({
+      number: 123,
+      title: "Navigation bar overlaps content on mobile",
+      substatus: "in_progress",
+      projectSlug: "zedu",
+      url: "https://ziki.dev/zedu/123",
+      assigneeName: "Ada Lovelace",
+      summary: "Mobile viewport has sticky header collision.",
+      pullRequestUrl: "https://github.com/emerjent/ziki/pull/45",
+    });
+
+    expect(text).toContain("[ZEDU #123] Navigation bar overlaps content on mobile");
+    expect(text).toContain("Status: In progress | Assignee: Ada Lovelace");
+    expect(text).toContain("Link: https://ziki.dev/zedu/123");
+    expect(text).toContain("PR: https://github.com/emerjent/ziki/pull/45");
+    expect(text).toContain("Summary: Mobile viewport has sticky header collision.");
+  });
+
+  it("copies formatted issue summary to clipboard and shows feedback", async () => {
+    const user = userEvent.setup();
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText },
+      writable: true,
+      configurable: true,
+    });
+
+    render(
+      <CopyIssueSummaryButton
+        issue={{
+          number: 42,
+          title: "Fix broken redirect",
+          substatus: "open",
+          projectSlug: "zedu",
+          summary: "Redirect misses return parameter.",
+        }}
+      />,
+    );
+
+    const button = screen.getByTestId("copy-issue-summary");
+    expect(button).toHaveTextContent("Copy issue summary");
+    await user.click(button);
+
+    expect(writeText).toHaveBeenCalledTimes(1);
+    expect(writeText.mock.calls[0][0]).toContain("[ZEDU #42] Fix broken redirect");
+    expect(button).toHaveTextContent("Copied to clipboard");
   });
 });

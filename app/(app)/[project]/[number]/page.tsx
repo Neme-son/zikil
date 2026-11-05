@@ -90,6 +90,7 @@ import { RestoreIssueButton } from "@/components/restore-issue-button";
 import { canAssignTicket } from "@/lib/ticket-assignment";
 import { SelfAssignButton } from "@/components/self-assign-button";
 import { IssueActionsMenu } from "@/components/issue-actions-menu";
+import { CopyIssueSummaryButton } from "@/components/copy-issue-summary-button";
 import { EditableIssueDescription } from "@/components/editable-issue-description";
 import { IssueLinks } from "@/components/issue-links";
 import { NextStepBar } from "@/components/next-step-bar";
@@ -1196,8 +1197,20 @@ export default async function BugDetailPage({ params, searchParams }: BugPagePro
               showAvatars={false}
               readOnly={bug.isDeleted}
             />
-            {canMarkDuplicate || canDeleteHere ? (
+            {!bug.isDeleted ? (
               <IssueActionsMenu>
+                <CopyIssueSummaryButton
+                  issue={{
+                    number: bug.number,
+                    title: bug.title,
+                    substatus: bug.substatus,
+                    summary: bug.summary,
+                    description: bug.description,
+                    projectSlug: bug.project.slug,
+                    assigneeName: assignee?.name ?? null,
+                    pullRequestUrl: bug.pullRequestUrl ?? null,
+                  }}
+                />
                 {canMarkDuplicate ? <MarkDuplicateButton bugId={bug.id} /> : null}
                 {canDeleteHere ? (
                   <DeleteIssueButton bugId={bug.id} bugTitle={bug.title} counts={keptCounts} variant="danger" size="sm" />
