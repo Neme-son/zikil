@@ -1344,9 +1344,9 @@ export async function editPullRequestUrlAction(
       ? [...new Set(existingProofLinks.map((link) => (link === previousPullRequestUrl ? nextPullRequestUrl : link)))]
       : existingProofLinks;
 
-  await prisma.$transaction(async (tx) => {
-    await tx.bug.update({
-      where: { id: bugId },
+  const updated = await prisma.$transaction(async (tx) => {
+    const changed = await tx.bug.updateMany({
+      where: { id: bugId, pullRequestUrl: previousPullRequestUrl },
       data: {
         pullRequestUrl: nextPullRequestUrl,
         pullRequestHeadSha: nextHeadSha,
@@ -1354,13 +1354,14 @@ export async function editPullRequestUrlAction(
         updatedAt: new Date(),
       },
     });
+    if (changed.count !== 1) return false;
 
     if (previousPullRequestUrl) {
       await tx.delivery.updateMany({
         where: { bugId, pullRequestUrl: previousPullRequestUrl },
         data: {
           pullRequestUrl: nextPullRequestUrl,
-          ...(nextHeadSha ? { headSha: nextHeadSha } : {}),
+          ...(samePullRequest ? {} : { headSha: nextHeadSha }),
         },
       });
     }
@@ -1393,7 +1394,13 @@ export async function editPullRequestUrlAction(
         },
       },
     });
+
+    return true;
   });
+
+  if (!updated) {
+    return { error: "The pull request link was modified by another update. Please refresh the page." };
+  }
 
   revalidatePath("/[project]", "layout");
   revalidateIssue();

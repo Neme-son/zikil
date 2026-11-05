@@ -235,7 +235,7 @@ describe("repairPullRequestLink (#edit-pr-link)", () => {
     });
     expect(db.tx.delivery.updateMany).toHaveBeenCalledWith({
       where: { bugId: "bug1", pullRequestUrl: PR },
-      data: { pullRequestUrl: nextPr },
+      data: { pullRequestUrl: nextPr, headSha: null },
     });
   });
 

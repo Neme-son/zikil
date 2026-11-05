@@ -199,7 +199,7 @@ export async function repairPullRequestLink(
       counts.deliveries = (
         await tx.delivery.updateMany({
           where: { bugId: bug.id, pullRequestUrl: previous },
-          data: { pullRequestUrl: next, ...(headSha ? { headSha } : {}) },
+          data: { pullRequestUrl: next, headSha },
         })
       ).count;
     }
