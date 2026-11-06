@@ -1,3 +1,4 @@
+import { MergerTransparencyCard } from "@/components/merger-transparency-card";
 import { requireProject } from "@/lib/project-route";
 import Link from "next/link";
 import { ideaPath, issuesPath, projectRef, refOf } from "@/lib/project-paths";
@@ -69,6 +70,11 @@ import { mergeReviewEntries } from "@/lib/agent-api/merge";
 import { DeliveriesPanel, MergeReviewsPanel, TestVerdictsPanel, type DeliveryView, type MergeReviewView, type TestVerdictView } from "@/components/issue-review-entries";
 import { Badge } from "@/components/ui/badge";
 import { VoteButton } from "@/components/vote-button";
+import { SpeedButton } from "@/components/speed-button";
+import {
+  InsufficientVotesAuditBanner,
+  WORK_READINESS_VOTE_THRESHOLD,
+} from "@/components/insufficient-votes-audit-banner";
 import { IssueConfirmationsPanel, type ConfirmationBlock, type ConfirmationsData } from "@/components/issue-confirmations";
 import { CONFIRMATION_SUMMARY_MAX_CHARS, listConfirmations, takesConfirmations } from "@/lib/agent-api/confirmations";
 import { DisputeAwardDialog, type DisputeRole } from "@/components/dispute-award-dialog";
@@ -320,13 +326,20 @@ export default async function BugDetailPage({ params, searchParams }: BugPagePro
   if (lookup.kind === "elsewhere") {
     // A link into another of the viewer's organisations should not dead-end (#519):
     // name the organisation and offer the switch. Non-members still get the 404.
+    const activeOrganisationId = await currentOrganisationIdFor(userId);
     const hint = await issueOrganisationHintFor(prisma, {
       userId,
-      activeOrganisationId: await currentOrganisationIdFor(userId),
+      activeOrganisationId,
       issueId: lookup.issueId,
     });
     if (!hint) notFound();
-    return <IssueOrganisationSwitch issueId={lookup.issueId} organisation={hint} />;
+    const currentWorkspace = activeOrganisationId ? await loadOptional("current workspace", null, () =>
+      prisma.organisation.findFirst({
+        where: { id: activeOrganisationId, archivedAt: null, memberships: { some: { userId } } },
+        select: { name: true },
+      }),
+    ) : null;
+    return <IssueOrganisationSwitch issueId={lookup.issueId} organisation={hint} currentWorkspace={currentWorkspace?.name} destination={`${issuePath(projectRef(org, projectSlug), number)}${queryString(query)}`} />;
   }
   if (lookup.kind === "moved") {
     // #project-urls: the number lives in another project of this organisation.
@@ -988,6 +1001,32 @@ export default async function BugDetailPage({ params, searchParams }: BugPagePro
   const agentResolution =
     bug.status === "resolved" && !bug.isDeleted ? readAgentResolution(latestStatusChange?.metadata) : null;
 
+    let queuePosition: number | null = null;
+  let totalInQueue = 0;
+  let estimatedWaitMinutes: number | null = null;
+  let mergerAgentName: string | null = null;
+  let precedingPrNumber: number | null = null;
+  let queueLocked = false;
+  let ciPassed = true;
+  let verdictsPassed = true;
+  let rebaseClean = true;
+  if (currentStage === "ready") {
+    const [readyBugs, mergerAgent] = await Promise.all([
+      prisma.bug.findMany({ where: { projectId: bug.projectId, substatus: { in: ["ready_to_merge", "error"] }, isDeleted: false }, orderBy: { updatedAt: "asc" }, select: { id: true, number: true, pullRequestUrl: true } }),
+      prisma.agent.findFirst({ where: { ...activeIn(bug.organisationId), revokedAt: null }, select: { name: true } }),
+    ]);
+    totalInQueue = readyBugs.length;
+    const qIdx = readyBugs.findIndex((b) => b.id === bug.id);
+    if (qIdx !== -1) {
+      queuePosition = qIdx + 1;
+      estimatedWaitMinutes = qIdx * 3;
+      if (qIdx > 0) { precedingPrNumber = readyBugs[qIdx - 1].number; queueLocked = true; }
+    } else { queuePosition = 1; totalInQueue = Math.max(1, totalInQueue); estimatedWaitMinutes = 0; }
+    mergerAgentName = mergerAgent?.name ?? null;
+    verdictsPassed = testVerdictList.filter((v) => v.goodToMerge).length >= 3;
+    ciPassed = bug.substatus !== "error";
+    rebaseClean = bug.substatus !== "error";
+  }
   // "Dispute award", for the issue's reporter and assignee: its own button now
   // that issues take no free-standing comments (#entry-replies-only).
   const disputeRoles: DisputeRole[] = bug.isDeleted
@@ -1831,6 +1870,14 @@ export default async function BugDetailPage({ params, searchParams }: BugPagePro
               readOnly={bug.isDeleted || !canContribute}
             />
             {!bug.isDeleted ? (
+              <SpeedButton
+                bugId={bug.id}
+                issueNumber={bug.number}
+                issueTitle={bug.title}
+                isExpedited={bug.isBoosted}
+              />
+            ) : null}
+            {!bug.isDeleted ? (
               <IssueActionsMenu>
                 <CopyIssueSummaryButton
                   issue={{
@@ -1859,6 +1906,15 @@ export default async function BugDetailPage({ params, searchParams }: BugPagePro
       <div className="flex flex-wrap items-start gap-5">
         {/* MAIN COLUMN */}
         <div className="flex min-w-0 flex-[999_1_600px] flex-col gap-5">
+          {bug.status === "open" && bug.voteCount < WORK_READINESS_VOTE_THRESHOLD ? (
+            <InsufficientVotesAuditBanner
+              issueId={bug.id}
+              voteCount={bug.voteCount}
+              threshold={WORK_READINESS_VOTE_THRESHOLD}
+              canRequestAudit={canTriage || bug.reporterId === user.id}
+            />
+          ) : null}
+
           {/* #1446: the progress report's stage filters the Conversation (#186). */}
           <IssueStageProvider initialStage={currentStage}>
           <EditableIssueDescription
@@ -1944,9 +2000,26 @@ export default async function BugDetailPage({ params, searchParams }: BugPagePro
                   </div>
                   <IssueTimeline>
                     {mergeReviewing || timelineReviews.length > 0 ? (
-                      <TimelineStep>
-                        <MergeReviewsPanel at={firstAt(timelineReviews)} bugId={bug.id} reviews={timelineReviews} canReply={mergeReviewing} history={!mergeReviewing} />
-                      </TimelineStep>
+                      <>
+                        {currentStage === "ready" ? (
+                          <TimelineStep>
+                            <MergerTransparencyCard
+                              queuePosition={queuePosition}
+                              totalInQueue={totalInQueue}
+                              estimatedWaitMinutes={estimatedWaitMinutes}
+                              mergerAgentName={mergerAgentName}
+                              precedingPrNumber={precedingPrNumber}
+                              ciPassed={ciPassed}
+                              verdictsPassed={verdictsPassed}
+                              rebaseClean={rebaseClean}
+                              queueLocked={queueLocked}
+                            />
+                          </TimelineStep>
+                        ) : null}
+                        <TimelineStep>
+                          <MergeReviewsPanel at={firstAt(timelineReviews)} bugId={bug.id} reviews={timelineReviews} canReply={mergeReviewing} history={!mergeReviewing} />
+                        </TimelineStep>
+                      </>
                     ) : null}
                     {testing || timelineVerdicts.length > 0 ? (
                       <TimelineStep>
