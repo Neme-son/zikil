@@ -318,6 +318,8 @@ model User {
   projectMemberships        ProjectMembership[]
   projectJoinRequests       ProjectJoinRequest[]
   projectJoinRequestsReviewed ProjectJoinRequest[]  @relation("JoinRequestReviewer")
+  skillSubmissions          SkillSubmission[]       @relation("SkillSubmissionSubmittedBy")
+  reviewedSkillSubmissions  SkillSubmission[]       @relation("SkillSubmissionReviewedBy")
 }
 
 /// Single-use password reset tokens (~30 min TTL). Store only the SHA-256 hash.
@@ -2718,6 +2720,44 @@ model AgentPicture {
   data        Bytes
   updatedAt   DateTime @updatedAt
   agent       Agent    @relation(fields: [agentId], references: [id], onDelete: Cascade)
+}
+
+/// A contributor's skill submission to the skills library (#skill-submissions).
+/// Pending until a super admin approves or rejects it; an approved submission
+/// is published to the skills directory.
+enum SkillSubmissionStatus {
+  pending
+  approved
+  rejected
+}
+
+model SkillSubmission {
+  id               String              @id @default(cuid())
+  slug             String              @unique
+  title            String
+  category           String
+  categoryLabel      String
+  summary          String
+  tags             String[]
+  prompt           String
+  checklist        String[]            @default([])
+  sampleCommand    String?
+  documentationUrl String?
+
+  status           SkillSubmissionStatus @default(pending)
+  submittedById    String
+  submittedBy      User                @relation("SkillSubmissionSubmittedBy", fields: [submittedById], references: [id], onDelete: Cascade)
+  reviewedById     String?
+  reviewedBy       User?               @relation("SkillSubmissionReviewedBy", fields: [reviewedById], references: [id], onDelete: SetNull)
+  reviewedAt       DateTime?
+  rejectionReason  String?
+  createdAt        DateTime            @default(now())
+  updatedAt        DateTime            @updatedAt
+
+  @@index([status])
+  @@index([submittedById])
+  @@index([createdAt])
+
 }
 
 /// A standing instruction one person writes for every agent they own (#838).
