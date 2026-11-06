@@ -134,9 +134,9 @@ async function normalizeMentionTags(
 
   const validUsers = mentionedIds.length
     ? await prisma.user.findMany({
-        where: { id: { in: mentionedIds }, ...tenantMemberWhere(tenantId) },
-        select: { id: true, name: true },
-      })
+      where: { id: { in: mentionedIds }, ...tenantMemberWhere(tenantId) },
+      select: { id: true, name: true },
+    })
     : [];
   const userMap = new Map([
     ...validUsers.map((user) => [user.id, user.name] as [string, string]),
@@ -650,9 +650,9 @@ export async function updateBugAction(
       if (data.status === "resolved" || data.status === "closed") {
         const activeClaims = typeof tx.issueClaim?.findMany === "function"
           ? await tx.issueClaim.findMany({
-              where: { bugId, status: "active", releasedAt: null },
-              select: { id: true, agentId: true, beneficiaryUserId: true },
-            })
+            where: { bugId, status: "active", releasedAt: null },
+            select: { id: true, agentId: true, beneficiaryUserId: true },
+          })
           : [];
         await tx.issueClaim.updateMany({
           where: { bugId, status: "active", releasedAt: null },
@@ -684,14 +684,14 @@ export async function updateBugAction(
           const priorClaims =
             typeof tx.issueClaim.findMany === "function"
               ? await tx.issueClaim.findMany({
-                  where: {
-                    bugId,
-                    beneficiaryUserId: existing.assigneeId,
-                    status: { in: ["offered", "active"] },
-                    releasedAt: null,
-                  },
-                  select: { id: true, agentId: true, beneficiaryUserId: true },
-                })
+                where: {
+                  bugId,
+                  beneficiaryUserId: existing.assigneeId,
+                  status: { in: ["offered", "active"] },
+                  releasedAt: null,
+                },
+                select: { id: true, agentId: true, beneficiaryUserId: true },
+              })
               : [];
           await tx.issueClaim.updateMany({
             where: {
@@ -1250,7 +1250,7 @@ export async function editPullRequestUrlAction(
       project: { select: { repoUrl: true } },
       claims: {
         where: { releasedAt: null, status: { in: ["active", "offered"] } },
-        select: { status: true, beneficiaryUserId: true, agent: { select: { ownerUserId: true } } },
+        select: { beneficiaryUserId: true, agent: { select: { ownerUserId: true } } },
       },
       deliveries: {
         select: { beneficiaryUserId: true, pullRequestUrl: true, agent: { select: { ownerUserId: true } } },
@@ -1274,13 +1274,13 @@ export async function editPullRequestUrlAction(
   );
   const currentDelivery = existing.pullRequestUrl
     ? existing.deliveries.find(
-        (d) => d.pullRequestUrl === existing.pullRequestUrl,
-      )
+      (d) => d.pullRequestUrl === existing.pullRequestUrl,
+    )
     : null;
   const deliveredCurrent = Boolean(
     currentDelivery &&
-      (currentDelivery.beneficiaryUserId === userId ||
-        currentDelivery.agent.ownerUserId === userId),
+    (currentDelivery.beneficiaryUserId === userId ||
+      currentDelivery.agent.ownerUserId === userId),
   );
   const isAssignee = Boolean(existing.assigneeId && existing.assigneeId === userId);
 
@@ -1336,9 +1336,9 @@ export async function editPullRequestUrlAction(
   const oldPr = previousPullRequestUrl ? parsePullRequestUrl(previousPullRequestUrl) : null;
   const samePullRequest = Boolean(
     oldPr &&
-      oldPr.number === parsedPr.number &&
-      repo &&
-      (sameRepo(oldPr, repo) || isFormerNameOf(oldPr, repo)),
+    oldPr.number === parsedPr.number &&
+    repo &&
+    (sameRepo(oldPr, repo) || isFormerNameOf(oldPr, repo)),
   );
 
   const accepted = await standingAcceptance(prisma, bugId);
