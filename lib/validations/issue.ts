@@ -117,6 +117,16 @@ export const editProofLinksSchema = z
   })
   .strict();
 
+/** Update or replace a submitted GitHub pull request URL on an issue (#edit-pr-link). */
+export const editPullRequestUrlSchema = z
+  .object({
+    pullRequestUrl: z
+      .string()
+      .trim()
+      .min(1, "Enter a GitHub pull request URL")
+      .max(2048, "Pull request URL is too long"),
+  })
+  .strict();
 
 /**
  * A comment (#entry-replies-only): a plain reply to exactly one stage entry,
