@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { OPENCODE_GLOBAL_DIR, buildMcpBlock, resolveMcpServerPath, mergeOpencodeConfig } from "../adapters/opencode.js";
+import { OPENCODE_GLOBAL_DIR, buildMcpBlock, buildToolsMap, resolveMcpServerPath, mergeOpencodeConfig } from "../adapters/opencode.js";
 import { classifyFile, digest, realIo, applyPlan } from "../setup/plan.js";
 import { resolveConfigPath, loadConfig } from "../config/store.js";
 import { assertLocalhost } from "./login.js";
@@ -61,6 +61,7 @@ export function buildSetupPlan({ home, cliRoot, serverUrl, mcpServerPath, person
   const skillDir = path.join(globalDir, "skills", SKILL_NAME);
   const manifestPath = path.join(skillDir, MANIFEST_NAME);
   const block = buildMcpBlock({ serverPath: mcpServerPath, serverUrl }).ziki;
+  const tools = buildToolsMap();
 
   const manifestTarget = io.readTarget(manifestPath);
   let recorded = {};
@@ -91,9 +92,9 @@ export function buildSetupPlan({ home, cliRoot, serverUrl, mcpServerPath, person
   const configPath = path.join(globalDir, "opencode.json");
   const configTarget = io.readTarget(configPath);
   if (configTarget.kind === "absent" && io.readTarget(path.join(globalDir, "opencode.jsonc")).kind !== "absent") {
-    files.push(blockedEntry(configPath, "jsonc", `uses opencode.jsonc, which this CLI never edits. Merge this block by hand under "mcp":\n${JSON.stringify({ ziki: block }, null, 2)}`, false));
+    files.push(blockedEntry(configPath, "jsonc", `uses opencode.jsonc, which this CLI never edits. Merge this block by hand under "mcp", plus the tool denials under "tools":\n${JSON.stringify({ ziki: block }, null, 2)}`, false));
   } else if (configTarget.kind === "absent") {
-    pushFile(configPath, `${JSON.stringify({ mcp: { ziki: block } }, null, 2)}\n`);
+    pushFile(configPath, `${JSON.stringify({ mcp: { ziki: block }, tools }, null, 2)}\n`);
   } else if (configTarget.kind === "file") {
     let existing = null;
     try {
@@ -105,7 +106,7 @@ export function buildSetupPlan({ home, cliRoot, serverUrl, mcpServerPath, person
       files.push(blockedEntry(configPath, "invalid-json", "opencode.json is not valid JSON; fix or remove it first", true));
     } else {
       try {
-        const merged = mergeOpencodeConfig(existing, { ziki: block });
+        const merged = mergeOpencodeConfig(existing, { ziki: block }, tools);
         pushFile(configPath, `${JSON.stringify(merged, null, 2)}\n`);
       } catch (error) {
         files.push(blockedEntry(configPath, "conflict", error.message, true));
