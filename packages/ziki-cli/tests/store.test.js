@@ -14,6 +14,11 @@ test('resolveConfigPath defaults to ~/.config/ziki/agent.json', () => {
   assert.equal(p, path.join(os.homedir(), '.config', 'ziki', 'agent.json'));
 });
 
+test('resolveConfigPath honors XDG_CONFIG_HOME like the reference client', () => {
+  const p = resolveConfigPath({ XDG_CONFIG_HOME: '/tmp/xdg' });
+  assert.equal(p, path.join('/tmp/xdg', 'ziki', 'agent.json'));
+});
+
 test('loadConfig reports a missing file without throwing a raw error', () => {
   const missing = path.join(os.tmpdir(), `ziki-missing-${process.pid}.json`);
   assert.throws(() => loadConfig(missing), /pairing file not found/);

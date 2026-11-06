@@ -10,7 +10,8 @@ export function resolveConfigPath(env = process.env) {
   if (env.ZIKI_AGENT_CONFIG) {
     return env.ZIKI_AGENT_CONFIG;
   }
-  return path.join(os.homedir(), ".config", "ziki", "agent.json");
+  const base = env.XDG_CONFIG_HOME || path.join(os.homedir(), ".config");
+  return path.join(base, "ziki", "agent.json");
 }
 
 export function loadConfig(configPath) {
