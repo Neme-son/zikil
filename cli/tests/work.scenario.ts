@@ -11,7 +11,7 @@ describe("the work feed", () => {
 
   beforeAll(async () => {
     const me = await ok("ada", "whoami");
-    slug = me.project_slug;
+    slug = me.projects[0].slug;
     org = me.org_slug;
   });
 
@@ -43,10 +43,12 @@ describe("the work feed", () => {
 
   it("is what a connecting agent is told to watch", async () => {
     const me = await ok("bob", "whoami");
-    expect(me.work_url).toMatch(new RegExp(`/${org}/${slug}/work$`));
-    expect(me.next_step).toMatch(/work_url/);
+    // #user-agents: the key works in every project of its organisation, each with its own work URL.
+    const project = (me.projects as { slug: string; workUrl: string }[]).find((row) => row.slug === slug);
+    expect(project?.workUrl).toMatch(new RegExp(`/${org}/${slug}/work$`));
+    expect(me.next_step).toMatch(/workUrl/);
     const feed = await work("bob");
-    expect(feed.workUrl).toBe(me.work_url);
+    expect(feed.workUrl).toBe(project?.workUrl);
     expect(feed.pollAfterSeconds).toBe(30);
   });
 

@@ -69,7 +69,6 @@ const agent = (level: AgentContext["level"], ownerId = "owner-bob"): AgentContex
   level,
   burst: false,
   keyId: "k1",
-  projectId: "p1",
 });
 
 const facts = (overrides: Partial<ProjectWork["facts"] extends Map<string, infer F> ? F : never> = {}) => ({

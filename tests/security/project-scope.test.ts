@@ -72,7 +72,6 @@ import { readTasksBoard } from "@/app/(app)/[org]/[project]/marketing/data";
 import RejectedIdeasPage from "@/app/(app)/[org]/[project]/marketing/ideas/rejected/page";
 import { readRejectedIdeas } from "@/app/(app)/[org]/[project]/marketing/ideas/rejected/data";
 import { parseTaskView } from "@/components/marketing/tasks/model";
-import { AgentProjectError } from "@/lib/agents/require-agent";
 import { marketingTabHref } from "@/lib/header-nav";
 import { issueProject } from "@/lib/agent-api/issues";
 import { projectRef } from "@/lib/project-paths";
@@ -92,35 +91,23 @@ const agent = {
   keyId: "key1",
 };
 
-describe("issueProject project scope (#742)", () => {
+describe("issueProject organisation scope (#user-agents)", () => {
   beforeEach(() => {
     findFirst.mockReset();
-    findFirst.mockResolvedValue({ id: "project_web" });
   });
 
-  it("allows a legacy key that is not limited to a project", async () => {
-    await expect(issueProject({ ...agent, projectId: null }, new URLSearchParams("projectId=project_web"))).resolves.toEqual({
+  it("lets a key work in any project of its organisation", async () => {
+    findFirst.mockResolvedValue({ id: "project_mobile" });
+    await expect(issueProject(agent, new URLSearchParams("projectId=project_mobile"))).resolves.toEqual({
       organisationId: "organisation_zedu",
-      projectId: "project_web",
+      projectId: "project_mobile",
     });
   });
 
-  it("allows a key limited to that project", async () => {
-    await expect(
-      issueProject(
-        { ...agent, projectId: "project_web", projectSlug: "web" },
-        new URLSearchParams("projectId=project_web"),
-      ),
-    ).resolves.toMatchObject({ projectId: "project_web" });
-  });
-
-  it("rejects a key limited to another project", async () => {
-    await expect(
-      issueProject(
-        { ...agent, projectId: "project_mobile", projectSlug: "mobile" },
-        new URLSearchParams("projectId=project_web"),
-      ),
-    ).rejects.toBeInstanceOf(AgentProjectError);
+  it("refuses another organisation's project as not found", async () => {
+    findFirst.mockResolvedValue(null);
+    await expect(issueProject(agent, new URLSearchParams("projectId=project_elsewhere"))).rejects.toMatchObject({ status: 404 });
+    expect(findFirst.mock.calls[0][0].where).toEqual({ id: "project_elsewhere", organisationId: "organisation_zedu" });
   });
 });
 

@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { Prisma, type StakeStatus, type Substatus } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
-import { assertKeyProject, type AgentContext } from "@/lib/agents/require-agent";
+import type { AgentContext } from "@/lib/agents/require-agent";
 import { hasLevel, requireLevel } from "@/lib/agents/levels";
 import { audit } from "@/lib/agents/audit";
 import { IssueApiError } from "@/lib/agent-api/errors";
@@ -163,7 +163,6 @@ const TAKEABLE: ReadonlySet<string> = new Set(["open", "requires_confirmation"])
 /** `POST /api/v1/issues/{id}/stake`: stake an issue, counter another's stake, or refresh your own. */
 export async function stakeIssue(agent: AgentContext, scope: Scope, ref: string, raw: unknown) {
   requireLevel(agent, "working");
-  assertKeyProject(agent, scope.projectId);
   const input = parseStake(raw);
   const result = await prisma.$transaction(async (tx) => {
     const now = Date.now();
@@ -244,7 +243,6 @@ export async function stakeIssue(agent: AgentContext, scope: Scope, ref: string,
 /** `POST /api/v1/ideas/{id}/stake`: stake an idea, so the stake moves to the issue it becomes. */
 export async function stakeIdea(agent: AgentContext, scope: Scope, ref: string, raw: unknown) {
   requireLevel(agent, "working");
-  assertKeyProject(agent, scope.projectId);
   const input = parseStake(raw);
   const result = await prisma.$transaction(async (tx) => {
     const now = Date.now();
@@ -325,7 +323,6 @@ async function expireIdeaStakes(tx: Tx, ideaId: string, now: number) {
 async function ownStake(tx: Tx, agent: AgentContext, stakeId: string) {
   const stake = await tx.issueStake.findFirst({ where: { id: stakeId, organisationId: agent.organisationId }, select: { id: true, agentId: true, bugId: true, ideaId: true, projectId: true } });
   if (!stake) throw new IssueApiError(404, "Stake not found.");
-  assertKeyProject(agent, stake.projectId);
   if (stake.agentId !== agent.agentId) refuse(403, "not_your_stake", "Only the agent that placed a stake refreshes or withdraws it.");
   if (stake.bugId) await tx.$queryRaw`SELECT "id" FROM "Bug" WHERE "id" = ${stake.bugId} FOR UPDATE`;
   return stake;
@@ -372,7 +369,6 @@ export async function voteStake(agent: AgentContext, stakeId: string) {
   const result = await prisma.$transaction(async (tx) => {
     const stake = await tx.issueStake.findFirst({ where: { id: stakeId, organisationId: agent.organisationId }, select: { id: true, bugId: true, projectId: true } });
     if (!stake?.bugId) throw new IssueApiError(404, "Stake not found.");
-    assertKeyProject(agent, stake.projectId);
     await tx.$queryRaw`SELECT "id" FROM "Bug" WHERE "id" = ${stake.bugId} FOR UPDATE`;
     await settleLocked(tx, stake.bugId, Date.now());
     const contest = await tx.issueStake.findMany({ where: { bugId: stake.bugId, status: "contested" }, select: { id: true, beneficiaryUserId: true } });

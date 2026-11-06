@@ -29,6 +29,7 @@ import { prGate, type PrGate } from "@/lib/agent-api/pr-gate";
 import { gateReport, latestPullRequestReport, notifyAuthor } from "@/lib/agent-api/pull-request-report";
 import { conflictComment } from "@/lib/agent-api/merge-conflict";
 import { moveTo } from "@/lib/issue-substatus";
+import { activeLevels, levelIn } from "@/lib/agents/active-in";
 
 /**
  * A merger accepting a fix (#434). The gate: the issue is confirmed, no
@@ -595,7 +596,7 @@ export async function creditedDeliveryUsers(
  * (one per independent owner), and the commit the last of them approved.
  */
 export async function countedReviewers(
-  bug: ReviewedBug & { id: string; pullRequestUrl: string | null; pullRequestHeadSha: string | null },
+  bug: ReviewedBug & { id: string; organisationId: string; pullRequestUrl: string | null; pullRequestHeadSha: string | null },
   claim: MergeClaim,
   credited: readonly string[],
 ): Promise<{ reviewers: string[]; weight: number; acceptedHeadSha: string | null }> {
@@ -604,7 +605,7 @@ export async function countedReviewers(
     // earlier PR, or with none, says nothing about this code.
     where: { bugId: bug.id, goodToMerge: true, pullRequestUrl: bug.pullRequestUrl ?? "" },
     orderBy: [{ createdAt: "asc" }, { id: "asc" }],
-    select: { id: true, headSha: true, onBehalfOfUserId: true, agent: { select: { id: true, ownerUserId: true, level: true } } },
+    select: { id: true, headSha: true, onBehalfOfUserId: true, agent: { select: { id: true, ownerUserId: true, activations: activeLevels } } },
   });
 
   // Checked again now, not only when submitted: a claim taken since, or a
@@ -614,7 +615,7 @@ export async function countedReviewers(
   const countable = claim
     ? verdicts
     : verdicts.filter((v) => !credited.includes(v.agent.ownerUserId) && !credited.includes(v.onBehalfOfUserId));
-  return countedMergeVerdicts(countable, claim, bug, bug.pullRequestHeadSha ?? null);
+  return countedMergeVerdicts(countable, claim, bug, bug.organisationId, bug.pullRequestHeadSha ?? null);
 }
 
 /**
@@ -623,7 +624,7 @@ export async function countedReviewers(
  * the latest delivery count (D4), and there is no head commit to bind.
  */
 export async function countedMarketingReviewers(
-  bug: ReviewedBug & { id: string; track: WorkTrack },
+  bug: ReviewedBug & { id: string; organisationId: string; track: WorkTrack },
   claim: MergeClaim,
   credited: readonly string[],
 ): Promise<{ reviewers: string[]; weight: number }> {
@@ -636,7 +637,7 @@ export async function countedMarketingReviewers(
       pullRequestUrl: true,
       updatedAt: true,
       onBehalfOfUserId: true,
-      agent: { select: { id: true, ownerUserId: true, level: true } },
+      agent: { select: { id: true, ownerUserId: true, activations: activeLevels } },
     },
   });
   const delivery = await prisma.delivery.findFirst({
@@ -650,7 +651,7 @@ export async function countedMarketingReviewers(
   const countable = claim
     ? current
     : current.filter((v) => !credited.includes(v.agent.ownerUserId) && !credited.includes(v.onBehalfOfUserId));
-  const { reviewers, weight } = countedMergeVerdicts(countable, claim, bug);
+  const { reviewers, weight } = countedMergeVerdicts(countable, claim, bug, bug.organisationId);
   return { reviewers, weight };
 }
 
