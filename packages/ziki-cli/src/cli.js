@@ -6,6 +6,7 @@ import { renderStatus } from "./commands/status.js";
 import { cmdLogin } from "./commands/login.js";
 import { connectProject } from "./commands/connect.js";
 import { cmdWork } from "./commands/work.js";
+import { cmdSetupOpencode } from "./commands/setup-opencode.js";
 import { resolveConfigPath, loadConfig, apiFetch } from "./config/store.js";
 
 const HELP = `ziki-cli — thin client for the Ziki Local Agent Environment
@@ -97,6 +98,16 @@ function hasFlag(argv, names) {
   return argv.some((a) => names.includes(a));
 }
 
+function flagValues(argv, names) {
+  const out = [];
+  for (let i = 0; i < argv.length; i += 1) {
+    if (names.includes(argv[i]) && i + 1 < argv.length) {
+      out.push(argv[i + 1]);
+    }
+  }
+  return out;
+}
+
 async function cmdConnect(argv) {
   const selector = flagValue(argv, ["--project", "-p"]);
   if (!selector) {
@@ -153,8 +164,23 @@ export async function run(argv, _ctx) {
         return { code: 1, text: `${error.message}\n` };
       }
     case "setup-opencode":
+      return cmdSetupOpencode({
+        apply: hasFlag(rest, ["--apply"]),
+        yes: hasFlag(rest, ["--yes"]),
+        confirm: flagValues(rest, ["--confirm"]),
+        persona: flagValue(rest, ["--persona"]) ?? "keep",
+        server: flagValue(rest, ["--server"]),
+        mcpServer: flagValue(rest, ["--mcp-server"]),
+      });
     case "sync":
-      return { code: 3, text: `${name}: not implemented yet in this milestone slice\n` };
+      return cmdSetupOpencode({
+        apply: hasFlag(rest, ["--apply"]),
+        yes: hasFlag(rest, ["--yes"]),
+        confirm: flagValues(rest, ["--confirm"]),
+        persona: "keep",
+        server: flagValue(rest, ["--server"]),
+        mcpServer: flagValue(rest, ["--mcp-server"]),
+      });
     default:
       return { code: 2, text: `unknown command: ${name}\n\n${HELP}` };
   }
