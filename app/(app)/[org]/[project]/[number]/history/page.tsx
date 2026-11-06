@@ -3,7 +3,7 @@ import { notFound, permanentRedirect } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { requireUser } from "@/lib/auth-helpers";
 import { canDeleteTicket } from "@/lib/ticket-deletion";
-import { currentOrganisationAccess } from "@/lib/organisation-access";
+import { organisationAccessFor } from "@/lib/organisation-access";
 import { formatIssueNumber } from "@/lib/issue-number";
 import { issueHref, issuePath } from "@/lib/issue-ref";
 import { findProjectIssue, parseIssueNumber } from "@/lib/project-issue";
@@ -26,13 +26,14 @@ export const metadata = { title: "Edit history" };
 export default async function IssueHistoryPage({ params }: Props) {
   const { org, project, number: rawNumber } = await params;
   const user = await requireUser();
-  const access = await currentOrganisationAccess(user.id, user.role);
   // #project-urls: the issue under this project's slug in the viewer's
   // organisation. A number that lives in another project redirects there.
   const number = parseIssueNumber(rawNumber);
   const lookup = number === null ? null : await findProjectIssue(org, project, number);
   if (lookup?.kind === "moved") permanentRedirect(issuePath(lookup.issue.ref, lookup.issue.number, "/history"));
   if (lookup?.kind !== "found") notFound();
+  // The role in the issue's organisation, not in whichever one the viewer is working in.
+  const access = await organisationAccessFor(user.id, lookup.issue.organisationId, user.role);
 
   const bug = await prisma.bug.findUnique({
     where: { id: lookup.issue.id },

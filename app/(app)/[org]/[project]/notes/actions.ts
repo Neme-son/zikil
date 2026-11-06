@@ -1,5 +1,7 @@
 "use server";
 
+import { prisma } from "@/lib/prisma";
+
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { requireUser } from "@/lib/auth-helpers";
@@ -12,7 +14,8 @@ export type NotesActionResult = { error?: string; version?: number };
 export async function saveNotesAction(projectId: string, input: unknown): Promise<NotesActionResult> {
   const user = await requireUser();
   try {
-    const organisationId = await currentOrganisationIdFor(user.id);
+    const project = await prisma.project.findUnique({ where: { id: projectId }, select: { organisationId: true } });
+    const organisationId = project?.organisationId ?? (await currentOrganisationIdFor(user.id));
     if (!organisationId) return { error: "Select an organisation first." };
     const actor = await humanNotesActor(user, organisationId, projectId);
     const result = await saveProjectNotes(actor, input);
@@ -29,7 +32,8 @@ export async function saveNotesAction(projectId: string, input: unknown): Promis
 export async function restoreNotesAction(projectId: string, revisionId: string, input: unknown): Promise<NotesActionResult> {
   const user = await requireUser();
   try {
-    const organisationId = await currentOrganisationIdFor(user.id);
+    const project = await prisma.project.findUnique({ where: { id: projectId }, select: { organisationId: true } });
+    const organisationId = project?.organisationId ?? (await currentOrganisationIdFor(user.id));
     if (!organisationId) return { error: "Select an organisation first." };
     const actor = await humanNotesActor(user, organisationId, projectId);
     const result = await restoreProjectNotes(actor, revisionId, input);
@@ -47,7 +51,8 @@ export async function restoreNotesAction(projectId: string, revisionId: string, 
 export async function addNoteCommentAction(projectId: string, body: string, parentId?: string): Promise<{ error?: string; id?: string }> {
   const user = await requireUser();
   try {
-    const organisationId = await currentOrganisationIdFor(user.id);
+    const project = await prisma.project.findUnique({ where: { id: projectId }, select: { organisationId: true } });
+    const organisationId = project?.organisationId ?? (await currentOrganisationIdFor(user.id));
     if (!organisationId) return { error: "Select an organisation first." };
     const actor = await humanNotesActor(user, organisationId, projectId);
     const { comment } = await addNoteComment(actor, parentId ? { body, parentId } : { body });
@@ -65,7 +70,8 @@ export async function addNoteCommentAction(projectId: string, body: string, pare
 export async function voteNoteCommentAction(projectId: string, commentId: string, value: 1 | -1 | 0): Promise<{ error?: string; myVote?: number; upvotes?: number; downvotes?: number }> {
   const user = await requireUser();
   try {
-    const organisationId = await currentOrganisationIdFor(user.id);
+    const project = await prisma.project.findUnique({ where: { id: projectId }, select: { organisationId: true } });
+    const organisationId = project?.organisationId ?? (await currentOrganisationIdFor(user.id));
     if (!organisationId) return { error: "Select an organisation first." };
     const actor = await humanNotesActor(user, organisationId, projectId);
     if (value !== 1 && value !== -1 && value !== 0) return { error: "Vote up or down." };

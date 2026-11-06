@@ -41,14 +41,29 @@ export async function giveConfirmationAction(
   const limit = await consumeRateLimit(`confirmation:${userId}`, ACTION_RATE_LIMITS.addComment);
   if (!limit.allowed) return { error: RATE_LIMIT_MESSAGE };
 
-  const organisationId = await currentOrganisationIdFor(userId);
-  if (!organisationId || typeof bugId !== "string" || !bugId) return { error: "Issue not found" };
+  if (typeof bugId !== "string" || !bugId) return { error: "Issue not found" };
 
   const bug = await prisma.bug.findFirst({
-    where: { id: bugId, organisationId, isDeleted: false },
-    select: { id: true, projectId: true },
+    where: { id: bugId, isDeleted: false },
+    select: { id: true, projectId: true, organisationId: true },
   });
   if (!bug) return { error: "Issue not found" };
+
+  const canAccess =
+    user.role === "super_admin" ||
+    Boolean(
+      await prisma.projectMembership.findFirst({
+        where: { projectId: bug.projectId, userId },
+        select: { id: true },
+      }) ||
+      await prisma.membership.findFirst({
+        where: { organisationId: bug.organisationId, userId },
+        select: { id: true },
+      })
+    );
+  if (!canAccess) return { error: "Issue not found" };
+
+  const organisationId = bug.organisationId;
 
   const verdict = field(formData, "verdict");
   const files = parseEvidenceFileLines(field(formData, "files") ?? "");

@@ -11,6 +11,7 @@ import { ManageAgentsList, type ManageAgentItem } from "@/app/(app)/settings/age
 import {
   agentsMutedClass,
   agentsPrimaryBtn,
+  agentsSecondaryBtn,
   agentsSurface,
 } from "@/app/(app)/settings/agents/agents-ui";
 
@@ -32,6 +33,9 @@ export const metadata = { title: "My agents" };
  * that page has a route.
  */
 const CREATE_AGENT_HREF = "/settings/connect";
+
+/** Standing instructions every agent here follows (#838); the first child route under /agents/mine. */
+const PREFERENCES_HREF = "/agents/mine/preferences";
 
 /**
  * My agents: the signed-in person's own agents and nothing else (creating agents and the team list live on their own pages).
@@ -139,6 +143,9 @@ export default async function AgentsPage() {
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
+            <Link href={PREFERENCES_HREF} className={agentsSecondaryBtn}>
+              Preferences
+            </Link>
             <Link href={CREATE_AGENT_HREF} className={agentsPrimaryBtn}>
               Create agent
             </Link>
