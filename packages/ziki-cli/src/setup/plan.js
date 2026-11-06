@@ -60,6 +60,10 @@ export function realIo() {
 }
 
 export function applyPlan(plan, { confirm = [], io }) {
+  const blocked = plan.files.filter((file) => file.status === "blocked");
+  if (blocked.length > 0) {
+    throw new Error(`refusing to apply: blocked entries present (${blocked.map((f) => f.path).join(", ")})`);
+  }
   const confirmed = new Set(confirm);
   const changed = plan.files.filter((file) => file.status !== "unchanged");
   const missing = changed.filter((file) => file.requiresConfirmation && !confirmed.has(file.path));
