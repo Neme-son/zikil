@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+vi.mock("typesense", () => ({ default: class {} }));
+
 const findFirst = vi.hoisted(() => vi.fn());
 const publishedTasks = vi.hoisted(() => vi.fn());
 const taskCounts = vi.hoisted(() => vi.fn());
@@ -14,22 +16,31 @@ const projectFindUnique = vi.hoisted(() => vi.fn());
 const projectMembershipFindUnique = vi.hoisted(() => vi.fn());
 const projectJoinRequestFindUnique = vi.hoisted(() => vi.fn());
 const projectJoinRequestUpsert = vi.hoisted(() => vi.fn());
+const projectMembershipUpsert = vi.hoisted(() => vi.fn());
+const projectJoinRequestUpdateMany = vi.hoisted(() => vi.fn());
+const bugCount = vi.hoisted(() => vi.fn());
 const notificationCreateMany = vi.hoisted(() => vi.fn().mockResolvedValue({ count: 1 }));
 const membershipFindMany = vi.hoisted(() => vi.fn());
 const bugFindUnique = vi.hoisted(() => vi.fn());
 const findProjectIssue = vi.hoisted(() => vi.fn());
+const skillSubmissionFindMany = vi.hoisted(() => vi.fn());
+const skillSubmissionFindUnique = vi.hoisted(() => vi.fn());
+const skillSubmissionUpdate = vi.hoisted(() => vi.fn());
 
 vi.mock("@/lib/prisma", () => ({
   prisma: {
     project: { findFirst, findUnique: projectFindUnique },
-    bug: { findUnique: bugFindUnique, findMany: publishedTasks, groupBy: taskCounts },
+    bug: { findUnique: bugFindUnique, findMany: publishedTasks, groupBy: taskCounts, count: bugCount },
     idea: { count: proposalCount, findMany: proposals },
     ideaVerdict: { groupBy: proposalVotes, findMany: myVerdicts },
     agent: { findMany: proposalAgents },
     membership: { findUnique: membershipFindUnique, findMany: membershipFindMany },
-    projectMembership: { findUnique: projectMembershipFindUnique },
-    projectJoinRequest: { findUnique: projectJoinRequestFindUnique, upsert: projectJoinRequestUpsert },
+    projectMembership: { findUnique: projectMembershipFindUnique, upsert: projectMembershipUpsert },
+    projectJoinRequest: { findUnique: projectJoinRequestFindUnique, upsert: projectJoinRequestUpsert, updateMany: projectJoinRequestUpdateMany },
     notification: { createMany: notificationCreateMany },
+    skillSubmission: { findMany: skillSubmissionFindMany, findUnique: skillSubmissionFindUnique, update: skillSubmissionUpdate },
+    $transaction: async (run: (tx: unknown) => Promise<unknown>) =>
+      run({ projectMembership: { upsert: projectMembershipUpsert }, projectJoinRequest: { updateMany: projectJoinRequestUpdateMany } }),
   },
 }));
 vi.mock("@/components/marketing/tasks/tasks-board", () => ({ TasksBoard: () => null }));
@@ -47,10 +58,11 @@ const section = vi.hoisted(() => ({
   requireProject: vi.fn(),
   firstProjectRefFor: vi.fn(),
   requireUser: vi.fn(async () => ({ id: "ada" })),
+  requireSuperAdmin: vi.fn(),
 }));
 vi.mock("next/navigation", () => ({ notFound: section.notFound, redirect: section.redirect, permanentRedirect: section.redirect }));
 vi.mock("@/lib/project-route", () => ({ requireProject: section.requireProject, firstProjectRefFor: section.firstProjectRefFor }));
-vi.mock("@/lib/auth-helpers", () => ({ requireUser: section.requireUser }));
+vi.mock("@/lib/auth-helpers", () => ({ requireUser: section.requireUser, requireSuperAdmin: section.requireSuperAdmin }));
 vi.mock("@/auth", () => ({ auth: vi.fn(async () => ({ user: { id: "viewer" } })) }));
 vi.mock("@/lib/project-issue", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/project-issue")>()),
@@ -72,13 +84,14 @@ import { readTasksBoard } from "@/app/(app)/[org]/[project]/marketing/data";
 import RejectedIdeasPage from "@/app/(app)/[org]/[project]/marketing/ideas/rejected/page";
 import { readRejectedIdeas } from "@/app/(app)/[org]/[project]/marketing/ideas/rejected/data";
 import { parseTaskView } from "@/components/marketing/tasks/model";
-import { AgentProjectError } from "@/lib/agents/require-agent";
 import { marketingTabHref } from "@/lib/header-nav";
 import { issueProject } from "@/lib/agent-api/issues";
 import { projectRef } from "@/lib/project-paths";
 import { canManageProject } from "@/lib/project-permissions";
-import { requestToJoinProjectAction } from "@/app/actions/project-join-requests";
+import { joinOpenProjectAction } from "@/app/actions/project-join-requests";
 import { requireUser } from "@/lib/auth-helpers";
+import { getSkills } from "@/app/(app)/skills/skills-data";
+import { reviewSkillSubmissionAction } from "@/app/actions/skill-submissions";
 import IssueHistoryPage from "@/app/(app)/[org]/[project]/[number]/history/page";
 import ProjectIssueLayout from "@/app/(app)/[org]/[project]/[number]/layout";
 
@@ -92,35 +105,23 @@ const agent = {
   keyId: "key1",
 };
 
-describe("issueProject project scope (#742)", () => {
+describe("issueProject organisation scope (#user-agents)", () => {
   beforeEach(() => {
     findFirst.mockReset();
-    findFirst.mockResolvedValue({ id: "project_web" });
   });
 
-  it("allows a legacy key that is not limited to a project", async () => {
-    await expect(issueProject({ ...agent, projectId: null }, new URLSearchParams("projectId=project_web"))).resolves.toEqual({
+  it("lets a key work in any project of its organisation", async () => {
+    findFirst.mockResolvedValue({ id: "project_mobile" });
+    await expect(issueProject(agent, new URLSearchParams("projectId=project_mobile"))).resolves.toEqual({
       organisationId: "organisation_zedu",
-      projectId: "project_web",
+      projectId: "project_mobile",
     });
   });
 
-  it("allows a key limited to that project", async () => {
-    await expect(
-      issueProject(
-        { ...agent, projectId: "project_web", projectSlug: "web" },
-        new URLSearchParams("projectId=project_web"),
-      ),
-    ).resolves.toMatchObject({ projectId: "project_web" });
-  });
-
-  it("rejects a key limited to another project", async () => {
-    await expect(
-      issueProject(
-        { ...agent, projectId: "project_mobile", projectSlug: "mobile" },
-        new URLSearchParams("projectId=project_web"),
-      ),
-    ).rejects.toBeInstanceOf(AgentProjectError);
+  it("refuses another organisation's project as not found", async () => {
+    findFirst.mockResolvedValue(null);
+    await expect(issueProject(agent, new URLSearchParams("projectId=project_elsewhere"))).rejects.toMatchObject({ status: 404 });
+    expect(findFirst.mock.calls[0][0].where).toEqual({ id: "project_elsewhere", organisationId: "organisation_zedu" });
   });
 });
 
@@ -347,91 +348,41 @@ describe("canManageProject permissions", () => {
   });
 });
 
-describe("requestToJoinProjectAction", () => {
+describe("joinOpenProjectAction (#earnings)", () => {
+  const open = {
+    id: "p-1",
+    slug: "ziki-marketing",
+    organisationId: "t-1",
+    isOpenForContributors: true,
+    visibility: "public",
+    organisation: { slug: "ziki" },
+  };
   beforeEach(() => {
     vi.clearAllMocks();
     (requireUser as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({ id: "user-1", name: "Alice", email: "alice@example.com" });
-    projectJoinRequestFindUnique.mockResolvedValue(null);
   });
 
-  it("rejects when user is already a member", async () => {
-    findFirst.mockResolvedValue({
-      id: "p-1",
-      name: "Test Project",
-      slug: "test-p",
-      organisationId: "t-1",
-      isOpenForContributors: true,
-      visibility: "public",
-      organisation: { slug: "test-org" },
-    });
-    membershipFindUnique.mockResolvedValue({ id: "m-1" });
-    projectMembershipFindUnique.mockResolvedValue(null);
-
-    const form = new FormData();
-    form.set("projectId", "p-1");
-    const res = await requestToJoinProjectAction(form);
-    expect(res).toEqual({ error: "You are already a member of this project." });
+  it("joins an open project straight away, with no request to accept, and opens its marketing tasks", async () => {
+    findFirst.mockResolvedValue(open);
+    bugCount.mockResolvedValue(3);
+    const res = await joinOpenProjectAction("p-1");
+    expect(res).toEqual({ ok: true, href: "/ziki/ziki-marketing/marketing" });
+    expect(projectMembershipUpsert).toHaveBeenCalledWith(expect.objectContaining({ create: { projectId: "p-1", userId: "user-1" } }));
+    expect(projectJoinRequestUpsert).not.toHaveBeenCalled();
   });
 
-  it("rejects when project is closed or private", async () => {
-    findFirst.mockResolvedValue({
-      id: "p-1",
-      name: "Test Project",
-      slug: "test-p",
-      organisationId: "t-1",
-      isOpenForContributors: false,
-      visibility: "public",
-      organisation: { slug: "test-org" },
-    });
-    membershipFindUnique.mockResolvedValue(null);
-    projectMembershipFindUnique.mockResolvedValue(null);
-
-    const form = new FormData();
-    form.set("projectId", "p-1");
-    const res = await requestToJoinProjectAction(form);
-    expect(res).toEqual({ error: "This project is not currently accepting contributor applications." });
+  it("opens the project's Ideas when it has no marketing tasks waiting", async () => {
+    findFirst.mockResolvedValue(open);
+    bugCount.mockResolvedValue(0);
+    expect(await joinOpenProjectAction("p-1")).toEqual({ ok: true, href: "/ziki/ziki-marketing/ideas" });
   });
 
-  it("creates join request when project is public and open", async () => {
-    findFirst.mockResolvedValue({
-      id: "p-1",
-      name: "Test Project",
-      slug: "test-p",
-      organisationId: "t-1",
-      isOpenForContributors: true,
-      visibility: "public",
-      organisation: { slug: "test-org" },
-    });
-    membershipFindUnique.mockResolvedValue(null);
-    projectMembershipFindUnique.mockResolvedValue(null);
-    membershipFindMany.mockResolvedValue([{ userId: "manager-1" }]);
-
-    const form = new FormData();
-    form.set("projectId", "p-1");
-    form.set("message", "I want to help!");
-    const res = await requestToJoinProjectAction(form);
-    expect(res).toEqual({ ok: true });
-    expect(projectJoinRequestUpsert).toHaveBeenCalled();
-  });
-
-  it("prevents duplicate spam requests when already pending", async () => {
-    findFirst.mockResolvedValue({
-      id: "p-1",
-      name: "Test Project",
-      slug: "test-p",
-      organisationId: "t-1",
-      isOpenForContributors: true,
-      visibility: "public",
-      organisation: { slug: "test-org" },
-    });
-    membershipFindUnique.mockResolvedValue(null);
-    projectMembershipFindUnique.mockResolvedValue(null);
-    projectJoinRequestFindUnique.mockResolvedValue({ status: "pending", updatedAt: new Date() });
-
-    const form = new FormData();
-    form.set("projectId", "p-1");
-    const res = await requestToJoinProjectAction(form);
-    expect(res).toEqual({ error: "You already have a pending request to join this project." });
+  it("refuses a project that isn't open, or isn't public, and adds nobody", async () => {
+    findFirst.mockResolvedValue({ ...open, isOpenForContributors: false });
+    expect(await joinOpenProjectAction("p-1")).toEqual({ ok: false, error: expect.any(String) });
+    findFirst.mockResolvedValue({ ...open, visibility: "private" });
+    expect(await joinOpenProjectAction("p-1")).toEqual({ ok: false, error: expect.any(String) });
+    expect(projectMembershipUpsert).not.toHaveBeenCalled();
   });
 });
 
@@ -470,5 +421,65 @@ describe("a deleted issue on a public project", () => {
     deletedIn("org-they-admin");
     await expect(IssueHistoryPage({ params } as never)).resolves.toBeTruthy();
     await expect(ProjectIssueLayout({ children: "page", params })).resolves.toBe("page");
+  });
+});
+
+describe("skills library public scope and review authorization", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("only lists approved skills, filtering out pending or rejected submissions", async () => {
+    skillSubmissionFindMany.mockResolvedValue([
+      {
+        id: "skill-approved",
+        slug: "vitest-runner",
+        title: "Vitest Deterministic Suite Runner",
+        category: "testing",
+        categoryLabel: "Testing & QA",
+        summary: "Run fast isolated tests.",
+        tags: ["vitest", "ci"],
+        prompt: "Run tests.",
+        checklist: ["All assertions pass"],
+        sampleCommand: "npm test",
+        documentationUrl: null,
+        status: "approved",
+        createdAt: new Date("2026-01-01"),
+        submittedBy: { name: "Ada" },
+      },
+    ]);
+
+    const { skills, error } = await getSkills();
+    expect(error).toBeUndefined();
+    expect(skills).toHaveLength(1);
+    expect(skills[0].title).toBe("Vitest Deterministic Suite Runner");
+    expect(skillSubmissionFindMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { status: "approved" },
+      })
+    );
+  });
+
+  it("refuses skill submission review for any user who is not a super admin", async () => {
+    section.requireSuperAdmin.mockRejectedValue(new Error("NEXT_REDIRECT"));
+    await expect(reviewSkillSubmissionAction("sub-1", "approved")).rejects.toThrow("NEXT_REDIRECT");
+    expect(skillSubmissionUpdate).not.toHaveBeenCalled();
+  });
+
+  it("allows a super admin to approve a pending submission", async () => {
+    section.requireSuperAdmin.mockResolvedValue({ id: "admin-42", isRealSuperAdmin: true });
+    skillSubmissionFindUnique.mockResolvedValue({ id: "sub-1", status: "pending" });
+    skillSubmissionUpdate.mockResolvedValue({ id: "sub-1", status: "approved" });
+
+    const result = await reviewSkillSubmissionAction("sub-1", "approved");
+    expect(result).toEqual({ ok: true });
+    expect(skillSubmissionUpdate).toHaveBeenCalledWith({
+      where: { id: "sub-1" },
+      data: expect.objectContaining({
+        status: "approved",
+        reviewedById: "admin-42",
+        rejectionReason: null,
+      }),
+    });
   });
 });

@@ -26,7 +26,7 @@ export async function confirmEarnTaskAction(_prev: EarnReviewResult, formData: F
     });
     if (!result.ok) return { error: result.error };
     revalidatePath("/superadmin/earn");
-    revalidatePath("/earn", "layout");
+    revalidatePath("/earnings");
     return { message: "Confirmed and paid." };
   } catch (error) {
     console.error("[superadmin/earn] confirm failed", error);
@@ -46,7 +46,7 @@ export async function rejectEarnTaskAction(_prev: EarnReviewResult, formData: Fo
     });
     if (!result.ok) return { error: result.error };
     revalidatePath("/superadmin/earn");
-    revalidatePath("/earn", "layout");
+    revalidatePath("/earnings");
     return { message: "Sent back." };
   } catch (error) {
     console.error("[superadmin/earn] reject failed", error);

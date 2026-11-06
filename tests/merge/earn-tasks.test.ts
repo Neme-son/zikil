@@ -6,9 +6,7 @@ import { describe, expect, it, vi } from "vitest";
  */
 vi.mock("@/lib/prisma", () => ({ prisma: {} }));
 
-import { giveEarnVerdict, listEarnTasksToCheck } from "@/lib/earn/review";
-import { agentSubmitEarnTask, listOwnEarnTasks } from "@/lib/earn/agent-tasks";
-import { outreachProof, parseResearch, recordOpen, setSent, syncReferral } from "@/lib/earn/outreach";
+import { beingChecked, headerEarnings, parseWeeklyGoal, totalEarned, weeklyGoalState } from "@/lib/earnings";
 import { confirmTask, grantWelcome, isNewEarnAccount, paidCount, rejectTask, doneTasks, startTask, submitTask, taskStateFor } from "@/lib/earn/progress";
 
 type TaskRow = { userId: string; taskKey: string; status: string; proof?: string | null; note?: string | null };
@@ -157,156 +155,61 @@ describe("earn tasks (#earn-tasks)", () => {
   });
 });
 
-/** A manager agent's verdict on Earn tasks (#earn-agent-review): advice for the person who decides, never a payment. */
-describe("manager agent verdicts on earn tasks (#earn-agent-review)", () => {
-  type Row = { id: string; userId: string; taskKey: string; status: string; proof: string | null; submittedAt: Date | null; agentVerdict?: string | null; agentReason?: string | null; agentConfidence?: number | null; agentVerdictById?: string | null };
-  function fakeReviewDb(rows: Row[]) {
-    const pointEntry = { createMany: vi.fn(), create: vi.fn() };
-    const db = {
-      earnTaskProgress: {
-        findMany: vi.fn(async ({ where }: { where: { status: string; userId: { not: string } } }) => rows.filter((row) => row.status === where.status && row.userId !== where.userId.not)),
-        findUnique: vi.fn(async ({ where }: { where: { id: string } }) => rows.find((row) => row.id === where.id) ?? null),
-        update: vi.fn(async ({ where, data }: { where: { id: string }; data: Partial<Row> }) => Object.assign(rows.find((row) => row.id === where.id)!, data)),
-      },
-      pointEntry,
-    };
-    return { db: db as never, pointEntry };
-  }
-  const manager = { agentId: "agent-max", ownerId: "staff", organisationId: "organisation-earn" };
-  const sent = (id: string, userId: string, status = "submitted"): Row => ({ id, userId, taskKey: "who", status, proof: "Bakeries in Lagos", submittedAt: new Date() });
-
-  it("records a verdict as advice only: the task stays waiting for a person and nothing is paid", async () => {
-    const rows = [sent("t1", "earner")];
-    const { db, pointEntry } = fakeReviewDb(rows);
-    expect(await giveEarnVerdict(db, manager, "organisation-earn", "t1", { verdict: "ready", reason: "One kind of business, with where and why.", confidence: 86 })).toMatchObject({ verdict: "ready", status: "submitted" });
-    expect(rows[0]).toMatchObject({ status: "submitted", agentVerdict: "ready", agentConfidence: 86, agentVerdictById: "agent-max" });
-    expect(pointEntry.createMany).not.toHaveBeenCalled();
-    expect(pointEntry.create).not.toHaveBeenCalled();
+/** Earnings (#earnings): the header's $ and the Earnings page read the ledger across every organisation. */
+describe("earnings across every project (#earnings)", () => {
+  it("adds up every ledger row in every organisation, corrections included", async () => {
+    const aggregate = vi.fn(async ({ where }: { where: { userId: string } }) => ({ _sum: { points: where.userId === "earner" ? 7.4 : 0 } }));
+    expect(await totalEarned({ pointEntry: { aggregate } } as never, "earner")).toBe(7.4);
+    // No organisation filter: money from every project counts.
+    expect(aggregate).toHaveBeenCalledWith({ where: { userId: "earner" }, _sum: { points: true } });
   });
 
-  it("refuses its own owner's task, an agent outside Ziki Earn, a task not waiting, and a confidence out of range", async () => {
-    const rows = [sent("own", "staff"), sent("paid", "earner", "confirmed"), sent("t1", "earner")];
-    const { db } = fakeReviewDb(rows);
-    const ok = { verdict: "send_back" as const, reason: "Only 6 of 10.", confidence: 90 };
-    await expect(giveEarnVerdict(db, manager, "organisation-earn", "own", ok)).rejects.toMatchObject({ status: 403 });
-    await expect(giveEarnVerdict(db, { ...manager, organisationId: "organisation-other" }, "organisation-earn", "t1", ok)).rejects.toMatchObject({ status: 403 });
-    await expect(giveEarnVerdict(db, manager, "organisation-earn", "paid", ok)).rejects.toMatchObject({ status: 409 });
-    await expect(giveEarnVerdict(db, manager, "organisation-earn", "t1", { ...ok, confidence: 140 })).rejects.toThrow();
-    expect(rows[2].agentVerdict).toBeUndefined();
-  });
-
-  it("lists the tasks waiting for checking with their checklist, leaving out its own owner's", async () => {
-    const { db } = fakeReviewDb([sent("own", "staff"), sent("t1", "earner"), sent("paid", "earner", "confirmed")]);
-    const tasks = await listEarnTasksToCheck(db, manager, "organisation-earn");
-    expect(tasks.map((task) => task.id)).toEqual(["t1"]);
-    expect(tasks[0].task.checklist.length).toBeGreaterThan(0);
-  });
-});
-
-/** Send 10 emails (#earn-outreach): each business gets its own link that counts who opened it. */
-describe("earn email task outreach (#earn-outreach)", () => {
-  it("reads the businesses from the research answer, one per line, with an email or website, no repeats, at most 10", () => {
-    const list = parseResearch("1. Dainty Affairs, Ikeja, bakemycake@daintyaffairs.com\n- Cakes By Tegz, Ikeja, cakesbytegz.com\nDainty Affairs, again\n\n" + Array.from({ length: 12 }, (_, i) => `Bakery ${i}`).join("\n"));
-    expect(list[0]).toEqual({ name: "Dainty Affairs", contact: "bakemycake@daintyaffairs.com" });
-    expect(list[1]).toEqual({ name: "Cakes By Tegz", contact: "cakesbytegz.com" });
-    expect(list).toHaveLength(10);
-  });
-
-  it("ticks only the earner's own businesses, and counts every open of a link", async () => {
-    const rows = [{ id: "c1", userId: "earner", code: "abc1234", openedAt: null as Date | null, opens: 0, sentAt: null as Date | null }];
-    const db = {
-      earnContact: {
-        updateMany: vi.fn(async ({ where, data }: { where: { id: string; userId: string }; data: { sentAt: Date | null } }) => {
-          const hit = rows.filter((row) => row.id === where.id && row.userId === where.userId);
-          hit.forEach((row) => Object.assign(row, data));
-          return { count: hit.length };
-        }),
-        findUnique: vi.fn(async ({ where }: { where: { code: string } }) => rows.find((row) => row.code === where.code) ?? null),
-        update: vi.fn(async ({ where, data }: { where: { id: string }; data: { opens: { increment: number }; openedAt?: Date } }) => {
-          const row = rows.find((candidate) => candidate.id === where.id)!;
-          row.opens += data.opens.increment;
-          if (data.openedAt) row.openedAt = data.openedAt;
-        }),
-      },
-    } as never;
-    expect(await setSent(db, "someone-else", "c1", true)).toBe(false);
-    expect(await setSent(db, "earner", "c1", true)).toBe(true);
-    expect(await recordOpen(db, "abc1234")).toBe(true);
-    expect(await recordOpen(db, "abc1234")).toBe(true);
-    expect(await recordOpen(db, "nope000")).toBe(false);
-    expect(rows[0]).toMatchObject({ opens: 2, openedAt: expect.any(Date), sentAt: expect.any(Date) });
-  });
-
-  it("sends in only the businesses ticked sent, noting who opened their link", () => {
-    const proof = outreachProof([
-      { name: "Dainty Affairs", contact: "a@b.co", sentAt: new Date(), opens: 1 },
-      { name: "Not sent yet", contact: null, sentAt: null, opens: 0 },
+  it("counts as being checked only this person's awards still held on live work", async () => {
+    const findMany = vi.fn(async () => [
+      { heldPayout: [{ userId: "earner", points: 2 }, { userId: "someone-else", points: 5 }] },
+      { heldPayout: [{ userId: "earner", points: 1.5 }] },
+      { heldPayout: null },
     ]);
-    expect(proof).toBe("Dainty Affairs, a@b.co (opened the link)");
+    expect(await beingChecked({ bug: { findMany } } as never, "earner")).toBe(3.5);
   });
 });
 
-/** A sign-up through a business's link (#earn-outreach): traced back once, only for a new account, then its first project. */
-describe("earn sign-ups through a link (#earn-outreach)", () => {
-  function fakeReferralDb(opts: { userCreatedAt: Date; owned: number }) {
-    const contact = { id: "c1", userId: "earner", code: "abc1234", signedUpUserId: null as string | null, signedUpAt: null as Date | null, startedAt: null as Date | null, openedAt: new Date("2026-11-01T10:00:00Z"), createdAt: new Date("2026-10-30T10:00:00Z") };
-    const db = {
-      earnContact: {
-        findUnique: vi.fn(async ({ where }: { where: { code?: string; signedUpUserId?: string } }) =>
-          where.code ? (where.code === contact.code ? contact : null) : contact.signedUpUserId === where.signedUpUserId ? contact : null),
-        update: vi.fn(async ({ data }: { data: Partial<typeof contact> }) => Object.assign(contact, data)),
-      },
-      user: { findUnique: vi.fn(async () => ({ createdAt: opts.userCreatedAt })) },
-      membership: { count: vi.fn(async () => opts.owned) },
-    };
-    return { db: db as never, contact };
-  }
-
-  it("ticks Signed up for an account made after the link was opened, and Started once it owns an organisation", async () => {
-    const { db, contact } = fakeReferralDb({ userCreatedAt: new Date("2026-11-02T09:00:00Z"), owned: 1 });
-    await syncReferral(db, "new-business", "abc1234", "organisation-earn");
-    expect(contact).toMatchObject({ signedUpUserId: "new-business", signedUpAt: expect.any(Date), startedAt: expect.any(Date) });
+/** Your own weekly goal (#earnings): what is left, what that needs per day, and only real amounts accepted. */
+describe("weekly earnings goal (#earnings)", () => {
+  it("works out what is left and what that needs per day for the days left", () => {
+    // Thursday: Thursday to Sunday is 4 days left.
+    const state = weeklyGoalState(20, 100, new Date("2026-11-05T10:00:00Z"));
+    expect(state).toMatchObject({ left: 80, daysLeft: 4, perDay: 20, reached: false });
   });
 
-  it("doesn't count an account that existed before the link was opened, or the earner themselves", async () => {
-    const old = fakeReferralDb({ userCreatedAt: new Date("2026-01-01T00:00:00Z"), owned: 1 });
-    await syncReferral(old.db, "old-user", "abc1234", "organisation-earn");
-    expect(old.contact.signedUpUserId).toBeNull();
-    const self = fakeReferralDb({ userCreatedAt: new Date("2026-11-02T09:00:00Z"), owned: 1 });
-    await syncReferral(self.db, "earner", "abc1234", "organisation-earn");
-    expect(self.contact.signedUpUserId).toBeNull();
+  it("accepts a positive dollar amount and refuses anything else", () => {
+    expect(parseWeeklyGoal("1,000")).toBe(1000);
+    expect(parseWeeklyGoal("$75.50")).toBe(75.5);
+    for (const bad of ["0", "-5", "abc", "1.234", "", null]) expect(parseWeeklyGoal(bad)).toBeNull();
   });
 });
 
-/** An earner's own agent does tasks 1 and 2 for them (#earn-agent-tasks): it sends them in, a person still pays. */
-describe("an earner's agent sends in its owner's tasks (#earn-agent-tasks)", () => {
-  const olie = { agentId: "agent-olie", ownerId: "earner", organisationId: "organisation-earn" };
-  const ten = Array.from({ length: 10 }, (_, i) => `Bakery ${i}, Lagos, bakery${i}.com`).join("\n");
+/** The header's $ and Withdraw (#earnings): for people who work on projects, not for those who only post them. */
+describe("who sees $ and Withdraw in the header (#earnings)", () => {
+  const db = (entry: boolean, joined: boolean) => ({
+    pointEntry: { findFirst: vi.fn(async () => (entry ? { id: "e" } : null)), aggregate: vi.fn(async () => ({ _sum: { points: 4.5 } })) },
+    projectMembership: { findFirst: vi.fn(async () => (joined ? { id: "m" } : null)) },
+  }) as never;
 
-  it("sends task 1 and a ten-line task 2 in for its owner, without paying", async () => {
-    const { state, db } = fakeEarnDb();
-    expect(await agentSubmitEarnTask(db, olie, "organisation-earn", 1, { proof: "Bakeries in Lagos that take orders on Instagram." })).toMatchObject({ key: "who", state: "in-review" });
-    expect(await agentSubmitEarnTask(db, olie, "organisation-earn", 2, { proof: ten })).toMatchObject({ key: "research" });
-    expect(state.tasks.map((row) => [row.userId, row.taskKey, row.status])).toEqual([["earner", "who", "submitted"], ["earner", "research", "submitted"]]);
-    expect(state.ledger).toHaveLength(0);
+  it("counts only payments for work: posting ideas, votes and the sign-up bonus don't show it", async () => {
+    const d = db(false, false) as unknown as { pointEntry: { findFirst: ReturnType<typeof vi.fn> } };
+    await headerEarnings(d as never, "poster");
+    const where = d.pointEntry.findFirst.mock.calls[0][0].where;
+    expect(where.role.in).toEqual(expect.arrayContaining(["solver", "reviewer"]));
+    for (const posting of ["reporter", "idea", "comment", "vote", "signup"]) expect(where.role.in).not.toContain(posting);
   });
 
-  it("refuses tasks 3 and 4, an agent outside Ziki Earn, a short research list, a task already waiting, and an unknown task", async () => {
-    const { state, db } = fakeEarnDb();
-    await expect(agentSubmitEarnTask(db, olie, "organisation-earn", 3, { proof: "a@b.com" })).rejects.toMatchObject({ status: 403 });
-    await expect(agentSubmitEarnTask(db, olie, "organisation-earn", 4, { proof: "https://x.com/p/1" })).rejects.toMatchObject({ status: 403 });
-    await expect(agentSubmitEarnTask(db, { ...olie, organisationId: "organisation-other" }, "organisation-earn", 1, { proof: "Bakeries" })).rejects.toMatchObject({ status: 403 });
-    await expect(agentSubmitEarnTask(db, olie, "organisation-earn", 2, { proof: "One bakery, Lagos, one.com" })).rejects.toMatchObject({ status: 422 });
-    await expect(agentSubmitEarnTask(db, olie, "organisation-earn", 9, { proof: "x" })).rejects.toMatchObject({ status: 404 });
-    await agentSubmitEarnTask(db, olie, "organisation-earn", 1, { proof: "Bakeries" });
-    await expect(agentSubmitEarnTask(db, olie, "organisation-earn", 1, { proof: "Again" })).rejects.toMatchObject({ status: 409 });
-    expect(state.tasks.map((row) => row.taskKey)).toEqual(["who"]);
+  it("hides it from someone who has never earned and never joined a project", async () => {
+    expect(await headerEarnings(db(false, false), "poster")).toBeNull();
   });
 
-  it("lists its owner's four tasks, marking the two it can send", async () => {
-    const { db } = fakeEarnDb();
-    const tasks = await listOwnEarnTasks(db, olie, "organisation-earn");
-    expect(tasks.map((task) => [task.n, task.agentCanSend])).toEqual([[1, true], [2, true], [3, false], [4, false]]);
-    expect(tasks[0].state).toBe("open");
+  it("shows $0 to someone who just joined a project, and their total once they earn", async () => {
+    expect(await headerEarnings(db(false, true), "joiner")).toBe(0);
+    expect(await headerEarnings(db(true, true), "earner")).toBe(4.5);
   });
 });
