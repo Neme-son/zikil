@@ -1,8 +1,9 @@
 "use client";
 
-import React, { useState, useEffect, useRef, useMemo, Suspense } from "react";
+import React, { useState, useEffect, useRef, useMemo, Suspense, useSyncExternalStore } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { SupportGuideAvatar } from "./support-guide-avatar";
+import { FloatingAgentLauncher } from "@/components/floating-agent-launcher";
 import {
   getPageGuidance,
   searchSupportAnswers,
@@ -27,6 +28,12 @@ function getFormattedTime() {
   const mins = String(d.getMinutes()).padStart(2, "0");
   return `${hours}:${mins}`;
 }
+
+/** Never changes on its own; every render re-reads the shell marker. */
+const subscribeToAppShell = () => () => {};
+const appShellSnapshot = () =>
+  typeof document !== "undefined" &&
+  Boolean(document.querySelector("[data-app-shell]"));
 
 function OnScreenGuideContent() {
   const pathname = usePathname();
@@ -196,7 +203,14 @@ function OnScreenGuideContent() {
     },
   ];
 
-  const isInsideApp = typeof document !== "undefined" && Boolean(document.querySelector("[data-app-shell]"));
+  // Signed-in shell? The server renders the pre-login guide; the client
+  // re-renders into the launcher inside [data-app-shell]. getSnapshot stays a
+  // primitive so React never loops.
+  const isInsideApp = useSyncExternalStore(
+    subscribeToAppShell,
+    appShellSnapshot,
+    () => false,
+  );
 
   return (
     <aside
@@ -549,8 +563,22 @@ function OnScreenGuideContent() {
         </div>
       )}
 
-      {/* ---------------- STATE 1: FLOATING AVATAR PILL (Always accessible anchor) ---------------- */}
+      {/* ---------------- STATE 1: THE BOT (Always accessible anchor) ---------------- */}
       <div className="pointer-events-auto flex items-center gap-2">
+        {isInsideApp ? (
+          /* Signed in: one bot that rolls out support, a game and the agents
+             directory. The pre-login guide below is deliberately unchanged. */
+          <FloatingAgentLauncher
+            embedded
+            onSupport={() => setMode("chat")}
+            onOpenChange={(isOpen) => {
+              if (isOpen) setMode("avatar");
+            }}
+            icon={<SupportGuideAvatar size="lg" isOnline={true} animated={true} />}
+            buttonClassName="h-14 w-14 bg-gradient-to-tr from-blue-600 to-indigo-600 p-1 shadow-xl hover:scale-105 active:scale-95"
+          />
+        ) : (
+          <>
         {mode === "avatar" && (
           <button
             type="button"
@@ -578,6 +606,8 @@ function OnScreenGuideContent() {
           <SupportGuideAvatar size="lg" isOnline={true} animated={true} />
           <span className="sr-only">Toggle Customer Support Guide</span>
         </button>
+          </>
+        )}
       </div>
     </aside>
   );
