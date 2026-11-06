@@ -11,7 +11,6 @@ import { MAIN_CONTENT_ID, SkipLink } from "@/components/skip-link";
 import { PAGE_CONTAINER_CLASS } from "@/components/page-container";
 import { FocusMainOnNavigate } from "@/components/focus-main-on-navigate";
 import { KeyboardShortcuts } from "@/components/keyboard-shortcuts";
-import { isOrganisationAdmin, type OrganisationRole } from "@/lib/organisation-role";
 import type { OrganisationOption, ExternalProjectChoice } from "@/components/organisation-switcher";
 import { prisma } from "@/lib/prisma";
 import { currentOrganisationIdFor } from "@/lib/organisation-context";
@@ -98,7 +97,6 @@ export default async function AppLayout({
   let externalProjects: ExternalProjectChoice[] = [];
   let activeOrganisationId: string | null = null;
   let organisationId: string | null = null;
-  let membershipRole: OrganisationRole | null = null;
   try {
     organisationId = await currentOrganisationIdFor(user.id);
     activeOrganisationId = organisationId;
@@ -112,7 +110,6 @@ export default async function AppLayout({
       organisationId = matchedOrg.id;
       activeOrganisationId = matchedOrg.id;
     }
-    membershipRole = memberships.find((organisation) => organisation.id === organisationId)?.role ?? null;
 
     const [orgProjects, userProjectMemberships] = await Promise.all([
       organisationId ? getOrganisationProjects(organisationId) : Promise.resolve([]),
@@ -266,7 +263,6 @@ export default async function AppLayout({
           organisationOptions={organisationOptions}
           externalProjects={externalProjects}
           activeOrganisationId={activeOrganisationId}
-          organisationAdmin={isOrganisationAdmin(membershipRole, user.role)}
           defaultProjectSlug={defaultProjectSlug}
           earned={earnSample ? earnSample.earned : null}
           inEarnOrganisation={inEarnOrganisation}
