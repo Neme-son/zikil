@@ -400,6 +400,10 @@ export function AppHeader({
                 />
                 <AccountThemeSelector />
                 <div className="mx-2 h-px bg-zk-divider" />
+                {/* What your agents are doing and what needs you (#849). */}
+                <MenuLink href="/activity" active={isNavItemActive(pathname, "/activity")}>
+                  Activity
+                </MenuLink>
                 <MenuLink href={MANAGE_AGENTS_HREF} active={Boolean(pathname?.startsWith(MANAGE_AGENTS_HREF))}>
                   Manage agents
                 </MenuLink>
