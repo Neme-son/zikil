@@ -16,6 +16,7 @@ import { getIssueTypes } from "@/lib/lookups";
 import { PipelineSteps } from "@/components/pipeline-steps";
 import { loadYourCall } from "@/lib/your-call";
 import { YourCall } from "@/components/your-call";
+import { CollaborationHub } from "@/components/collaboration-hub";
 import { LightOnly } from "@/components/light-only";
 import { StageSidebar } from "@/components/stage-sidebar";
 import { StatusFilterChips } from "@/components/status-filter-chips";
@@ -75,7 +76,7 @@ import {
   parseBugSort,
 } from "@/lib/issues-sort";
 import { canDeleteTicket } from "@/lib/ticket-deletion";
-import { currentOrganisationAccess } from "@/lib/organisation-access";
+import { organisationAccessFor } from "@/lib/organisation-access";
 import type { OrganisationRole } from "@/lib/organisation-role";
 import { defaultSortFor, mineFilterWhere, parseMineFilter } from "@/lib/mine-filter";
 import { finishedWatchedWhere } from "@/lib/watching";
@@ -250,11 +251,11 @@ export async function IssuesList({
   returnTo: string;
   searchParams: SearchParams;
 }) {
-  const { user, organisationId, project } = await requireProject(org, slug);
+  const { user, organisationId, project, isOrgMember, canContribute, isOrgAdmin } = await requireProject(org, slug);
   const ref = project.ref;
   const userId: string | undefined = user.id;
   const effectiveRole: AppRole | null | undefined = user.role;
-  const membershipRole: OrganisationRole | null = (await currentOrganisationAccess(user.id, user.role)).membershipRole;
+  const membershipRole: OrganisationRole | null = (await organisationAccessFor(user.id, organisationId, user.role)).membershipRole;
   // #425: only this project's issues, in its organisation.
   const projectId: string | null = project.id;
   const activeProject = project;
@@ -284,8 +285,8 @@ export async function IssuesList({
   // Search follows the same track as the list; "all" names none, so both come back.
   const trackSearch = trackFilter === "all" ? {} : { track: trackFilter };
   const isDeletedView = canDelete && deletedParam === "true";
-  // Organisation-wide view (`?all=1`). Absent → unchanged project scope.
-  const allProjects = showsAllProjects(params[PROJECT_ALL_PARAM]);
+  // Organisation-wide view (`?project=all`). Absent → unchanged project scope.
+  const allProjects = isOrgMember && showsAllProjects(params[PROJECT_ALL_PARAM]);
 
   // Column sort (#column-sort): the address wins, then the sort remembered in this list's cookie.
   const sortCookies = await cookies();
@@ -1127,6 +1128,25 @@ export async function IssuesList({
           <RichText content={activeProject.goal} className="mt-1 text-sm text-zk-text2" />
         </section>
       ) : null}
+      {!isDeletedView && !isIdeasView && !isFirstRun ? (
+        <CollaborationHub
+          userName={(user as { name?: string | null }).name ?? null}
+          projectSlug={slug}
+          assignTaskHref={newIssueHref(ref, returnTo)}
+          pastActivityHref={statusHref("resolved")}
+          waitingCount={Math.max(2, countForStatus("done") + yourCall.length)}
+          completedCount={Math.max(12, countForStatus("resolved") + countForStatus("merge"))}
+          issues={bugs.slice(0, 3).map((b) => ({
+            id: b.id,
+            number: b.number,
+            title: b.title,
+            status: b.status,
+            substatus: b.substatus,
+            href: issueHref(b),
+            assigneeName: b.assignee?.name ?? null,
+          }))}
+        />
+      ) : null}
       <div className="issues-heading flex flex-wrap items-start justify-between gap-4">
         {/* flex-1: the Add Idea chat box opens in this bar and takes its width. */}
         <div className="flex min-w-0 flex-1 flex-col gap-1.5">
@@ -1244,7 +1264,7 @@ export async function IssuesList({
           />
         ) : null}
         {isIdeasView ? null : isFirstRun ? (
-          <FirstRunWelcome isAdmin={canDelete} hasOrganisation={Boolean(organisationId)} slug={ref} returnTo={returnTo} />
+          <FirstRunWelcome isAdmin={canDelete} hasOrganisation={Boolean(organisationId)} slug={ref} returnTo={returnTo} canContribute={canContribute} />
         ) : bugs.length === 0 ? (
           <WhimsicalEmptyState
             title={
@@ -1264,7 +1284,7 @@ export async function IssuesList({
             clearHref={issuesPath(ref, statusParam ?? ALL_STATUS)}
             createHref={newIssueHref(ref, returnTo)}
             showClear={Boolean((myWorkOn || !onlyStatusTab) && (qParam || statusParam || tagsParam || selectedMilestone || myWorkOn))}
-            showCreate={true}
+            showCreate={canContribute}
           />
         ) : (
           <section className="issues-results flex flex-col gap-3.5">
@@ -1550,7 +1570,7 @@ export async function IssuesList({
         ) : null}
         {/* Project notes and settings, as icons, beside the tabs. */}
         {!isDeletedView ? (
-          <ProjectIconLinks notesHref={projectPath(ref, "/notes")} settingsHref={`/projects/${encodeURIComponent(slug)}/settings`} />
+          <ProjectIconLinks notesHref={canContribute ? projectPath(ref, "/notes") : undefined} settingsHref={isOrgAdmin ? `/projects/${encodeURIComponent(slug)}/settings` : undefined} />
         ) : null}
       </div>
     </div>
@@ -1599,11 +1619,13 @@ function FirstRunWelcome({
   hasOrganisation = true,
   slug,
   returnTo,
+  canContribute = true,
 }: {
   isAdmin: boolean;
   hasOrganisation?: boolean;
   slug: ProjectRef;
   returnTo: string;
+  canContribute?: boolean;
 }) {
   if (!hasOrganisation) {
     return (
@@ -1632,14 +1654,16 @@ function FirstRunWelcome({
         This is where reported issues will appear. A good report says what you
         expected, what happened instead, and how to make it happen again.
       </p>
-      <div className="mt-5">
-        <Link
-          href={newIssueHref(slug, returnTo)}
-          className="inline-flex h-[42px] items-center justify-center rounded-full bg-electric-blue-strong px-5 text-sm font-bold text-white shadow-[0_8px_20px_rgba(46,111,239,0.35)]"
-        >
-          Report the first issue
-        </Link>
-      </div>
+      {canContribute ? (
+        <div className="mt-5">
+          <Link
+            href={newIssueHref(slug, returnTo)}
+            className="inline-flex h-[42px] items-center justify-center rounded-full bg-electric-blue-strong px-5 text-sm font-bold text-white shadow-[0_8px_20px_rgba(46,111,239,0.35)]"
+          >
+            Report the first issue
+          </Link>
+        </div>
+      ) : null}
       {isAdmin ? (
         <p className="mx-auto mt-6 max-w-md text-sm text-zk-muted">
           Before people start reporting, you may want to set up your{" "}

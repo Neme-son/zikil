@@ -5,7 +5,7 @@ import { getIssueTypes } from "@/lib/lookups";
 import { auth } from "@/auth";
 import { requireUser } from "@/lib/auth-helpers";
 import { canDeleteTicket } from "@/lib/ticket-deletion";
-import { currentOrganisationAccess } from "@/lib/organisation-access";
+import { organisationAccessFor } from "@/lib/organisation-access";
 import { getBugOrderBy } from "@/lib/issues-sort";
 import { parseBugListFilters, type RawParams } from "@/lib/issue-list-filters";
 import { CSV_EOL, csvRow } from "@/lib/csv";
@@ -49,19 +49,34 @@ export async function GET(request: NextRequest, { params: routeParams }: { param
     return NextResponse.json({ error: "Not signed in" }, { status: 401 });
   }
   const user = await requireUser();
-  const access = await currentOrganisationAccess(user.id, user.role);
 
   const format = exportFormat(request.nextUrl.searchParams);
   const params: RawParams = Object.fromEntries(
     request.nextUrl.searchParams.entries(),
   );
 
-  const organisationId = await currentOrganisationIdFor(user.id);
-  // The slug's project, only inside the viewer's organisation; anything else exports nothing.
   const { org, project: slug } = await routeParams;
-  const routeProject = organisationId ? await prisma.project.findFirst({ where: { organisationId, slug: decodeURIComponent(slug), archivedAt: null, organisation: { slug: decodeURIComponent(org) } }, select: { id: true } }) : null;
+  const routeProject = await prisma.project.findFirst({
+    where: {
+      slug: decodeURIComponent(slug),
+      archivedAt: null,
+      organisation: { slug: decodeURIComponent(org), archivedAt: null },
+      ...(user.role !== "super_admin"
+        ? {
+            OR: [
+              { visibility: "public" },
+              { memberships: { some: { userId: user.id } } },
+              { organisation: { memberships: { some: { userId: user.id } } } },
+            ],
+          }
+        : {}),
+    },
+    select: { id: true, organisationId: true },
+  });
   if (!routeProject) return NextResponse.json({ error: "Not found" }, { status: 404 });
+  const organisationId = routeProject.organisationId;
   const projectId = routeProject.id;
+  const access = await organisationAccessFor(user.id, organisationId, user.role);
   const [tagTypes, milestones, areas] = await Promise.all([
     getIssueTypes(organisationId),
     organisationId

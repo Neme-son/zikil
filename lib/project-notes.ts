@@ -55,9 +55,12 @@ export async function humanNotesActor(user: SessionAppUser, organisationId: stri
   const membership = await prisma.membership.findUnique({
     where: { organisationId_userId: { organisationId, userId: user.id } }, select: { role: true },
   });
-  if (!project || !membership) throw new IssueApiError(404, "Project not found.");
+  const projectMembership = !membership ? await prisma.projectMembership.findUnique({
+    where: { projectId_userId: { projectId, userId: user.id } }, select: { id: true },
+  }) : null;
+  if (!project || (!membership && !projectMembership && user.role !== "super_admin")) throw new IssueApiError(404, "Project not found.");
   return { userId: user.id, name: user.name || "Organisation member", organisationId, projectId,
-    canEdit: isOrganisationAdmin(membership.role, user.role) };
+    canEdit: membership ? isOrganisationAdmin(membership.role, user.role) : user.role === "super_admin" };
 }
 
 export function requireNotesEditor(actor: NotesActor) {

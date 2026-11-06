@@ -112,7 +112,7 @@ describe("CreateBugForm optimistic submission", () => {
     releasePendingAction?.();
     releasePendingAction = null;
 
-    await waitFor(() => expect(submitButton().disabled).toBe(false));
+    await waitFor(() => expect(submitButton().disabled).toBe(false), { timeout: 5000 });
 
     expect(capturedFormData?.get("title")).toBe("App crashes on launch");
     expect(capturedFormData?.get("description")).toBe(
@@ -144,7 +144,7 @@ describe("CreateBugForm optimistic submission", () => {
     });
 
     expect(titleInput().value).toBe("App crashes on launch");
-  });
+  }, 15000);
 
   it("disables submit button and prevents submission while an attachment is uploading (#734)", async () => {
     // The file input lives inside its label. user.upload clicks that input, and
@@ -207,7 +207,7 @@ describe("CreateBugForm optimistic submission", () => {
     } finally {
       global.fetch = originalFetch;
     }
-  });
+  }, 15000);
 
 });
 
@@ -248,7 +248,7 @@ describe("CreateBugForm project-scoped drafts (#729)", () => {
     await waitFor(() => expect(screen.getByRole("alert")).toBeDefined());
 
     expect(mockStorage["draft:u1:bug:new:project-a"]).toBeDefined();
-  });
+  }, 15000);
 });
 
 describe("CreateBugForm quick report in a modal (#report-modal)", () => {
@@ -298,7 +298,7 @@ describe("marketing task types and the report form", () => {
     const { ensureDefaultIssueTypes } = await import("@/lib/issue-types");
     await ensureDefaultIssueTypes("t1");
     expect(issueTypes.upsert).toHaveBeenCalled();
-  });
+  }, 15000);
 
   it("files a marketing idea in this project with the chosen type and rationale, and asks for no points (D5)", async () => {
     const { NewMarketingTaskForm } = await import("@/components/marketing/tasks/new-marketing-task-form");

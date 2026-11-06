@@ -71,6 +71,7 @@ export default async function ProjectSettingsPage({
     where: { organisationId, slug },
     select: {
       id: true, slug: true, name: true, goal: true, repoUrl: true, stagingUrl: true, siteUrl: true,
+      visibility: true, isOpenForContributors: true, contributorGuidelines: true,
       githubInstallationId: true, rewardConfig: true, workflow: true, organisation: { select: { slug: true } },
     },
   });

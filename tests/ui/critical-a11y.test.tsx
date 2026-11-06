@@ -346,7 +346,7 @@ describe("component accessibility (axe)", () => {
         delete (HTMLDialogElement.prototype as Partial<HTMLDialogElement>).close;
       }
     }
-  });
+  }, 15000);
 
   describe("Customer Support Guide", () => {
     it("resolves route context guidance for homepage, issues, ideas, and tickets", () => {

@@ -52,6 +52,8 @@ export function isPublicPath(
     // spends a use.
     pathWithoutBase === "/join" ||
     pathWithoutBase.startsWith("/join/") ||
+    pathWithoutBase === "/discover" ||
+    pathWithoutBase.startsWith("/discover?") ||
     pathWithoutBase.startsWith("/api/auth") ||
     pathWithoutBase.startsWith("/api/health") ||
     // The scheduler calls the platform sweeps with Bearer CRON_SECRET and no

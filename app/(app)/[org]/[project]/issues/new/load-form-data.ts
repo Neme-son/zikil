@@ -1,6 +1,6 @@
 import type { Role } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
-import { currentOrganisationAccess } from "@/lib/organisation-access";
+import { organisationAccessFor } from "@/lib/organisation-access";
 import { getActiveIssueTypesCached } from "@/lib/lookups";
 import { organisationMemberWhere } from "@/lib/organisation-mentions";
 import { requireProject } from "@/lib/project-route";
@@ -60,12 +60,11 @@ async function loadAssigneeUsers(organisationId: string | null): Promise<Mention
 
 /** The report form's data for the project in the URL (#project-urls): the slug picks it and checks access. */
 export async function loadReportFormData(org: string, slug: string) {
-  const { user, organisationId, project } = await requireProject(org, slug);
-  const admin = (await currentOrganisationAccess(user.id, user.role)).admin;
+  const { user, organisationId, project, canContribute } = await requireProject(org, slug);
+  const admin = (await organisationAccessFor(user.id, organisationId, user.role)).admin;
   const [users, assigneeUsers, types] = await Promise.all([
-    loadMentionUsers(organisationId),
-    loadAssigneeUsers(organisationId),
-    loadOrEmpty("issue types", () => getActiveIssueTypesCached(organisationId), []),
-  ]);
-  return { user, admin, users, assigneeUsers, types, projectId: project.id, projectSlug: project.ref };
+    canContribute ? loadMentionUsers(organisationId) : Promise.resolve([]),
+    canContribute ? loadAssigneeUsers(organisationId) : Promise.resolve([]),
+    loadOrEmpty("issue types", () => getActiveIssueTypesCached(organisationId), []),  ]);
+  return { user, admin, users, assigneeUsers, types, projectId: project.id, projectSlug: project.ref, canContribute };
 }

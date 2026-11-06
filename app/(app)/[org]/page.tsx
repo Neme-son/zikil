@@ -86,13 +86,13 @@ export default async function OrganisationProjectsPage({ params, searchParams }:
             {hiddenCount ? ` ${hiddenCount === 1 ? "1 project with no issues yet isn't" : `${hiddenCount} projects with no issues yet aren't`} listed.` : ""}
           </p>
         </div>
-        {allProjects.length ? <NewProjectForm /> : null}
+        {allProjects.length ? <NewProjectForm orgSlug={organisation.slug} /> : null}
       </header>
 
       {allProjects.length ? null : (
         <div className="space-y-3">
           <p className="text-sm text-zk-text2">{organisation.name} has no projects yet. Create the first one to start collecting ideas and issues.</p>
-          <NewProjectForm startOpen />
+          <NewProjectForm orgSlug={organisation.slug} startOpen />
         </div>
       )}
 

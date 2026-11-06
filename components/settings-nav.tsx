@@ -21,7 +21,7 @@ const ORG_SECTIONS = [
  * organisation's. /settings and the organisation pages both show it, so they
  * read as one Settings area.
  */
-export function SettingsNav({ orgRef, orgName }: { orgRef: ProjectRef | null; orgName?: string | null }) {
+export function SettingsNav({ orgRef, orgName, pendingJoinCount = 0 }: { orgRef: ProjectRef | null; orgName?: string | null; pendingJoinCount?: number }) {
   const pathname = (usePathname() ?? "").replace(/\/+$/, "") || "/";
   const params = useSearchParams();
   const onSettings = pathname === "/settings";
@@ -79,6 +79,12 @@ export function SettingsNav({ orgRef, orgName }: { orgRef: ProjectRef | null; or
                       <path d={item.icon} />
                     </svg>
                     {item.label}
+                    {item.section === "invites" && pendingJoinCount > 0 ? (
+                      <span className="ml-auto inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-electric-blue-strong px-1 text-[10px] font-bold text-white">
+                        {pendingJoinCount}
+                        <span className="sr-only"> pending join requests</span>
+                      </span>
+                    ) : null}
                   </Link>
                 </li>
               );
