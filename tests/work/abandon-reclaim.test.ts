@@ -48,7 +48,6 @@ const manager = (ownerId = "owner-dana", level: AgentContext["level"] = "manager
   level,
   burst: false,
   keyId: "k1",
-  projectId: "p1",
 });
 
 const lastUpdate = new Date("2026-10-31T06:00:00Z");

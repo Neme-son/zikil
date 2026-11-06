@@ -746,7 +746,8 @@ model Organisation {
   issueTypes         IssueType[]
   milestones         Milestone[]
   memberships        Membership[]
-  agents             Agent[]
+  agentActivations   AgentActivation[]
+  agentApiKeys       AgentApiKey[]
   skillTags          SkillTag[]
   bugs               Bug[]
   ideas              Idea[]
@@ -803,9 +804,6 @@ model Project {
   ideas                 Idea[]
   areas                 ProjectArea[]
   redesigns             RedesignProposal[]
-  apiKeys               AgentApiKey[]
-  pairings              AgentPairing[]
-  defaultAgents         Agent[]               @relation("DefaultProjectAgent")
   testMissions          TestMission[]
   auditEvents           ProjectAuditEvent[]
   jobs                  Job[]
@@ -1046,28 +1044,14 @@ model Agent {
   requests             AgentRequest[]
   agentNotes           AgentNote[]
   id                   String                @id @default(cuid())
-  organisationId             String
   ownerUserId          String
   /// Display name, e.g. "Larry's Claude".
   name                 String
   /// The model behind it, e.g. "Claude" or "GPT". Not the display name.
   model                String?
-  level                AgentLevel            @default(working)
-  /// When the level last changed (#390). Silence releases before this moment
-  /// do not count towards a fresh demotion, so a person's restore sticks.
-  levelChangedAt       DateTime?
-  /// Higher rate budget, set only by an organisation admin (#440).
-  burst                Boolean               @default(false)
-  /// When the higher budget stops (#596). Null on an enabled grant means it
-  /// has no expiry. An expired time falls back to the standard budget on the
-  /// next request; no cleanup job flips `burst` off.
-  burstUntil           DateTime?
   revokedAt            DateTime?
   /// Owner has paused this agent; active claim clocks are frozen until resumed.
   pausedAt             DateTime?
-  /// Set when this is the person's personal agent for that project.
-  /// Created automatically so they can copy a key without registering one.
-  defaultProjectId     String?
   /// The owner's standing brief (#605), returned by `GET /api/v1/agents/me`.
   instructions         String?
   /// The robot avatar its owner picked, a key from lib/agents/avatars.ts.
@@ -1094,11 +1078,11 @@ model Agent {
   picture              AgentPicture?
   createdAt            DateTime              @default(now())
   updatedAt            DateTime              @updatedAt
-  organisation               Organisation                @relation(fields: [organisationId], references: [id], onDelete: Cascade)
   owner                User                  @relation(fields: [ownerUserId], references: [id], onDelete: Cascade)
-  defaultProject       Project?              @relation("DefaultProjectAgent", fields: [defaultProjectId], references: [id], onDelete: Cascade)
   areaPreferences      AgentAreaPreference[]
   apiKeys              AgentApiKey[]
+  /// Where it works (#user-agents): one activation per organisation, each with that organisation's grants.
+  activations          AgentActivation[]
   auditEvents          AgentAuditEvent[]
   createdBugs          Bug[]                 @relation("AgentCreatedBugs")
   createdIdeas         Idea[]                @relation("AgentCreatedIdeas")
@@ -1135,19 +1119,44 @@ model Agent {
   penaltiesGiven    ConfirmationPenalty[] @relation("PenaltiesGiven")
   penaltiesReceived ConfirmationPenalty[] @relation("PenaltiesReceived")
 
-  @@unique([ownerUserId, defaultProjectId])
-  @@index([organisationId])
   @@index([ownerUserId])
 }
 
 /// A one-way hash of the key is always stored. The raw key is shown once,
 /// except a person's personal project key, which is also sealed so they can copy it.
+/// An agent switched on in one organisation (#user-agents). A person owns their
+/// agents once; every organisation they belong to may use them all, and they
+/// choose which to activate where. An agent works in every project of an
+/// organisation it is active in. The organisation's grants live here: its
+/// class (an organisation admin's grant) and its rate budget.
+model AgentActivation {
+  id             String       @id @default(cuid())
+  agentId        String
+  organisationId String
+  level          AgentLevel   @default(working)
+  /// When the class last changed: the manager/merger review cooling-off reads it.
+  levelChangedAt DateTime?
+  /// Higher rate budget, set only by an organisation admin (#440).
+  burst          Boolean      @default(false)
+  /// When the higher budget stops (#596). Null on an enabled grant means it has no expiry.
+  burstUntil     DateTime?
+  activatedAt    DateTime     @default(now())
+  /// Set when its owner switches it off here; its keys for this organisation stop working.
+  deactivatedAt  DateTime?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  agent          Agent        @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  organisation   Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+
+  @@unique([agentId, organisationId])
+  @@index([organisationId])
+}
+
 model AgentApiKey {
   id         String    @id @default(cuid())
   agentId    String
-  /// The only project this key may act in. Null is a legacy key that still
-  /// works across the organisation; new keys always set it (#742).
-  projectId  String?
+  /// The organisation this key works in: the activation it belongs to (#user-agents), every project in it.
+  organisationId String
   /// SHA-256 of the raw key.
   keyHash    String    @unique
   /// AES-256-GCM of the raw key, so the owner can copy it again from Settings.
@@ -1159,10 +1168,10 @@ model AgentApiKey {
   revokedAt  DateTime?
   createdAt  DateTime  @default(now())
   agent      Agent     @relation(fields: [agentId], references: [id], onDelete: Cascade)
-  project    Project?  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
 
   @@index([agentId])
-  @@index([agentId, projectId])
+  @@index([agentId, organisationId])
 }
 
 /// Pairing an agent by code (#427). The owner is set only when a signed-in
@@ -1176,8 +1185,6 @@ model AgentPairing {
   ownerUserId          String?
   /// The organisation the agent joins, set on approval.
   organisationId             String?
-  /// The project the issued key is limited to, set on approval (#742).
-  projectId            String?
   /// The agent row created on approval.
   agentId              String?
   /// SHA-256 of the secret the waiting agent polls with to collect its key.
@@ -1193,7 +1200,6 @@ model AgentPairing {
   approvedAt           DateTime?
   createdAt            DateTime    @default(now())
   owner                User?       @relation(fields: [ownerUserId], references: [id], onDelete: Cascade)
-  project              Project?    @relation(fields: [projectId], references: [id], onDelete: SetNull)
 
   @@index([expiresAt])
 }

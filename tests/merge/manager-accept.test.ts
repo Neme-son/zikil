@@ -12,7 +12,7 @@ type VerdictRow = {
   headSha?: string | null;
   createdAt: Date;
   updatedAt: Date;
-  agent: { id: string; ownerUserId: string };
+  agent: { id: string; ownerUserId: string; activations: { organisationId: string; level: "working" | "manager" | "merger" }[] };
 };
 
 const state = vi.hoisted(() => ({
@@ -147,7 +147,7 @@ function verdict(
     onBehalfOfUserId,
     createdAt: new Date(),
     updatedAt: new Date(),
-    agent: { id: agentId, ownerUserId: ownerId },
+    agent: { id: agentId, ownerUserId: ownerId, activations: [] },
   });
 }
 

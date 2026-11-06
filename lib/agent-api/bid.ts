@@ -1,7 +1,8 @@
 import { z } from "zod";
 import { Prisma, type PrismaClient } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
-import { assertKeyProject, type AgentContext } from "@/lib/agents/require-agent";
+import type { AgentContext } from "@/lib/agents/require-agent";
+import { activeLevels, levelIn } from "@/lib/agents/active-in";
 import { requireLevel } from "@/lib/agents/levels";
 import { IssueApiError } from "@/lib/agent-api/errors";
 import { publish } from "@/lib/agent-api/events";
@@ -82,7 +83,6 @@ async function competingClaim(tx: Tx, bugId: string) {
  * until a bid is awarded. `replaced` is true when it updated an open bid.
  */
 export async function placeBid(caller: AgentContext, projectId: string, issueRef: string, input: BidInput) {
-  assertKeyProject(caller, projectId);
   const ref = parseIssueRef(issueRef);
   return prisma.$transaction(async (tx) => {
     let bugId: string;
@@ -231,8 +231,8 @@ async function bidEntries(bug: { id: string; areaId: string | null }, where: Pri
       createdAt: true,
       updatedAt: true,
       beneficiary: { select: { name: true } },
-      votes: { select: { onBehalfOfUserId: true, agent: { select: { level: true } } } },
-      bug: { select: { projectId: true } },
+      votes: { select: { onBehalfOfUserId: true, agent: { select: { activations: activeLevels } } } },
+      bug: { select: { projectId: true, organisationId: true } },
       agent: { select: { name: true, areaPreferences: {
         where: { projectAreaId: bug.areaId ?? "" },
         select: { projectAreaId: true },
@@ -270,7 +270,8 @@ async function bidEntries(bug: { id: string; areaId: string | null }, where: Pri
       agentName: agent.name,
       by: beneficiary.name ?? "A member",
       areaMatch: Boolean(bug.areaId && agent.areaPreferences.length),
-      votes: weightedTally((votes ?? []).map((vote) => ({ ownerId: vote.onBehalfOfUserId, level: vote.agent?.level })), managerVoteWeight),
+      // #user-agents: each voter's class in this issue's organisation.
+      votes: weightedTally((votes ?? []).map((vote) => ({ ownerId: vote.onBehalfOfUserId, level: levelIn(vote.agent, _bug.organisationId) })), managerVoteWeight),
       replies: (replies ?? []).map(({ author, agent: replyAgent, ...reply }) => ({
         ...reply,
         authorName: author.name ?? "A member",
@@ -282,7 +283,6 @@ async function bidEntries(bug: { id: string; areaId: string | null }, where: Pri
 }
 
 export async function listBids(caller: AgentContext, projectId: string, bugId: string) {
-  assertKeyProject(caller, projectId);
   const ref = parseIssueRef(bugId);
   const bug = await prisma.bug.findFirst({
     where: { ...(ref.kind === "number" ? { number: ref.number } : { id: ref.id }), organisationId: caller.organisationId, projectId, isDeleted: false },
@@ -328,9 +328,9 @@ export async function withdrawBid(caller: AgentContext, projectId: string, issue
 }
 
 /** A bid's weighted tally (lib/governance.ts): one vote per person, a manager or merger agent's counting `managerVoteWeight`. */
-export async function bidTally(bidId: string, managerVoteWeight: number, db: Db = prisma): Promise<number> {
-  const votes = await db.bidVote.findMany({ where: { bidId }, select: { onBehalfOfUserId: true, agent: { select: { level: true } } } });
-  return weightedTally(votes.map((vote) => ({ ownerId: vote.onBehalfOfUserId, level: vote.agent?.level })), managerVoteWeight);
+export async function bidTally(bidId: string, managerVoteWeight: number, organisationId: string, db: Db = prisma): Promise<number> {
+  const votes = await db.bidVote.findMany({ where: { bidId }, select: { onBehalfOfUserId: true, agent: { select: { activations: activeLevels } } } });
+  return weightedTally(votes.map((vote) => ({ ownerId: vote.onBehalfOfUserId, level: levelIn(vote.agent, organisationId) })), managerVoteWeight);
 }
 
 /**
@@ -356,7 +356,6 @@ export async function awardBid(agent: AgentContext, bidId: string) {
         include: { bug: { select: { id: true, title: true, organisationId: true, projectId: true, isDeleted: true } } },
       });
       if (!bid || bid.bug.isDeleted || bid.bug.organisationId !== agent.organisationId) throw new IssueApiError(404, "Bid not found.");
-      assertKeyProject(agent, bid.bug.projectId);
       const locked = await tx.$queryRaw<{ id: string }[]>`SELECT "id" FROM "Bug" WHERE "id" = ${bid.bugId} AND "isDeleted" = false FOR UPDATE`;
       if (!locked.length) throw new IssueApiError(404, "Bid not found.");
       // Any agent may award any open bid, its own owner's included (#open-award):
