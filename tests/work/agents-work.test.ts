@@ -65,3 +65,30 @@ describe("agentsWorkRows", () => {
     expect(rows[1].reward).toBe(9);
   });
 });
+
+describe("loadAgentsWork", () => {
+  it("ranks every open claim and bid before limiting, so an older high reward is kept", async () => {
+    const { loadAgentsWork } = await import("@/lib/agents-work");
+    const bug = (n: number, reward: string) => ({
+      id: `bug${n}`,
+      number: n,
+      title: `Issue ${n}`,
+      status: "open",
+      reward,
+      project: { slug: "desktop", organisation: { slug: "zedu" } },
+    });
+    // 25 bids, newest first; the oldest one pays the most.
+    const bids = Array.from({ length: 25 }, (_, i) => ({
+      id: `b${i}`,
+      agent: { name: "Bot" },
+      bug: bug(100 + i, i === 24 ? "9" : "1"),
+    }));
+    const db = {
+      issueClaim: { findMany: async () => [] },
+      issueBid: { findMany: async (args: { take?: number }) => bids.slice(0, args.take ?? bids.length) },
+    };
+    const rows = await loadAgentsWork(db as never, "t1", "u1");
+    expect(rows).toHaveLength(5);
+    expect(rows[0]).toMatchObject({ issueNumber: 124, reward: 9 });
+  });
+});
