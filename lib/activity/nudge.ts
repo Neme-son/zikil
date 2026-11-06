@@ -32,7 +32,7 @@ export async function nudgeClaimAgent(actor: Actor & { name?: string | null }, c
   const offeredAt = claim.offeredAt ?? claim.createdAt;
   const body = nudgeMessage(
     {
-      status: claim.status,
+      status: claim.status as "offered" | "active",
       issueNumber: claim.bug.number,
       issueTitle: claim.bug.title,
       offerExpiresAt: claim.status === "offered" ? new Date(offeredAt.getTime() + offerWindowSeconds * 1000) : null,

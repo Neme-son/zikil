@@ -168,7 +168,7 @@ export async function loadActivity(
     const workflow = workflows.get(claim.bug.projectId)!;
     return {
       id: claim.id,
-      status: claim.status,
+      status: claim.status as ActivityClaim["status"],
       agent: claim.agent,
       issue: toIssue(claim.bug),
       offeredAt: iso(claim.offeredAt),
