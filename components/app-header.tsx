@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useMarketingArea } from "@/components/marketing/marketing-area";
-import { ideasPath, orgPath, type ProjectRef } from "@/lib/project-paths";
+import { ideasPath, type ProjectRef } from "@/lib/project-paths";
 import { useProjectRef } from "@/lib/use-project-ref";
 import { SignOutButton } from "@/components/sign-out-button";
 import { OrganisationSwitcher, type OrganisationOption, type ExternalProjectChoice } from "@/components/organisation-switcher";
@@ -25,9 +25,8 @@ import { LocalTime } from "@/components/local-time";
 import { BASE_PATH } from "@/lib/base-path";
 import { PAGE_CONTAINER_CLASS } from "@/components/page-container";
 import { ZikiMark } from "@/components/ziki-mark";
-import { EarnPill } from "@/components/earn-pill";
-import { isEarnPath } from "@/lib/earn/paths";
-import type { WithdrawInfo } from "@/lib/earn/draft";
+import { formatZ } from "@/lib/points/rules";
+import { WithdrawWindow } from "@/components/withdraw-window";
 
 const linkFocus =
   "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-electric-blue focus-visible:ring-offset-2";
@@ -152,6 +151,17 @@ function TopNav({ pathname, projectSlug }: { pathname: string | null; projectSlu
         <NavIcon>
           <path d="M12 3 4 6v6c0 4.5 3.4 8.3 8 9 4.6-.7 8-4.5 8-9V6l-8-3Z" />
           <path d="m9 12 2 2 4-4" />
+        </NavIcon>
+      </TopNavLink>
+      <TopNavLink href="/discover" active={isNavItemActive(pathname, "/discover")} label="Discover">
+        <NavIcon>
+          <circle cx="12" cy="12" r="9" />
+          <path d="m15.5 8.5-2 5-5 2 2-5 5-2Z" />
+        </NavIcon>
+      </TopNavLink>
+      <TopNavLink href="/forum" active={isNavItemActive(pathname, "/forum")} label="Forum">
+        <NavIcon>
+          <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
         </NavIcon>
       </TopNavLink>
     </nav>
@@ -279,21 +289,14 @@ export function AppHeader({
   externalProjects = [],
   activeOrganisationId = null,
   reportFormUrl,
-  organisationAdmin = false,
   defaultProjectSlug = null,
   earned = null,
-  inEarnOrganisation = false,
-  withdraw = null,
   version,
 }: {
   /** The running version (package version), shown with Cookie settings at the foot of the account menu. */
   version?: string;
-  /** Earn (#earn-drafts): what the Withdraw window shows; null for everyone else. */
-  withdraw?: WithdrawInfo | null;
-  /** Earn (#earn-drafts): an earner's dollars, shown with Withdraw in the header; null for everyone else. */
+  /** Earnings (#earnings): everything the person has earned, shown with Withdraw on every page; null when unknown. */
   earned?: number | null;
-  /** The person is working in the Earn organisation: the header is Earn's on every page there. */
-  inEarnOrganisation?: boolean;
   /** The first project in the current organisation, for pages whose URL names none yet. */
   defaultProjectSlug?: ProjectRef | null;
   userName?: string | null;
@@ -308,8 +311,6 @@ export function AppHeader({
   externalProjects?: ExternalProjectChoice[];
   activeOrganisationId?: string | null;
   reportFormUrl?: string;
-  /** Owner or admin of the current organisation, or the site super admin: shows /org in the menus. */
-  organisationAdmin?: boolean;
 }) {
   const pathname = usePathname();
   const projectSlug = useProjectRef() ?? defaultProjectSlug;
@@ -326,18 +327,16 @@ export function AppHeader({
   }
 
   const realRole = realRoleOf({ isRealSuperAdmin, isRealAdmin });
-  // Earn (#earn-drafts): an earner on the earn pages, or anywhere in the Earn organisation, sees only what they came for.
-  const earnQuiet = earned !== null && (isEarnPath(pathname) || inEarnOrganisation);
 
   return (
     // Sticky only from lg: on phones and tablets the toolbar wraps onto rows,
     // and a header that tall pinned to the top covers the page under it.
     <header className="relative z-40 border-b border-zk-border bg-zk-surface shadow-[0_1px_3px_rgba(0,0,0,0.04)] lg:sticky lg:top-0">
-      <div className={`${PAGE_CONTAINER_CLASS} flex flex-wrap items-center gap-x-3 gap-y-2 py-3 max-sm:py-2 sm:px-6 ${earnQuiet ? "max-sm:flex-nowrap" : ""}`}>
+      <div className={`${PAGE_CONTAINER_CLASS} flex flex-wrap items-center gap-x-3 gap-y-2 py-3 max-sm:py-2 sm:px-6`}>
         {/* Below lg the nav lives in the bottom strip, leaving one row here.
             The logo (the mark alone) is the way to the Dashboard. */}
         <div className="flex min-w-0 items-center gap-2">
-          <Link href={earnQuiet ? "/earn/home" : projectSlug ? ideasPath(projectSlug) : "/home"} aria-label="Ziki" className={`flex shrink-0 items-center gap-2 rounded-full ${linkFocus}`}>
+          <Link href={projectSlug ? ideasPath(projectSlug) : "/home"} aria-label="Ziki" className={`flex shrink-0 items-center gap-2 rounded-full ${linkFocus}`}>
             {/* The mark alone; the link's name says Ziki. */}
             <ZikiMark className="h-8 w-auto text-zk-text max-sm:h-7" />
           </Link>
@@ -346,25 +345,33 @@ export function AppHeader({
             organisationOptions={organisationOptions}
             externalProjects={externalProjects}
             activeOrganisationId={activeOrganisationId}
-            canManage={organisationAdmin}
-            orgHref={projectSlug ? orgPath(projectSlug) : null}
             tone="bar"
-            className={`min-w-0 max-sm:max-w-44 ${earnQuiet ? "max-sm:hidden" : ""}`}
+            className="min-w-0 max-sm:max-w-44"
           />
         </div>
 
-        {/* Earn (#earn-drafts): an earner on the earn pages sees none of the builders' links. */}
-        {earnQuiet ? null : <TopNav pathname={pathname} projectSlug={projectSlug} />}
+        <TopNav pathname={pathname} projectSlug={projectSlug} />
 
         {/* Phones and tablets: min-w-0 lets the group narrow so its flex-wrap
             breaks the chips onto rows (no sideways scroll at 360px or 768px).
             From lg up it keeps shrink-0 so the account controls are never
             squeezed. */}
-        <div className={`ml-auto flex min-w-0 items-center justify-end gap-2 max-sm:gap-1 lg:shrink-0 ${earnQuiet ? "max-sm:flex-nowrap" : "flex-wrap"}`}>
-          {earned !== null && withdraw ? (
-            // Earn (#earn-drafts): the balance as one pill, in reach from every page. It drops a panel down (the bar, the
-            // next task, Withdraw); Withdraw opens a window over the page, never another page.
-            <EarnPill info={withdraw} />
+        <div className={`ml-auto flex min-w-0 items-center justify-end gap-2 max-sm:gap-1 lg:shrink-0 flex-wrap`}>
+          {earned !== null ? (
+            // Earnings (#earnings), on every page: the amount opens Your earnings; Withdraw opens a window over the page.
+            <div className="inline-flex h-10 shrink-0 items-center gap-1 rounded-full border border-zk-border bg-zk-surface p-1">
+              <Link
+                href={projectSlug ? `/earnings?in=${projectSlug}` : "/earnings"}
+                aria-current={isNavItemActive(pathname, "/earnings") ? "page" : undefined}
+                className={`rounded-full px-2.5 py-1 text-sm font-bold tabular-nums text-zk-text hover:bg-zk-chip ${linkFocus}`}
+              >
+                {formatZ(earned)}
+                <span className="sr-only"> earned: Your earnings</span>
+              </Link>
+              <WithdrawWindow earned={earned} className={`rounded-full bg-electric-blue-strong px-3 py-1.5 text-xs font-bold text-white hover:bg-[#2552af] max-sm:hidden ${linkFocus}`}>
+                Withdraw
+              </WithdrawWindow>
+            </div>
           ) : null}
 
           <div ref={accountRef} className="relative">
@@ -400,6 +407,10 @@ export function AppHeader({
                 />
                 <AccountThemeSelector />
                 <div className="mx-2 h-px bg-zk-divider" />
+                {/* What your agents are doing and what needs you (#849). */}
+                <MenuLink href="/activity" active={isNavItemActive(pathname, "/activity")}>
+                  Activity
+                </MenuLink>
                 <MenuLink href={MANAGE_AGENTS_HREF} active={Boolean(pathname?.startsWith(MANAGE_AGENTS_HREF))}>
                   Manage agents
                 </MenuLink>
@@ -430,7 +441,7 @@ export function AppHeader({
           </div>
 
           {/* Escalations, as an envelope, then the bell last. */}
-          {earnQuiet ? null : <InboxEnvelope key={`${userId}:${activeOrganisationId}:${pathname}`} unreadCount={unreadCount} pendingEscalations={pendingEscalationsCount} active={isNavItemActive(pathname, "/inbox")} />}
+          <InboxEnvelope key={`${userId}:${activeOrganisationId}:${pathname}`} unreadCount={unreadCount} pendingEscalations={pendingEscalationsCount} active={isNavItemActive(pathname, "/inbox")} />
         </div>
       </div>
     </header>

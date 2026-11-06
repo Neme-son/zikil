@@ -182,6 +182,14 @@ END $$;
   // it applies whole or not at all, so a failed run is always safe to retry.
   "20270111000000_user_owned_agents": `SELECT 1;
 `,
+  // The same: one statement that takes its locks first, whole or not at all.
+  "20270111000001_skill_submissions": `SELECT 1;
+`,
+  // Plan review (#plan-review): one statement that takes every lock it needs
+  // at once without waiting, and skips what a previous run already created,
+  // so a failed run is always safe to retry.
+  "20270111000004_plan_review": `SELECT 1;
+`,
 };
 
 /** True when `name` has a probe and the probe finds none of its objects. */

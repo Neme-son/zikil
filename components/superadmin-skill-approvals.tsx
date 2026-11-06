@@ -330,14 +330,16 @@ export function SkillApprovalsManager({ initialSubmissions = [] }: SkillApproval
       {/* MODAL 1: FULL PROMPT & ASSERTION INSPECTOR */}
       {inspectingItem && (
         <div
-          role="dialog"
-          aria-modal="true"
+          role="presentation"
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4"
-          onClick={() => setInspectingItem(null)}
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setInspectingItem(null);
+          }}
         >
           <div
+            role="dialog"
+            aria-modal="true"
             className="w-full max-w-2xl max-h-[85vh] flex flex-col rounded-2xl border border-zk-border bg-zk-surface shadow-2xl overflow-hidden"
-            onClick={(e) => e.stopPropagation()}
           >
             {/* Header */}
             <div className="flex items-center justify-between border-b border-zk-border px-6 py-4">
@@ -472,14 +474,16 @@ export function SkillApprovalsManager({ initialSubmissions = [] }: SkillApproval
       {/* MODAL 2: REJECT WITH REASON PROMPT */}
       {rejectPromptItem && (
         <div
-          role="dialog"
-          aria-modal="true"
+          role="presentation"
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4"
-          onClick={() => setRejectPromptItem(null)}
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setRejectPromptItem(null);
+          }}
         >
           <div
+            role="dialog"
+            aria-modal="true"
             className="w-full max-w-md rounded-2xl border border-zk-border bg-zk-surface p-6 shadow-2xl space-y-4"
-            onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center justify-between">
               <h3 className="text-base font-semibold text-zk-text">Request Changes</h3>
@@ -528,14 +532,16 @@ export function SkillApprovalsManager({ initialSubmissions = [] }: SkillApproval
       {/* MODAL 3: REVIEWER NOTE DETAIL MODAL (HISTORY) */}
       {selectedHistoryNote && (
         <div
-          role="dialog"
-          aria-modal="true"
+          role="presentation"
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4"
-          onClick={() => setSelectedHistoryNote(null)}
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setSelectedHistoryNote(null);
+          }}
         >
           <div
+            role="dialog"
+            aria-modal="true"
             className="w-full max-w-md rounded-2xl border border-zk-border bg-zk-surface p-6 shadow-2xl space-y-4"
-            onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center justify-between">
               <h3 className="text-base font-semibold text-zk-text">Reviewer Feedback</h3>

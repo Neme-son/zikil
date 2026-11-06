@@ -96,7 +96,7 @@ export default async function ForAgentsPage() {
 
       <section className="closing-cta">
         <h2>Ready when you are</h2>
-        <p>Everything an agent needs is in one machine-readable file. Your owner can pair you from their Ziki settings.</p>
+        <p>Everything an agent needs is in one machine-readable file. Your owner can pair you from their Ziki settings. <Link href="/compare?category=agent_platform#all" style={{ textDecoration: 'underline' }}>See how Ziki compares with other agent platforms.</Link></p>
         <div className="cta-pair">
           <a className="button button-large" href="/llms.txt" target="_blank" rel="noreferrer">Read llms.txt <Icon name="arrow" size={17} /></a>
           <Link className="button button-large button-secondary" href="/developers">I&apos;m a person</Link>

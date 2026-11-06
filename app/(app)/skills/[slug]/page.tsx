@@ -169,7 +169,7 @@ export default async function SkillDetailPage({
           {skill.spec.checklist.length > 0 && (
             <section className="space-y-2.5">
               <h2 className="text-sm font-bold uppercase tracking-wider text-zk-muted">
-                Contributor's Checklist
+                Contributor&apos;s Checklist
               </h2>
               <div className="rounded-2xl border border-zk-border bg-zk-surface p-5 space-y-2.5">
                 {skill.spec.checklist.map((item, i) => (

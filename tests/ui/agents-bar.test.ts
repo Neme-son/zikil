@@ -28,6 +28,7 @@ describe("dockVisibleOn: where the agents bar shows", () => {
     "/inbox",
     "/inbox/escalations/abc",
     "/home",
+    "/activity",
     "/feed",
   ])("shows on %s when you have agents", (path) => {
     expect(dockVisibleOn(path, 1)).toBe(true);
@@ -73,7 +74,7 @@ describe("dockVisibleOn: where the agents bar shows", () => {
   });
 
   it("hides everywhere when you have no agents", () => {
-    for (const path of ["/zedu/acme", "/zedu/acme/issues", "/zedu/acme/42", "/zedu/acme/workstream", "/inbox", "/home", "/feed", "/agents/mine", "/settings", "/docs"]) {
+    for (const path of ["/zedu/acme", "/zedu/acme/issues", "/zedu/acme/42", "/zedu/acme/workstream", "/inbox", "/home", "/activity", "/feed", "/agents/mine", "/settings", "/docs"]) {
       expect(dockVisibleOn(path, 0)).toBe(false);
     }
   });
@@ -88,8 +89,9 @@ describe("dockVisibleOn: where the agents bar shows", () => {
     expect(dockVisibleOn("/zedu/acme/42x", 1)).toBe(false);
     expect(dockVisibleOn("/zedu/acme/organisation", 1)).toBe(false);
     expect(dockVisibleOn("/homepage", 1)).toBe(false);
-    // Home and feed are those pages only, not what sits below them.
+    // Home, activity and feed are those pages only, not what sits below them.
     expect(dockVisibleOn("/home/extra", 1)).toBe(false);
+    expect(dockVisibleOn("/activity/x", 1)).toBe(false);
     expect(dockVisibleOn("/feed/x", 1)).toBe(false);
     // A project that happens to be called "feeds" is a project: its landing page is a work page.
     expect(dockVisibleOn("/zedu/feeds", 1)).toBe(true);
@@ -101,24 +103,6 @@ describe("dockVisibleOn: where the agents bar shows", () => {
     expect(dockVisibleOn("/agents/mine/", 1)).toBe(false);
     expect(dockVisibleOn("/zedu/acme/issues/", 1)).toBe(true);
     expect(dockVisibleOn("/home/", 1)).toBe(true);
-  });
-
-  it.each(["/earn", "/earn/", "/earn/tasks", "/earn/earnings", "/earn/marketing/12", "/earn/withdraw"])(
-    "keeps the bar on earn pages for earners with agents: %s",
-    (path) => {
-      expect(dockVisibleOn(path, 1)).toBe(true);
-      expect(dockVisibleOn(path, 3)).toBe(true);
-    },
-  );
-
-  it.each(["/earn", "/earn/tasks", "/earn/earnings"])("hides on earn pages when there are no agents: %s", (path) => {
-    expect(dockVisibleOn(path, 0)).toBe(false);
-  });
-
-  it("matches earn on the whole segment: a look-alike isn't earn", () => {
-    expect(dockVisibleOn("/earning/tasks", 1)).toBe(false);
-    expect(dockVisibleOn("/zedu/earnings", 1)).toBe(true); // a project that happens to be called "earnings": its landing page
-    expect(dockVisibleOn("/zedu/earnings/notes", 1)).toBe(false);
   });
 
   it.each([

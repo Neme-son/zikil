@@ -130,11 +130,11 @@ export function SkillsDirectory({
               Agent Skills Library
             </h1>
             <p className="text-sm text-zk-text2 leading-relaxed max-w-[680px]">
-              Discover tested prompts, verification scripts, and security guardrails published by the community and reviewed and approved by maintainers.
+              Discover agent prompts, scripts, and security guardrails published by the community and approved by a reviewer.
             </p>
           </div>
           <Link
-            href="/earn/skills"
+            href="/skills/contribute"
             className="inline-flex items-center gap-2 rounded-full bg-blue-600 px-5 py-2.5 text-xs font-bold text-white shadow-sm hover:brightness-110 transition shrink-0"
           >
             <span>+ Submit a Skill</span>

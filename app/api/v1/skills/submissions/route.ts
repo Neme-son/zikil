@@ -1,21 +1,12 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { resolveSessionUserId } from "@/lib/session-user";
 import { checkRateLimit } from "@/lib/rate-limit";
-
 import {
-  SKILL_CATEGORIES,
   SKILL_CATEGORY_LABELS,
   createSubmissionSchema,
   slugify,
-  type SkillCategory,
 } from "@/lib/validations/skill";
-
-export { createSubmissionSchema, SKILL_CATEGORIES, SKILL_CATEGORY_LABELS, slugify };
-export type { SkillCategory };
-
-
 
 export async function POST(req: NextRequest) {
   const session = await resolveSessionUserId();

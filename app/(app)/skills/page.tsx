@@ -6,7 +6,7 @@ import { prisma } from "@/lib/prisma";
 export const metadata = {
   title: "Agent Skills Library — Ziki",
   description:
-    "Discover tested agent prompts, verification scripts, and security guardrails published by the community.",
+    "Discover agent prompts, scripts, and security guardrails published by the community and approved by a reviewer.",
 };
 
 export default async function SkillsPage() {
