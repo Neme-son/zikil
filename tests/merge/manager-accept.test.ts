@@ -265,13 +265,27 @@ describe("acceptFix: a successful accept (#434)", () => {
   it("accepts a workbench-passed delivery without requiring legacy test verdicts", async () => {
     confirmWith("rob", "sam");
     db.bug.findFirst.mockResolvedValue(bugRow({ status: "done", substatus: "requires_review" }));
-    db.delivery.findFirst.mockResolvedValue({ judgingState: "passed" });
+    db.delivery.findFirst.mockResolvedValue({ judgingState: "passed", judgedHeadSha: "linked-sha" });
 
     const result = await acceptFix(merger("m1", "mo", "manager"), "bug1");
 
     expect(result).toMatchObject({ status: 200, accepted: true, readyToMerge: true });
+    expect(db.mergeReview.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ headSha: "linked-sha" }),
+    }));
     expect(db.testVerdict.findMany).toHaveBeenCalled();
     expect(db.pointEntry.createMany).not.toHaveBeenCalled();
+  });
+
+  it("requires fresh Workbench judging after the pull request head changes", async () => {
+    confirmWith("rob", "sam");
+    db.bug.findFirst.mockResolvedValue(bugRow({ status: "done", substatus: "requires_review", pullRequestHeadSha: "newer-sha" }));
+    db.delivery.findFirst.mockResolvedValue({ judgingState: "passed", judgedHeadSha: "linked-sha" });
+
+    const result = await acceptFix(merger("m1", "mo", "manager"), "bug1");
+
+    expect(result).toMatchObject({ status: 409, error: "not_ready", missing: "pull_request", todo: expect.stringContaining("re-deliver") });
+    expect(db.mergeReview.create).not.toHaveBeenCalled();
   });
 
   it("a manager accepts the fix and marks it ready to merge without resolving or awarding points", async () => {

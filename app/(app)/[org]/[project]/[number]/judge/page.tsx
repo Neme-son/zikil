@@ -11,17 +11,17 @@ export const metadata: Metadata = { title: "Judge delivery" };
 export default async function JudgePage({
   params,
 }: {
-  params: Promise<{ project: string; number: string }>;
+  params: Promise<{ org: string; project: string; number: string }>;
 }) {
   await requireUser();
-  const { project, number: rawNumber } = await params;
+  const { org, project, number: rawNumber } = await params;
   const number = parseIssueNumber(rawNumber);
   if (number === null) notFound();
 
-  const lookup = await findProjectIssue(project, number);
+  const lookup = await findProjectIssue(org, project, number);
   if (!lookup || lookup.kind === "elsewhere") notFound();
   if (lookup.kind === "moved") {
-    redirect(issuePath(lookup.issue.projectSlug, lookup.issue.number, "/judge"));
+    redirect(issuePath(lookup.issue.ref, lookup.issue.number, "/judge"));
   }
   if (lookup.issue.isDeleted) notFound();
 

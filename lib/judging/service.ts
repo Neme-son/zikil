@@ -100,6 +100,7 @@ const issueSelect = {
       id: true,
       judgingState: true,
       judgingRound: true,
+      headSha: true,
       pullRequestUrl: true,
       summary: true,
       description: true,
@@ -375,6 +376,7 @@ export async function submitJudgingVerdict(
           deliveryRound: delivery.judgingRound,
           agentId: agent.agentId,
           ownerId: agent.ownerId,
+          headSha: delivery.headSha,
           approved: submission.outcome === "approve",
           checks: submission.checks,
           evidence: submission.evidence,
@@ -439,7 +441,10 @@ export async function submitJudgingVerdict(
         const status = judgingStatus(replay.outcome);
         await tx.delivery.update({
           where: { id: delivery.id },
-          data: { judgingState: status.deliveryState },
+          data: {
+            judgingState: status.deliveryState,
+            ...(replay.outcome === "approve" ? { judgedHeadSha: delivery.headSha } : {}),
+          },
         });
         if (replay.outcome === "send_back") {
           const feedback = consolidateJudgingFeedback(rows.map((row) => ({

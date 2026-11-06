@@ -1395,6 +1395,8 @@ model Delivery {
   testResults       String?
   /// Structured judging lifecycle for this delivery.
   judgingState      String    @default("open")
+  /// The delivered commit that the passing tester quorum reviewed.
+  judgedHeadSha     String?
   /// Incremented whenever this delivery is replaced with new work.
   judgingRound      Int       @default(1)
   createdAt         DateTime  @default(now())
@@ -1690,6 +1692,8 @@ model JudgingVerdict {
   deliveryRound Int
   agentId       String
   ownerId       String
+  /// The commit recorded when the work was delivered.
+  headSha       String?
   approved      Boolean
   checks        Json
   evidence      Json

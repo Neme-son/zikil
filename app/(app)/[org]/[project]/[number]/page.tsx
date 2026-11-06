@@ -1294,7 +1294,7 @@ export default async function BugDetailPage({ params, searchParams }: BugPagePro
             <NextStepBar step={marketingNextStep} agentInstructions={agentInstructions} />
             {bug.status === "done" && bug.substatus === "requires_review" ? (
               <Link
-                href={issuePath(projectSlug, number, "/judge")}
+                href={issuePath(projectRef(org, projectSlug), number, "/judge")}
                 className="inline-flex items-center rounded-full border border-zk-accent/30 px-4 py-2 text-sm font-bold text-zk-accent hover:bg-zk-tint"
               >
                 Open Judge Workbench
@@ -1928,7 +1928,7 @@ export default async function BugDetailPage({ params, searchParams }: BugPagePro
           {deliveredBanner ? <DeliveredBanner {...deliveredBanner} /> : null}
           {bug.substatus === "requires_review" ? (
             <Link
-              href={issuePath(projectSlug, number, "/judge")}
+              href={issuePath(projectRef(org, projectSlug), number, "/judge")}
               className="inline-flex min-h-11 items-center justify-center rounded-full bg-zk-accent px-4 py-2 text-sm font-semibold text-white hover:bg-zk-accent/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zk-accent focus-visible:ring-offset-2"
             >
               Open Judge Workbench

@@ -289,9 +289,15 @@ async function reviewFix(
   // manager's review: there is no merge step for a threshold-only vote to
   // decide.
   const marketing = bug.track === "marketing";
-  const workbenchPassed = bug.substatus === "requires_review"
-    ? await hasPassedWorkbenchRound(prisma, bug.id)
-    : false;
+  const workbenchRound = bug.substatus === "requires_review"
+    ? await getWorkbenchRound(prisma, bug.id)
+    : null;
+  const workbenchPassed = Boolean(workbenchRound?.judgingState === "passed" && (
+    marketing || (workbenchRound.judgedHeadSha && workbenchRound.judgedHeadSha === bug.pullRequestHeadSha)
+  ));
+  if (!marketing && workbenchRound?.judgingState === "passed" && !workbenchPassed) {
+    return staleWorkbenchResult(workbenchRound.judgedHeadSha);
+  }
 
   // #vote-governance: a merge review is a manager's decision, or in a
   // threshold-only project one weighted vote among any independent agents'.
@@ -381,9 +387,10 @@ async function reviewFix(
           message: "This issue's fix has already been accepted.",
         };
       }
-      const currentWorkbenchPassed = current.substatus === "requires_review"
-        ? await hasPassedWorkbenchRound(tx, bug.id)
-        : false;
+      const currentWorkbench = current.substatus === "requires_review"
+        ? await getWorkbenchRound(tx, bug.id)
+        : null;
+      const currentWorkbenchPassed = Boolean(currentWorkbench?.judgingState === "passed");
       if (current.substatus !== "accepted" && !currentWorkbenchPassed) {
         return {
           status: 409,
@@ -474,10 +481,23 @@ async function reviewFix(
       todo: "Testers check the new commit and report again. Then the fix can be accepted.",
     };
   }
-  const headSha = acceptedHeadSha ?? reportedHead;
+  const headSha = workbenchPassed ? workbenchRound?.judgedHeadSha ?? null : acceptedHeadSha ?? reportedHead;
   const pullRequestUrl = bug.pullRequestUrl;
 
   return prisma.$transaction(async (tx) => {
+    await tx.$queryRaw`SELECT "id" FROM "Bug" WHERE "id" = ${bug.id} FOR UPDATE`;
+    const current = await tx.bug.findFirst({
+      where: { id: bug.id, tenantId: agent.tenantId, isDeleted: false },
+      select: { status: true, substatus: true, pullRequestHeadSha: true },
+    });
+    if (current?.substatus === "requires_review") {
+      const currentWorkbench = await getWorkbenchRound(tx, bug.id);
+      if (currentWorkbench?.judgingState === "passed" && (
+        !currentWorkbench.judgedHeadSha || currentWorkbench.judgedHeadSha !== current.pullRequestHeadSha
+      )) {
+        return staleWorkbenchResult(currentWorkbench.judgedHeadSha);
+      }
+    }
     // The accept: ready to merge, without resolving or awarding points.
     const saved = await saveMergeReview(tx, agent, bug, review, pullRequestUrl, headSha);
     // Threshold-only: the accept is a vote; only the one that reaches acceptThreshold moves the issue.
@@ -623,13 +643,25 @@ export async function countedReviewers(
   return countedMergeVerdicts(countable, claim, bug, bug.pullRequestHeadSha ?? null);
 }
 
-async function hasPassedWorkbenchRound(db: Prisma.TransactionClient | typeof prisma, bugId: string): Promise<boolean> {
+async function getWorkbenchRound(db: Prisma.TransactionClient | typeof prisma, bugId: string) {
   const delivery = await db.delivery.findFirst({
     where: { bugId },
     orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
-    select: { judgingState: true },
+    select: { judgingState: true, judgedHeadSha: true },
   });
-  return delivery?.judgingState === "passed";
+  return delivery;
+}
+
+function staleWorkbenchResult(judgedHeadSha: string | null) {
+  return {
+    status: 409 as const,
+    error: "not_ready" as const,
+    missing: "pull_request" as const,
+    message: judgedHeadSha
+      ? `The pull request head changed after the Judge Workbench approved ${judgedHeadSha.slice(0, 7)}.`
+      : "The Judge Workbench did not record a commit SHA for its approval.",
+    todo: "The author must re-deliver the current commit for fresh judging before this work can be reviewed.",
+  };
 }
 
 /**
@@ -1046,7 +1078,7 @@ async function rejectFix(agent: AgentContext, bug: LoadedBug, review: MergeRevie
         };
       }
       const currentWorkbenchPassed = current.substatus === "requires_review"
-        ? await hasPassedWorkbenchRound(tx, bug.id)
+        ? (await getWorkbenchRound(tx, bug.id))?.judgingState === "passed"
         : false;
       if (current.substatus !== "accepted" && !currentWorkbenchPassed) {
         return {

@@ -210,6 +210,7 @@ const judgeIssue = {
     id: "delivery1",
     judgingState: "open",
     judgingRound: 1,
+    headSha: "abc1234",
     pullRequestUrl: PR,
     summary: "Fixed save.",
     description: "Waits for the pending request.",
@@ -772,9 +773,12 @@ describe("structured judging rules", () => {
         },
       });
       expect(db.$queryRaw).toHaveBeenCalled();
+      expect(db.judgingVerdict.create).toHaveBeenCalledWith(expect.objectContaining({
+        data: expect.objectContaining({ headSha: "abc1234" }),
+      }));
       expect(db.delivery.update).toHaveBeenCalledWith({
         where: { id: "delivery1" },
-        data: { judgingState: "passed" },
+        data: { judgingState: "passed", judgedHeadSha: "abc1234" },
       });
     });
 

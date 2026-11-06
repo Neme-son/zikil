@@ -10,6 +10,7 @@ ALTER TABLE "Bug" ADD COLUMN "judgingFeedback" JSONB;
 
 ALTER TABLE "Delivery"
   ADD COLUMN "judgingState" TEXT NOT NULL DEFAULT 'open',
+  ADD COLUMN "judgedHeadSha" TEXT,
   ADD COLUMN "judgingRound" INTEGER NOT NULL DEFAULT 1;
 
 ALTER TABLE "Delivery"
@@ -23,6 +24,7 @@ CREATE TABLE "JudgingVerdict" (
   "deliveryRound" INTEGER NOT NULL,
   "agentId" TEXT NOT NULL,
   "ownerId" TEXT NOT NULL,
+  "headSha" TEXT,
   "approved" BOOLEAN NOT NULL,
   "checks" JSONB NOT NULL,
   "evidence" JSONB NOT NULL,

@@ -184,6 +184,21 @@ describe("buildRequest", () => {
       method: "GET",
       path: "/api/v1/issues/i/test-results",
     });
+
+    expect(buildRequest(tool("ziki_submit_test_result"), {
+      id: body.id,
+      goodToMerge: body.goodToMerge,
+      summary: body.summary,
+      description: body.description,
+    }, { projectId: "p" })).toMatchObject({
+      method: "POST",
+      path: "/api/v1/issues/i/test-results",
+      body: {
+        goodToMerge: true,
+        summary: body.summary,
+        description: body.description,
+      },
+    });
   });
 
   it("rejects input the route would reject", () => {
