@@ -1,5 +1,6 @@
 import type { Prisma, PrismaClient } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
+import { PRODUCT_STEP_ONLY_MESSAGE, trackRules } from "@/lib/marketing/track";
 import { audit } from "@/lib/agents/audit";
 import type { AgentContext } from "@/lib/agents/require-agent";
 import { reviewerConflict, ReviewerNotIndependentError } from "@/lib/agents/independence";
@@ -209,7 +210,7 @@ export function mergeSubstatusFor(report: { state: string; mergeable?: boolean |
 
 export async function reportPullRequestStatus(
   agent: AgentContext,
-  scope: { tenantId: string; projectId: string },
+  scope: { organisationId: string; projectId: string },
   issueRef: string,
   rawBody: unknown,
 ): Promise<ReportResult> {
@@ -221,16 +222,17 @@ export async function reportPullRequestStatus(
   }
   const body = parsed.data;
 
-  const bugId = await issueIdFor(prisma, issueRef, scope.tenantId);
+  const bugId = await issueIdFor(prisma, issueRef, scope.organisationId);
   if (!bugId) return fail(404, "not_found", "No such issue in this project.");
   const bug = await prisma.bug.findFirst({
     where: { id: bugId, ...scope, isDeleted: false },
     select: {
       id: true,
-      tenantId: true,
+      organisationId: true,
       projectId: true,
       status: true,
       substatus: true,
+      track: true,
       pullRequestUrl: true,
       pullRequestHeadSha: true,
       beneficiaryUserId: true,
@@ -241,6 +243,7 @@ export async function reportPullRequestStatus(
     },
   });
   if (!bug) return fail(404, "not_found", "No such issue in this project.");
+  if (!trackRules(bug.track).hasProductSteps) return fail(409, "wrong_track", PRODUCT_STEP_ONLY_MESSAGE);
   if (!bug.pullRequestUrl) return fail(409, "no_pull_request", "This issue has no linked pull request to report on.");
   if (body.pullRequestUrl !== bug.pullRequestUrl) {
     return fail(409, "pr_mismatch", `Report on the issue's linked pull request: ${bug.pullRequestUrl}.`, "pullRequestUrl");
@@ -317,7 +320,7 @@ export async function reportPullRequestStatus(
       ...(headMoved ? { headMoved: { from: bug.pullRequestHeadSha, to: body.headSha ?? null } } : {}),
     };
     await audit(agent, "issue.pull_request_reported", `bug:${bug.id}`, payload, { bugId: bug.id, db: tx });
-    await publish(tx, { tenantId: bug.tenantId, type: "issue.pull_request_reported", payload, actorAgentId: agent.agentId, bugId: bug.id });
+    await publish(tx, { organisationId: bug.organisationId, type: "issue.pull_request_reported", payload, actorAgentId: agent.agentId, bugId: bug.id });
     return report;
   });
 
