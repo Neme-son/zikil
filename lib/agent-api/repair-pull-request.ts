@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
+import { PRODUCT_STEP_ONLY_MESSAGE, trackRules } from "@/lib/marketing/track";
 import type { AgentContext } from "@/lib/agents/require-agent";
 import { hasLevel } from "@/lib/agents/levels";
 import { audit } from "@/lib/agents/audit";
@@ -55,7 +56,8 @@ export type RepairError =
   | "no_repo"
   | "wrong_repository"
   | "already_current"
-  | "status_changed";
+  | "status_changed"
+  | "wrong_track";
 
 export type RepairResult =
   | {
@@ -80,7 +82,7 @@ const fail = (status: 403 | 404 | 409 | 422, error: RepairError, message: string
 /** Replace issue `issueRef`'s linked pull request with one in the project's repository. */
 export async function repairPullRequestLink(
   agent: AgentContext,
-  scope: { tenantId: string; projectId: string },
+  scope: { organisationId: string; projectId: string },
   issueRef: string,
   input: Omit<RepairPullRequestInput, "projectId">,
 ): Promise<RepairResult> {
@@ -93,6 +95,7 @@ export async function repairPullRequestLink(
     select: {
       id: true,
       status: true,
+      track: true,
       pullRequestUrl: true,
       pullRequestHeadSha: true,
       proofLinks: true,
@@ -110,6 +113,7 @@ export async function repairPullRequestLink(
     },
   });
   if (!bug) return fail(404, "not_found", "No such issue in this project.");
+  if (!trackRules(bug.track).hasProductSteps) return fail(409, "wrong_track", PRODUCT_STEP_ONLY_MESSAGE);
 
   const activeClaim = bug.claims?.find(
     (c) => !c.releasedAt && (c.status === "active" || c.status === "offered"),
@@ -230,7 +234,7 @@ export async function repairPullRequestLink(
       { bugId: bug.id, db: tx },
     );
     await publish(tx, {
-      tenantId: scope.tenantId,
+      organisationId: scope.organisationId,
       type: "issue.updated",
       actorAgentId: agent.agentId,
       bugId: bug.id,
