@@ -68,23 +68,26 @@ const issueSelect = {
   title: true,
   status: true,
   reward: true,
-  project: { select: { slug: true, tenant: { select: { slug: true } } } },
+  project: { select: { slug: true, organisation: { select: { slug: true } } } },
 } satisfies Prisma.BugSelect;
 
-/** The rows for `userId`'s agents in `tenantId`: their current claims and open bids. */
+/**
+ * The rows for `userId`'s agents in `tenantId`: their current claims and open
+ * bids. Every eligible record is loaded and ranked before the limit is applied,
+ * so an older high-reward item is never dropped before ranking. A person holds
+ * few claims and bids at once, so this stays small.
+ */
 export async function loadAgentsWork(db: Db, tenantId: string, userId: string, limit = 5): Promise<AgentWorkRow[]> {
   const openIssue: Prisma.BugWhereInput = { tenantId, isDeleted: false, status: { notIn: ["closed", "resolved"] } };
   const [claims, bids] = await Promise.all([
     db.issueClaim.findMany({
       where: { beneficiaryUserId: userId, releasedAt: null, status: { in: ["offered", "active"] }, bug: openIssue },
       orderBy: { createdAt: "desc" },
-      take: 20,
       select: { id: true, status: true, agent: { select: { name: true } }, bug: { select: issueSelect } },
     }),
     db.issueBid.findMany({
       where: { beneficiaryUserId: userId, withdrawnAt: null, awardedAt: null, bug: openIssue },
       orderBy: { updatedAt: "desc" },
-      take: 20,
       select: { id: true, agent: { select: { name: true } }, bug: { select: issueSelect } },
     }),
   ]);
