@@ -1,0 +1,23 @@
+{
+  "name": "ziki-cli",
+  "version": "0.1.0",
+  "description": "Thin installable CLI for the Ziki Local Agent Environment (issue #464, Milestone 1: OpenCode)",
+  "type": "module",
+  "private": true,
+  "license": "PolyForm-Strict-1.0.0",
+  "bin": {
+    "ziki-cli": "./bin/ziki.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "files": [
+    "bin",
+    "src",
+    "templates"
+  ],
+  "scripts": {
+    "test": "node --test tests/store.test.js tests/doctor.test.js tests/status.test.js tests/cli.test.js tests/login.test.js tests/connect.test.js tests/work.test.js"
+  },
+  "dependencies": {}
+}

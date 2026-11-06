@@ -1,0 +1,161 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { runDoctor } from "./commands/doctor.js";
+import { renderStatus } from "./commands/status.js";
+import { cmdLogin } from "./commands/login.js";
+import { connectProject } from "./commands/connect.js";
+import { cmdWork } from "./commands/work.js";
+import { resolveConfigPath, loadConfig, apiFetch } from "./config/store.js";
+
+const HELP = `ziki-cli — thin client for the Ziki Local Agent Environment
+
+Usage: ziki-cli <command> [options]
+
+Commands:
+  login           pair this machine with a Ziki account (localhost only in M1)
+  connect         link the current repository to a Ziki project
+  setup-opencode  install the OpenCode adapter (plan first, write on approval)
+  work            show your agent's current Ziki work
+  status          show identity, project, work gate and readiness
+  doctor          check the local environment
+  sync            refresh managed files to the installed versions
+  help            show this text
+`;
+
+function pairingFileState() {
+  const configPath = resolveConfigPath();
+  try {
+    const stat = fs.statSync(configPath);
+    return { exists: stat.isFile(), path: configPath };
+  } catch {
+    return { exists: false, path: configPath };
+  }
+}
+
+function opencodeConfigState() {
+  const configPath = path.join(os.homedir(), ".config", "opencode", "opencode.json");
+  try {
+    return { exists: fs.statSync(configPath).isFile(), path: configPath };
+  } catch {
+    return { exists: false, path: configPath };
+  }
+}
+
+async function cmdDoctor() {
+  const pairing = pairingFileState();
+  let serverUrl = "http://localhost:3001";
+  if (pairing.exists) {
+    try {
+      serverUrl = loadConfig(pairing.path).url ?? serverUrl;
+    } catch {
+      // A broken pairing file is itself a finding; doctor keeps going.
+    }
+  }
+  const report = await runDoctor({
+    nodeVersion: process.version,
+    pairingFile: pairing,
+    platform: process.platform,
+    fetchImpl: globalThis.fetch,
+    serverUrl,
+    opencodeConfig: opencodeConfigState(),
+  });
+  const lines = report.checks.map((c) => `${c.ok ? (c.warning ? "warn" : "pass") : "FAIL"} ${c.name}: ${c.detail}`);
+  return { code: report.ok ? 0 : 1, text: `${lines.join("\n")}\n` };
+}
+
+async function cmdStatus() {
+  const configPath = resolveConfigPath();
+  let config;
+  try {
+    config = loadConfig(configPath);
+  } catch (error) {
+    return { code: 1, text: `${error.message}\n` };
+  }
+  let res;
+  try {
+    res = await apiFetch(config, "/api/v1/agents/me", {});
+  } catch (error) {
+    return { code: 1, text: `server unreachable: ${error.message || error}\n` };
+  }
+  if (res.ok !== true) {
+    return { code: 1, text: `server answered ${res.status}\n` };
+  }
+  return { code: 0, text: renderStatus(await res.json()) };
+}
+
+function flagValue(argv, names) {
+  for (let i = 0; i < argv.length; i += 1) {
+    if (names.includes(argv[i]) && i + 1 < argv.length) {
+      return argv[i + 1];
+    }
+  }
+  return undefined;
+}
+
+function hasFlag(argv, names) {
+  return argv.some((a) => names.includes(a));
+}
+
+async function cmdConnect(argv) {
+  const selector = flagValue(argv, ["--project", "-p"]);
+  if (!selector) {
+    return { code: 2, text: "connect needs --project <slug-or-id>\n" };
+  }
+  let config;
+  try {
+    config = loadConfig(resolveConfigPath());
+  } catch (error) {
+    return { code: 1, text: `${error.message}\n` };
+  }
+  try {
+    const pointer = await connectProject(config, selector, {
+      cwd: process.cwd(),
+      fetchImpl: globalThis.fetch,
+      force: hasFlag(argv, ["--force"]),
+    });
+    return { code: 0, text: `linked to ${pointer.projectSlug ?? pointer.projectId} (org: ${pointer.org ?? "?"})\n` };
+  } catch (error) {
+    return { code: 1, text: `${error.message}\n` };
+  }
+}
+
+export async function run(argv, _ctx) {
+  const [name, ...rest] = argv;
+  switch (name) {
+    case undefined:
+    case "help":
+    case "--help":
+    case "-h":
+      return { code: 0, text: HELP };
+    case "doctor":
+      return cmdDoctor();
+    case "status":
+      return cmdStatus();
+    case "login": {
+      const server = flagValue(rest, ["--server"]) ?? "http://localhost:3001";
+      try {
+        return cmdLogin({
+          server,
+          name: flagValue(rest, ["--name", "-n"]),
+          open: !hasFlag(rest, ["--no-open"]),
+        });
+      } catch (error) {
+        return { code: 1, text: `${error.message}\n` };
+      }
+    }
+    case "connect":
+      return cmdConnect(rest);
+    case "work":
+      try {
+        return cmdWork();
+      } catch (error) {
+        return { code: 1, text: `${error.message}\n` };
+      }
+    case "setup-opencode":
+    case "sync":
+      return { code: 3, text: `${name}: not implemented yet in this milestone slice\n` };
+    default:
+      return { code: 2, text: `unknown command: ${name}\n\n${HELP}` };
+  }
+}
