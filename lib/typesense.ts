@@ -1,7 +1,7 @@
 import "server-only";
 import Typesense, { type Client } from "typesense";
 
-export const WORK_ITEMS_COLLECTION = "ziki_work_items_v1";
+export const WORK_ITEMS_COLLECTION = "ziki_work_items_v2";
 
 export type WorkItemDocument = {
   id: string;
@@ -18,7 +18,6 @@ export type WorkItemDocument = {
   substatus?: string;
   substatusOrder: number;
   typeId?: string;
-  categoryId?: string;
   areaId?: string;
   milestoneId?: string;
   reporterId?: string;
@@ -26,7 +25,6 @@ export type WorkItemDocument = {
   createdByAgentId?: string;
   duplicateOfId?: string;
   hasType: boolean;
-  hasCategory: boolean;
   hasArea: boolean;
   hasMilestone: boolean;
   hasAssignee: boolean;
@@ -59,7 +57,6 @@ export const WORK_ITEMS_SCHEMA = {
     { name: "substatus", type: "string", facet: true, optional: true },
     { name: "substatusOrder", type: "int32", sort: true },
     { name: "typeId", type: "string", facet: true, optional: true },
-    { name: "categoryId", type: "string", facet: true, optional: true },
     { name: "areaId", type: "string", facet: true, optional: true },
     { name: "milestoneId", type: "string", facet: true, optional: true },
     { name: "reporterId", type: "string", facet: true, optional: true },
@@ -67,7 +64,6 @@ export const WORK_ITEMS_SCHEMA = {
     { name: "createdByAgentId", type: "string", facet: true, optional: true },
     { name: "duplicateOfId", type: "string", facet: true, optional: true },
     { name: "hasType", type: "bool", facet: true },
-    { name: "hasCategory", type: "bool", facet: true },
     { name: "hasArea", type: "bool", facet: true },
     { name: "hasMilestone", type: "bool", facet: true },
     { name: "hasAssignee", type: "bool", facet: true },

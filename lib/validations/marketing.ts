@@ -14,6 +14,13 @@ const httpUrl = z
   .max(2048)
   .refine((value) => /^https?:\/\/\S+$/i.test(value), "Enter a full http or https link.");
 
+/** The finished work as Markdown, shown as a file. Longer work goes in an uploaded file. */
+export const deliverableText = z
+  .string()
+  .trim()
+  .min(1, "The delivered work is empty.")
+  .max(50_000, "Keep the delivered work to 50,000 characters or fewer, or attach it as a file.");
+
 /** What a marketing idea needs on top of an ordinary idea: why it is worth doing. */
 export const marketingIdeaFieldsSchema = z.object({
   track: z.literal("marketing"),
@@ -21,8 +28,8 @@ export const marketingIdeaFieldsSchema = z.object({
 });
 
 /**
- * A marketing delivery: links and files to the finished work, with no pull
- * request. Strict, so a pull request is refused. At least one link or file is
+ * A marketing delivery: the finished work as Markdown, links or files, with no
+ * pull request. Strict, so a pull request is refused. At least one of them is
  * required (docs/ziki-for-agents.md, "Delivering marketing work").
  */
 export const marketingDeliveryBodySchema = z
@@ -31,15 +38,35 @@ export const marketingDeliveryBodySchema = z
     summary: entrySummary,
     /** What was made, how it was checked, and anything left open. */
     description: entryDescription,
+    deliverableText: deliverableText.optional(),
     deliverableUrls: z.array(httpUrl).max(20).optional(),
     attachmentIds: z.array(z.string().trim().min(1).max(191)).max(MAX_ATTACHMENTS_PER_ITEM).optional(),
     screenshots: z.array(z.string().trim().min(1).max(2048)).max(20).optional(),
   })
   .strict()
-  .refine((body) => (body.deliverableUrls?.length ?? 0) + (body.attachmentIds?.length ?? 0) > 0, {
-    message: "Link to the finished work or attach a file.",
+  .refine((body) => Boolean(body.deliverableText) || (body.deliverableUrls?.length ?? 0) + (body.attachmentIds?.length ?? 0) > 0, {
+    message: "Include the finished work as Markdown, a link or a file.",
     path: ["deliverableUrls"],
   });
+
+const briefText = (label: string, max: number) =>
+  z.string().trim().max(max, `Keep the ${label} to ${max} characters or fewer.`).default("");
+
+/** The project brief (M-API-8). A field left blank is stored as nothing, not as empty text. */
+export const projectBriefSchema = z
+  .object({
+    product: briefText("product", 600),
+    audience: briefText("audience", 300),
+    currentFocus: briefText("current focus", 600),
+    outOfScope: briefText("out of scope", 600),
+  })
+  .strict()
+  .transform((brief) => ({
+    product: brief.product || null,
+    audience: brief.audience || null,
+    currentFocus: brief.currentFocus || null,
+    outOfScope: brief.outOfScope || null,
+  }));
 
 /** Settings for marketing workflow (M-API-6): revision limit before reopening for bids. */
 export const updateMarketingSettingsSchema = z

@@ -20,18 +20,16 @@ export type MarketingSettingsData = {
   /** Workspace owners and admins manage the settings; members read them. */
   canManage: boolean;
   types: MarketingTaskType[];
+  brief: MarketingBrief;
 };
 
 /**
- * The project brief, in the shape the agent contract promises
- * (docs/ziki-for-agents.md, "The project brief"): fields agents read on
- * `GET /api/v1/agents/me` and in the marketing feed. Storage arrives with the
- * brief API (M-API-8); until then the form keeps its values in this browser.
+ * The project brief as the form edits it, with blanks as empty text. Agents read
+ * it on `GET /api/v1/agents/me` and in the marketing feed (M-API-8).
  */
 export type MarketingBrief = {
   product: string;
   audience: string;
-  website: string;
   currentFocus: string;
   outOfScope: string;
 };

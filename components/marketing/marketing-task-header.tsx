@@ -3,7 +3,7 @@ import Link from "next/link";
 import { formatIssueNumber } from "@/lib/issue-number";
 import { LocalTime } from "@/components/local-time";
 import { statusLabels } from "@/lib/labels";
-import { marketingPath } from "@/lib/project-paths";
+import { marketingPath, type ProjectRef } from "@/lib/project-paths";
 import type { Status, Substatus } from "@prisma/client";
 
 export type MarketingTaskHeaderProps = {
@@ -16,7 +16,7 @@ export type MarketingTaskHeaderProps = {
   reward?: number | null;
   revisionCount: number;
   maxRevisions: number;
-  projectSlug: string;
+  projectSlug: ProjectRef;
   projectName?: string;
   projectFocus?: string | null;
   projectSiteUrl?: string | null;

@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import localFont from "next/font/local";
+import { ConsentBanner } from "@/components/consent-banner";
 import { getSiteUrl } from "@/lib/site-url";
 import { SHARE_IMAGE } from "@/lib/share-image";
 import { ConfirmProvider } from "@/components/ui/confirm-dialog";
@@ -9,6 +10,7 @@ import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
 import { ThemePreference } from "@/components/theme-toggle";
 import { THEME_COOKIE, parseTheme, themeAttribute, type Theme } from "@/lib/theme";
+import { OnScreenGuide } from "@/components/support-guide/on-screen-guide";
 import "./globals.css";
 
 // Fonts are self-hosted from app/fonts (latin, variable woff2) so the build
@@ -42,7 +44,8 @@ export const metadata: Metadata = {
     default: "Ziki",
     template: "%s · Ziki",
   },
-  description: "Ziki issue tracking interface — HNG15 mini-project",
+  description:
+    "Ziki is where people and AI agents build software together: ideas become issues, agents bid, deliver and get reviewed, and people stay in control.",
   alternates: {
     types: {
       "text/plain": [{ url: "/llms.txt", title: "LLM Integration Documentation" }],
@@ -99,9 +102,14 @@ export default async function RootLayout({
         */}
         <ThemePreference theme={theme}>
           <ToastProvider>
-            <ConfirmProvider>{children}</ConfirmProvider>
+            <ConfirmProvider>
+              {children}
+              <OnScreenGuide />
+            </ConfirmProvider>
           </ToastProvider>
         </ThemePreference>
+        {/* The cookie banner, and Google Tag Manager (GTM-5TNDKX33) behind it: it loads only once a visitor accepts. */}
+        <ConsentBanner />
       </body>
     </html>
   );

@@ -257,13 +257,13 @@ export async function pollInbox(
   }
 }
 
-/** The address of each item's issue, `/<project-slug>/<number>` (#project-urls), by issue id. */
+/** The address of each item's issue, `/<org>/<project>/<number>` (#project-urls), by issue id. */
 export async function inboxIssuePaths(items: readonly InboxItemRow[]): Promise<Map<string, string>> {
   const ids = [...new Set(items.map((item) => item.bugId).filter((id): id is string => Boolean(id)))];
   if (ids.length === 0) return new Map();
   const bugs = await prisma.bug.findMany({
     where: { id: { in: ids } },
-    select: { id: true, number: true, project: { select: { slug: true } } },
+    select: { id: true, number: true, project: { select: { slug: true, tenant: { select: { slug: true } } } } },
   });
   return new Map(bugs.map((bug) => [bug.id, issueHref(bug)]));
 }
@@ -315,7 +315,7 @@ export async function markInboxRead(
   const readAt = new Date();
   if ("ids" in input) {
     const { count } = await prisma.agentInboxItem.updateMany({
-      where: { agentId: agent.agentId, id: { in: input.ids }, readAt: null },
+      where: { agentId: agent.agentId, id: { in: input.ids }, readAt: null, NOT: { eventType: "agent.steer" } },
       data: { readAt },
     });
     if (count) await markMessagesRead(agent.agentId, readAt);
@@ -330,6 +330,7 @@ export async function markInboxRead(
     where: {
       agentId: agent.agentId,
       readAt: null,
+      NOT: { eventType: "agent.steer" },
       OR: [{ createdAt: { lt: anchor.createdAt } }, { createdAt: anchor.createdAt, id: { lte: anchor.id } }],
     },
     data: { readAt },

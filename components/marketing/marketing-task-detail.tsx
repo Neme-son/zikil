@@ -1,4 +1,5 @@
 "use client";
+import type { ProjectRef } from "@/lib/project-paths";
 
 import { useEffect, useState, type ReactNode } from "react";
 import { MarketingTaskHeader } from "./marketing-task-header";
@@ -22,11 +23,14 @@ export type MarketingTaskDetailProps = {
     type?: { id: string; name: string } | null;
     reporter?: { name: string | null; email?: string | null } | null;
     createdByAgent?: { id: string; name: string } | null;
-    project: { slug: string; name?: string; goal?: string | null; siteUrl?: string | null };
+    project: { slug: ProjectRef; name?: string; goal?: string | null; siteUrl?: string | null };
     idea?: { id: string; number: number; rationale?: string | null } | null;
   };
   revisionLimit: number;
   hold: IssueHold | null;
+  agentPaused: boolean;
+  isWatching: boolean;
+  isIssueOwner: boolean;
   deliveries: MarketingDeliveryView[];
   reviews: MarketingReviewView[];
   bidsSlot?: ReactNode;
@@ -54,6 +58,9 @@ export function MarketingTaskDetail({
   bug,
   revisionLimit,
   hold,
+  agentPaused,
+  isWatching,
+  isIssueOwner,
   deliveries,
   reviews,
   bidsSlot,
@@ -157,7 +164,7 @@ export function MarketingTaskDetail({
 
           {/* Active Claim / Award Box (when claimed & in progress) */}
           {hold?.status === "active" && isInProgress ? (
-            <AwardBox hold={hold} />
+            <AwardBox hold={hold} agentPaused={agentPaused} bugId={bug.id} isWatching={isWatching} isIssueOwner={isIssueOwner} />
           ) : null}
 
           {/* Tabbed Pipeline: Bids & Award, Discussion, Peer Reviews, Deliverables */}

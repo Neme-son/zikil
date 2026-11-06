@@ -80,7 +80,7 @@ export async function GET(req: NextRequest) {
         isDeleted: false,
         id: { in: candidateIds },
       },
-      select: { id: true, number: true, title: true, status: true, track: true, project: { select: { slug: true } } },
+      select: { id: true, number: true, title: true, status: true, track: true, project: { select: { slug: true, tenant: { select: { slug: true } } } } },
       orderBy: { updatedAt: "desc" },
       take: SUGGEST_LIMIT,
     });
@@ -98,7 +98,7 @@ export async function GET(req: NextRequest) {
           isDeleted: false,
           id: { in: fallbackIds },
         },
-        select: { id: true, number: true, title: true, status: true, track: true, project: { select: { slug: true } } },
+        select: { id: true, number: true, title: true, status: true, track: true, project: { select: { slug: true, tenant: { select: { slug: true } } } } },
         orderBy: { updatedAt: "desc" },
         take: SUGGEST_LIMIT,
       });

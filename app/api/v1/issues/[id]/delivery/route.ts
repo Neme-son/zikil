@@ -15,8 +15,8 @@ export const runtime = "nodejs";
  *     "description": "…",      // what changed, how it was checked
  *     "screenshots": ["…"], "testResults": "…" }   // at least one
  *
- * Marketing work has no pull request: it sends `deliverableUrls` and/or
- * `attachmentIds` instead, with a `summary`, a `description` and optional
+ * Marketing work has no pull request: it sends `deliverableText`,
+ * `deliverableUrls` and/or `attachmentIds` instead, with a `summary`, a `description` and optional
  * `screenshots` (docs/marketing-migration-plan.md, M-API-3).
  *
  * 201 with the delivery; delivering again replaces it (200, `replaced`). The

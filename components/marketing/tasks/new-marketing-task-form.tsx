@@ -1,7 +1,8 @@
 "use client";
 
-import { useId, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useId, useState, useTransition } from "react";
+import { unstable_rethrow, useRouter } from "next/navigation";
+import { createBugAction } from "@/app/actions/issues";
 import { MarkdownEditor } from "@/components/markdown-editor";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -11,8 +12,6 @@ import { Textarea } from "@/components/ui/textarea";
 const TITLE_MAX = 200;
 const DESCRIPTION_MAX = 5000;
 const RATIONALE_MAX = 2000;
-
-export const NOT_SAVED_NOTICE = "This form isn't connected yet, so your proposal hasn't been saved.";
 
 function FieldLabel({ htmlFor, id, children }: { htmlFor: string; id?: string; children: string }) {
   return (
@@ -33,15 +32,17 @@ function Counter({ value, max }: { value: number; max: number }) {
 /**
  * The fields a marketing proposal needs (plan M-UI-3): title, description, task
  * type and rationale. There are no points, because pay comes from each task's
- * own reward (D5). Submitting saves nothing yet, and the form says so.
+ * own reward (D5). Saving files a marketing idea in this project, then the
+ * action opens its page.
  */
-export function NewMarketingTaskForm({ types }: { types: { id: string; name: string }[] }) {
+export function NewMarketingTaskForm({ projectId, types }: { projectId: string; types: { id: string; name: string }[] }) {
   const router = useRouter();
   const uid = useId();
   const [title, setTitle] = useState("");
   const [rationale, setRationale] = useState("");
   const [description, setDescription] = useState("");
-  const [notice, setNotice] = useState("");
+  const [error, setError] = useState("");
+  const [isPending, startTransition] = useTransition();
 
   const ids = {
     title: `${uid}-title`,
@@ -57,7 +58,21 @@ export function NewMarketingTaskForm({ types }: { types: { id: string; name: str
       className="space-y-7 rounded-3xl border border-zk-border bg-zk-surface p-6 sm:p-8"
       onSubmit={(event) => {
         event.preventDefault();
-        setNotice(NOT_SAVED_NOTICE);
+        const formData = new FormData(event.currentTarget);
+        formData.set("track", "marketing");
+        formData.set("projectId", projectId);
+        formData.set("description", description);
+        setError("");
+        startTransition(async () => {
+          try {
+            const result = await createBugAction(formData);
+            if (result.error) setError(result.error);
+          } catch (failure) {
+            // The action redirects to the new idea, which arrives here as a throw.
+            unstable_rethrow(failure);
+            setError("Your idea couldn't be sent. Check your connection and try again.");
+          }
+        });
       }}
     >
       <div>
@@ -138,14 +153,16 @@ export function NewMarketingTaskForm({ types }: { types: { id: string; name: str
         />
       </div>
 
-      {notice ? (
-        <p role="status" className="text-sm text-zk-text2">
-          {notice}
+      {error ? (
+        <p role="alert" className="text-sm font-medium text-zk-bad-fg">
+          {error}
         </p>
       ) : null}
 
       <div className="flex flex-wrap items-center gap-3">
-        <Button type="submit" disabled={types.length === 0}>Propose task</Button>
+        <Button type="submit" disabled={types.length === 0 || isPending}>
+          {isPending ? "Proposing…" : "Propose task"}
+        </Button>
         <Button type="button" variant="ghost" className="ml-auto" onClick={() => router.back()}>
           Cancel
         </Button>

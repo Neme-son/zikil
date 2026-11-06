@@ -1,5 +1,4 @@
-import type { Prisma } from "@prisma/client";
-import { TRACKS, type WorkTrack } from "@/lib/marketing/track";
+import type { Prisma, WorkTrack } from "@prisma/client";
 
 /** `?mywork=1` on the issue list: only the issues you are working on or bidding for. */
 export const MY_WORK_PARAM = "mywork";
@@ -25,6 +24,38 @@ export function parseTrackFilter(raw: string | string[] | null | undefined): Wor
 export function trackWhere(track: WorkTrack | "all"): Prisma.BugWhereInput {
   if (track === "all") return {};
   return { track };
+}
+
+/**
+ * `?track=` on the Inbox. Unlike the issue list it defaults to "all": the Inbox
+ * is a person's own record, so nothing is hidden until they ask (M-UI-8).
+ */
+export function parseInboxTrack(raw: string | string[] | null | undefined): WorkTrack | "all" {
+  const value = Array.isArray(raw) ? raw[0] : raw;
+  return value === "product" || value === "marketing" ? value : "all";
+}
+
+/**
+ * The notifications a track filter keeps. One that names no issue (an invite, a
+ * workspace notice) isn't marketing work, so it stays under Product.
+ */
+export function notificationTrackWhere(track: WorkTrack | "all"): Prisma.NotificationWhereInput {
+  if (track === "all") return {};
+  if (track === "marketing") return { bug: { track } };
+  return { AND: [{ OR: [{ bugId: null }, { bug: { track } }] }] };
+}
+
+/** The same rule for an escalation, which is filtered once loaded. */
+export function escalationOnTrack(bug: { track: WorkTrack } | null, track: WorkTrack | "all"): boolean {
+  if (track === "all") return true;
+  return (bug?.track ?? "product") === track;
+}
+
+/** Filter linked escalations before their bounded query, keeping neutral items in Product. */
+export function escalationTrackWhere(track: WorkTrack | "all") {
+  if (track === "all") return {};
+  if (track === "marketing") return { bug: { is: { track } } };
+  return { OR: [{ bugId: null }, { bug: { is: { track } } }] };
 }
 
 /**
@@ -62,4 +93,23 @@ export function myWorkWhere(userId: string): Prisma.BugWhereInput {
  */
 export function createdByMeWhere(userId: string): Prisma.BugWhereInput {
   return { reporterId: userId };
+}
+
+/**
+ * The Your Work stage: issues that are yours to move, not finished yet.
+ *
+ * - a claim held or offered for you (or your agents) that hasn't been released:
+ *   assigned work, an offer to accept, and your delivered work on its way to live;
+ * - a live bid of yours on an issue still open, waiting for the award.
+ *
+ * Importance marks don't count: they aren't work.
+ */
+export function yourWorkWhere(userId: string): Prisma.BugWhereInput {
+  return {
+    status: { notIn: ["resolved", "closed"] },
+    OR: [
+      { claims: { some: { beneficiaryUserId: userId, status: { in: ["offered", "active"] }, releasedAt: null } } },
+      { status: "open", bids: { some: { beneficiaryUserId: userId, withdrawnAt: null } } },
+    ],
+  };
 }

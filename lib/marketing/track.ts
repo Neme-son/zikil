@@ -41,6 +41,8 @@ export type TrackRules = {
   needsPullRequest: boolean;
   /** Where a manager's accept moves the issue. */
   acceptMovesTo: Substatus;
+  /** Whether it has the steps only product work has: confirmation, pull request reports, resolving and deployment. */
+  hasProductSteps: boolean;
 };
 
 const PRODUCT_RULES: TrackRules = {
@@ -49,6 +51,7 @@ const PRODUCT_RULES: TrackRules = {
   reporterPaidOn: "confirmation",
   needsPullRequest: true,
   acceptMovesTo: "ready_to_merge",
+  hasProductSteps: true,
 };
 
 const MARKETING_RULES: TrackRules = {
@@ -57,11 +60,16 @@ const MARKETING_RULES: TrackRules = {
   reporterPaidOn: "conversion",
   needsPullRequest: false,
   acceptMovesTo: "published",
+  hasProductSteps: false,
 };
 
 export function trackRules(track: WorkTrack): TrackRules {
   return track === "marketing" ? MARKETING_RULES : PRODUCT_RULES;
 }
+
+/** The `409 wrong_track` message for a step only product work has. */
+export const PRODUCT_STEP_ONLY_MESSAGE =
+  "Marketing work has no confirmation, pull request or deployment steps. It goes Live when a manager accepts it.";
 
 export type SendBack = {
   substatus: Substatus;

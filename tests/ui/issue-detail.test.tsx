@@ -7,15 +7,19 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 /** The issue page's stage panels: bids with their votes and the Award control only where it may be used, confirmations and their banner, and judgements and merge reviews with their replies. */
 const mocks = vi.hoisted(() => ({ addComment: vi.fn() }));
 const libraryRefresh = vi.hoisted(() => vi.fn());
-vi.mock("@/app/(app)/[project]/marketing/library/actions", () => ({ refreshLibrary: libraryRefresh }));
+vi.mock("@/app/(app)/[org]/[project]/marketing/output-box/actions", () => ({ refreshLibrary: libraryRefresh }));
 vi.mock("next/navigation", () => ({
   useSearchParams: () => new URLSearchParams(window.location.search),
-  useRouter: () => ({ push: vi.fn(), refresh: vi.fn() }),
-  useParams: () => ({ project: "demo" }),
+  useRouter: () => ({ push: vi.fn(), refresh: vi.fn(), replace: vi.fn() }),
+  useParams: () => ({ org: "acme", project: "demo" }),
+  usePathname: () => "/demo/1",
 }));
 vi.mock("@/app/actions/issues", () => ({ addCommentAction: mocks.addComment }));
 vi.mock("@/app/actions/issue-bids", () => ({ awardIssueBidAction: vi.fn() }));
 vi.mock("@/app/actions/confirmations", () => ({ giveConfirmationAction: vi.fn() }));
+vi.mock("@/app/actions/watch", () => ({ setWatchingAction: vi.fn() }));
+const decisionActions = vi.hoisted(() => ({ respond: vi.fn(async () => ({ ok: true as const })), agree: vi.fn(async () => ({ ok: true as const })) }));
+vi.mock("@/app/actions/your-decision", () => ({ respondToCloseAction: decisionActions.respond, agreeWithCloseAction: decisionActions.agree }));
 
 import { MergeReviewsPanel, TestVerdictsPanel, type MergeReviewView, type TestVerdictView } from "@/components/issue-review-entries";
 import { IssueBidsPanel, type BidEntryView } from "@/components/issue-bids";
@@ -25,6 +29,9 @@ import { deliveryFiles, filterLibrary, type LibraryItem } from "@/components/mar
 import { MarketingTaskHeader } from "@/components/marketing/marketing-task-header";
 import { MarketingDeliverablesPanel, type MarketingDeliveryView } from "@/components/marketing/marketing-deliverables-panel";
 import { MarketingTaskDetail } from "@/components/marketing/marketing-task-detail";
+import { projectRef } from "@/lib/project-paths";
+import { DecisionCard } from "@/components/decision-card";
+import { decisionFor, type DecisionIssue, type DecisionSuggestion } from "@/lib/your-decision";
 
 const PR = "https://github.com/emerjent/ziki/pull/42";
 
@@ -79,27 +86,29 @@ describe("Library approved deliverables", () => {
     expect(filterLibrary(items, "#38", "Articles", false).map((item) => item.id)).toEqual(["article"]);
     expect(filterLibrary(items, "Studio", "Videos", false)).toEqual([]);
     expect(filterLibrary(items, "", "All", true).map((item) => item.id)).toEqual(["article", "launch"]);
+    const written = [{ ...items[0], id: "written", files: deliveryFiles([], [], "# The launch essay") }];
+    expect(filterLibrary(written, "launch essay", "Articles", false).map((item) => item.id)).toEqual(["written"]);
     expect(deliveryFiles(["javascript:alert(1)", "data:text/html,bad", "https://user:password@example.com/file", "/api/attachments/unrelated"])).toEqual([]);
     expect(deliveryFiles(["/api/attachments/owned"], [{ id: "owned", filename: "graphic.png", contentType: "image/png", size: 20 }])).toEqual([expect.objectContaining({ name: "graphic.png", local: true, kind: "Graphics" })]);
   });
 
   it("switches attachments and updates actions without changing the associated task", async () => {
     const user = userEvent.setup();
-    const view = render(<Library slug="demo" projectName="Demo" initial={{ ok: true, items }} />);
+    const view = render(<Library slug={projectRef("acme", "demo")} projectName="Demo" initial={{ ok: true, items }} />);
     await user.click(screen.getByRole("button", { name: "guide.docx" }));
-    view.rerender(<Library slug="demo" projectName="Demo" initial={{ ok: true, items }} />);
+    view.rerender(<Library slug={projectRef("acme", "demo")} projectName="Demo" initial={{ ok: true, items }} />);
     expect(screen.getByRole("link", { name: /Open original/ })).toHaveAttribute("href", "https://example.com/guide.docx");
-    expect(screen.getByRole("link", { name: /View task #42/ })).toHaveAttribute("href", "/demo/42");
+    expect(screen.getByRole("link", { name: /View task #42/ })).toHaveAttribute("href", "/acme/demo/42");
     expect(screen.getByRole("button", { name: /Download/ })).toBeEnabled();
     await user.click(screen.getByRole("button", { name: /Agent workflow.*Task #38/ }));
-    view.rerender(<Library slug="demo" projectName="Demo" initial={{ ok: true, items }} />);
+    view.rerender(<Library slug={projectRef("acme", "demo")} projectName="Demo" initial={{ ok: true, items }} />);
     expect(screen.getByRole("link", { name: /Open original/ })).toHaveAttribute("href", "https://example.com/blog/workflow");
     expect(screen.queryByRole("button", { name: /Download/ })).not.toBeInTheDocument();
   });
 
   it("keeps everything typed in search while the URL catches up", async () => {
     const user = userEvent.setup();
-    render(<Library slug="demo" projectName="Demo" initial={{ ok: true, items }} />);
+    render(<Library slug={projectRef("acme", "demo")} projectName="Demo" initial={{ ok: true, items }} />);
     const search = screen.getByRole("searchbox", { name: "Search approved work" });
     await user.type(search, "workflow");
     expect(search).toHaveValue("workflow");
@@ -109,24 +118,24 @@ describe("Library approved deliverables", () => {
 
   it("retries only a failed preview and keeps task access available", async () => {
     const user = userEvent.setup();
-    render(<Library slug="demo" projectName="Demo" initial={{ ok: true, items }} />);
+    render(<Library slug={projectRef("acme", "demo")} projectName="Demo" initial={{ ok: true, items }} />);
     fireEvent.error(screen.getByRole("img", { name: /Launch campaign/ }));
     await user.click(screen.getByRole("button", { name: "Retry preview" }));
     expect(screen.getByRole("img", { name: /Launch campaign/ })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /View task #42/ })).toHaveAttribute("href", "/demo/42");
+    expect(screen.getByRole("link", { name: /View task #42/ })).toHaveAttribute("href", "/acme/demo/42");
     expect(libraryRefresh).not.toHaveBeenCalled();
   });
 
   it("retains results on refresh failure and recovers from an initial collection error", async () => {
     const user = userEvent.setup();
     libraryRefresh.mockResolvedValue({ ok: false });
-    const view = render(<Library slug="demo" projectName="Demo" initial={{ ok: true, items }} />);
+    const view = render(<Library slug={projectRef("acme", "demo")} projectName="Demo" initial={{ ok: true, items }} />);
     await user.click(screen.getByRole("button", { name: "Refresh" }));
     expect(await screen.findByRole("alert")).toHaveTextContent(/previous results/);
     expect(screen.getByRole("link", { name: /View task #42/ })).toBeInTheDocument();
     view.unmount();
     libraryRefresh.mockResolvedValue({ ok: true, items });
-    render(<Library slug="demo" projectName="Demo" initial={{ ok: false }} />);
+    render(<Library slug={projectRef("acme", "demo")} projectName="Demo" initial={{ ok: false }} />);
     await user.click(screen.getByRole("button", { name: "Try again" }));
     expect(await screen.findByRole("link", { name: /View task #42/ })).toBeInTheDocument();
   });
@@ -136,13 +145,13 @@ describe("Library approved deliverables", () => {
     vi.stubGlobal("matchMedia", vi.fn(() => ({ matches: true })));
     const scroll = vi.spyOn(window, "scrollTo").mockImplementation(() => {});
     const user = userEvent.setup();
-    const view = render(<Library slug="demo" projectName="Demo" initial={{ ok: true, items }} />);
+    const view = render(<Library slug={projectRef("acme", "demo")} projectName="Demo" initial={{ ok: true, items }} />);
     await user.click(screen.getByRole("button", { name: /Launch campaign.*Task #42/ }));
-    view.rerender(<Library slug="demo" projectName="Demo" initial={{ ok: true, items }} />);
+    view.rerender(<Library slug={projectRef("acme", "demo")} projectName="Demo" initial={{ ok: true, items }} />);
     expect(new URLSearchParams(window.location.search).get("view")).toBe("detail");
     expect(screen.getByRole("heading", { name: "Launch campaign" })).toHaveFocus();
     await user.click(screen.getByRole("button", { name: /Back to Library/ }));
-    view.rerender(<Library slug="demo" projectName="Demo" initial={{ ok: true, items }} />);
+    view.rerender(<Library slug={projectRef("acme", "demo")} projectName="Demo" initial={{ ok: true, items }} />);
     expect(new URLSearchParams(window.location.search).get("q")).toBe("Studio");
     expect(new URLSearchParams(window.location.search).get("item")).toBe("launch");
     expect(new URLSearchParams(window.location.search).has("view")).toBe(false);
@@ -342,7 +351,7 @@ describe("Marketing task detail (M-UI-4)", () => {
         reward={350}
         revisionCount={0}
         maxRevisions={2}
-        projectSlug="ziki"
+        projectSlug={projectRef("acme", "ziki")}
         createdAt={new Date("2026-11-01T12:00:00Z")}
       />
     );
@@ -380,6 +389,28 @@ describe("Marketing task detail (M-UI-4)", () => {
     expect(screen.getByText("figma.com")).toBeInTheDocument();
   });
 
+  it("shows work delivered as Markdown as a file, which opens a reader that renders it safely", async () => {
+    Object.defineProperty(HTMLDialogElement.prototype, "showModal", { configurable: true, value: vi.fn() });
+    render(
+      <MarketingDeliverablesPanel
+        bugId="bug-1"
+        canReply={false}
+        deliveries={[{
+          id: "del-2", agentName: "Writer", by: "Fabian", summary: "Wrote the launch post.", description: "Checked it.",
+          deliverableText: "# The launch post\n\nThree words here. <script>alert(1)</script>",
+          current: true, updatedAt: new Date("2026-11-02T10:00:00Z"), replies: [],
+        }]}
+      />,
+    );
+
+    // A file until it is opened: the work's text isn't on the page yet.
+    expect(screen.queryByRole("heading", { name: "The launch post" })).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: /Delivered work.*click to open/ }));
+
+    expect(screen.getByRole("heading", { name: "The launch post", hidden: true })).toBeInTheDocument();
+    expect(document.querySelector("dialog script")).toBeNull();
+  });
+
   it("switches tabs between pipeline sections and activates discussion on hash", () => {
     const bug = {
       id: "bug-mkt-1",
@@ -392,7 +423,7 @@ describe("Marketing task detail (M-UI-4)", () => {
       revisionCount: 1,
       createdAt: new Date("2026-11-04T00:00:00Z"),
       type: { id: "t2", name: "Social Copy" },
-      project: { slug: "ziki" },
+      project: { slug: projectRef("acme", "ziki") },
     };
 
     const { container } = render(
@@ -409,7 +440,13 @@ describe("Marketing task detail (M-UI-4)", () => {
           agentName: "Copy Agent",
           personName: "Fabian",
           offeredAt: new Date("2026-11-04T01:00:00Z"),
+          releaseAt: null,
+          waitingOnOwner: false,
+          hasPullRequest: false,
         }}
+        agentPaused={false}
+        isWatching={false}
+        isIssueOwner={false}
         deliveries={[]}
         reviews={[]}
         bidsSlot={<div data-testid="bids-content">Bids Content</div>}
@@ -436,5 +473,65 @@ describe("Marketing task detail (M-UI-4)", () => {
     window.location.hash = "#comments";
     fireEvent(window, new HashChangeEvent("hashchange"));
     expect(discussionPanel).not.toHaveAttribute("hidden");
+  });
+});
+
+describe("A decision about your work (#your-decisions)", () => {
+  const closed: DecisionIssue = {
+    status: "closed",
+    isDeleted: false,
+    reporterId: "alice",
+    beneficiaryUserId: "alice",
+    closeReason: "duplicate",
+    closeEvidence: "Same steps and screen as #9, filed first.",
+    duplicateOf: { number: 9, title: "Resources tabs are empty" },
+  };
+  const vote = (onBehalfOfUserId: string, by: string, votes = 1, reason = "duplicate"): DecisionSuggestion => ({
+    reason, votes, summary: `${by}: #9 owns this work.`, evidence: null, onBehalfOfUserId, by, agentName: `${by}'s Claude`,
+  });
+  const suggestions = [vote("cara", "Cara", 2), vote("alice", "Alice"), vote("bob", "Bob"), vote("dan", "Dan", 1, "not_planned")];
+  const decide = (issue: DecisionIssue, viewerId: string, list = suggestions) =>
+    decisionFor({ issue, viewerId, suggestions: list, threshold: 3, decidedAt: new Date("2026-11-05T10:00:00Z") });
+
+  it("tells the owner who closed their issue and with what: other people's votes for the reason it closed with", () => {
+    const decision = decide(closed, "alice")!;
+    expect(decision.voters.map((voter) => voter.by)).toEqual(["Cara", "Bob"]);
+    expect(decision.votes).toBe(3);
+    expect(decision.evidence).toBe(closed.closeEvidence);
+    // The person it is for sees it too, not only the reporter.
+    expect(decide({ ...closed, reporterId: "agent-owner" }, "alice")).not.toBeNull();
+  });
+
+  it("shows nothing to anyone else, for a withdrawal or a deleted issue, before it closes, or when only the owner voted", () => {
+    expect(decide(closed, "bob")).toBeNull();
+    expect(decide({ ...closed, closeReason: "withdrawn" }, "alice")).toBeNull();
+    expect(decide({ ...closed, isDeleted: true }, "alice")).toBeNull();
+    expect(decide({ ...closed, status: "open", closeReason: null }, "alice")).toBeNull();
+    expect(decide(closed, "alice", [vote("alice", "Alice", 3)])).toBeNull();
+  });
+
+  it("sends the owner's reply with their evidence, or their agreement", async () => {
+    const user = userEvent.setup({ delay: null });
+    render(<DecisionCard issueId="bug1" decision={decide(closed, "alice")!} />);
+    await user.click(screen.getByRole("button", { name: "I agree" }));
+    expect(decisionActions.agree).toHaveBeenCalledWith("bug1");
+    await user.click(screen.getByRole("button", { name: "Respond" }));
+    await user.type(screen.getByLabelText(/Your side/), "Mine is about the mobile page; #9 is desktop only.");
+    await user.click(screen.getByRole("button", { name: "Send" }));
+    await waitFor(() => expect(decisionActions.respond).toHaveBeenCalledWith("bug1", "Mine is about the mobile page; #9 is desktop only."));
+  });
+
+  it("says a manager can reopen only a not-reproducible close", async () => {
+    const user = userEvent.setup({ delay: null });
+    const notReproducible = decide({ ...closed, closeReason: "not_reproducible", duplicateOf: null }, "alice", [vote("cara", "Cara", 3, "not_reproducible")])!;
+    render(<DecisionCard issueId="bug1" decision={notReproducible} />);
+    await user.click(screen.getByRole("button", { name: "Respond" }));
+    expect(screen.getByText(/A manager can reopen it with your fresh reproduction/)).toBeInTheDocument();
+  });
+
+  it("folds to one line once the owner agreed", () => {
+    render(<DecisionCard issueId="bug1" decision={decide({ ...closed, closeAgreedAt: new Date("2026-11-05T11:00:00Z") }, "alice")!} />);
+    expect(screen.getByTestId("decision-agreed")).toHaveTextContent(/You agreed with this decision/);
+    expect(screen.queryByRole("button", { name: "Respond" })).toBeNull();
   });
 });

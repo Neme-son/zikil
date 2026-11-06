@@ -16,6 +16,7 @@ const db = vi.hoisted(() => ({
   projectArea: { findMany: vi.fn() },
   project: { findFirst: vi.fn() },
   projectWorkflow: { findUnique: vi.fn() },
+  agentAuditEvent: { count: vi.fn() },
   $queryRaw: vi.fn(),
   $transaction: vi.fn(),
 }));
@@ -57,7 +58,7 @@ vi.mock("@anthropic-ai/sdk", () => {
 vi.mock("@anthropic-ai/sdk/helpers/zod", () => ({ zodOutputFormat: (schema: unknown) => schema }));
 
 import { createIdeaWithPolicy, encodeCursor, type CreatePolicyInput } from "@/lib/agent-api/create-policy";
-import { listAgentIdeas, readAgentIdea } from "@/lib/agent-api/ideas";
+import { assertVettedCap, assertVettedFields, createIdeaSchema, listAgentIdeas, readAgentIdea, VETTED_IDEAS_PER_DAY } from "@/lib/agent-api/ideas";
 import { countAgentIssues, issueProject, listAgentIssues } from "@/lib/agent-api/issues";
 import { GET as suggestIssues } from "@/app/api/issues/suggest/route";
 import { NextRequest } from "next/server";
@@ -81,7 +82,7 @@ const input = (overrides: Partial<CreatePolicyInput> = {}): CreatePolicyInput =>
 const similarRow = { id: "b1", number: 12, title: "Login button does nothing in Safari", status: "open", voteCount: 3, score: 0.8 };
 const idea = {
   id: "i1", number: 12, title: "Export activity as CSV", summary: "People want a CSV.", description: "People want their data.",
-  track: "product" as const, rationale: null as string | null, status: "open" as const, score: 3, typeId: null, categoryId: null, areaId: null, proofLinks: [], projectId: "p1",
+  track: "product" as const, rationale: null as string | null, status: "open" as const, score: 3, typeId: null, areaId: null, proofLinks: [], projectId: "p1",
   reporterId: "ada", beneficiaryUserId: "ada", createdByAgentId: null, convertedAt: null, archiveReason: null,
   archiveEvidence: null, archiveDuplicateOf: null, archivedAt: null, archivedByAgentId: null,
   createdAt: new Date("2026-10-20T10:00:00Z"), updatedAt: new Date("2026-10-20T10:00:00Z"), area: null, issue: null,
@@ -417,8 +418,8 @@ describe("counting issues by track", () => {
 
 describe("issue suggestions by track", () => {
   const suggestionIssues = [
-    { id: "product-42", number: 42, title: "Product issue 42", status: "open", track: "product", tenantId: "t1", projectId: "p1", isDeleted: false, project: { slug: "acme" } },
-    { id: "marketing-43", number: 43, title: "Marketing issue 43", status: "open", track: "marketing", tenantId: "t1", projectId: "p1", isDeleted: false, project: { slug: "acme" } },
+    { id: "product-42", number: 42, title: "Product issue 42", status: "open", track: "product", tenantId: "t1", projectId: "p1", isDeleted: false, project: { slug: "acme", tenant: { slug: "acme" } } },
+    { id: "marketing-43", number: 43, title: "Marketing issue 43", status: "open", track: "marketing", tenantId: "t1", projectId: "p1", isDeleted: false, project: { slug: "acme", tenant: { slug: "acme" } } },
   ];
 
   beforeEach(() => {
@@ -509,5 +510,30 @@ describe("structuring an idea as it is submitted", () => {
 
     claude.parse.mockResolvedValueOnce({ stop_reason: "refusal", parsed_output: null });
     expect(await structureIdea(typed)).toBeNull();
+  });
+});
+
+/** Already vetted: an idea the owner says was approved elsewhere skips the verdicts, with a note and a daily limit. */
+describe("already vetted ideas", () => {
+  const owner = { agentId: "agent1", name: "Ada's Claude", ownerId: "ada", tenantId: "t1", level: "working" as const, burst: false, keyId: "k1" };
+
+  it("takes alreadyVetted only with a note saying where it was approved, and a note only with alreadyVetted", () => {
+    expect(() => assertVettedFields({})).not.toThrow();
+    expect(() => assertVettedFields({ alreadyVetted: true, vettedNote: "Approved by Mark, sheet row 42" })).not.toThrow();
+    expect(() => assertVettedFields({ alreadyVetted: true })).toThrowError(/vettedNote/);
+    expect(() => assertVettedFields({ vettedNote: "Approved by Mark" })).toThrowError(/alreadyVetted/);
+    const idea = { title: "Add a CSV export", summary: "People want a CSV of the activity.", description: "People want their data as a CSV." };
+    expect(createIdeaSchema.safeParse({ ...idea, alreadyVetted: "yes" }).success).toBe(false);
+    expect(createIdeaSchema.safeParse({ ...idea, alreadyVetted: true, vettedNote: "ok" }).success).toBe(false);
+  });
+
+  it("allows five in 24 hours per owner and refuses the sixth with what to do instead", async () => {
+    db.agentAuditEvent.count.mockResolvedValue(VETTED_IDEAS_PER_DAY - 1);
+    await expect(assertVettedCap(db as never, owner)).resolves.toBeUndefined();
+    expect(db.agentAuditEvent.count).toHaveBeenCalledWith({
+      where: expect.objectContaining({ action: "idea.vetted", undoneAt: null, agent: { ownerUserId: "ada" } }),
+    });
+    db.agentAuditEvent.count.mockResolvedValue(VETTED_IDEAS_PER_DAY);
+    await expect(assertVettedCap(db as never, owner)).rejects.toMatchObject({ status: 429, body: { error: "vetted_limit", limit: 5 } });
   });
 });

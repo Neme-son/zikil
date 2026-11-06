@@ -3,7 +3,9 @@ import { NextResponse } from "next/server";
 import authConfig from "@/auth.config";
 import { isLinkPreviewBot } from "@/lib/link-preview";
 import { BASE_PATH, toAppPath } from "@/lib/base-path";
-import { isProjectIssuePath } from "@/lib/project-slug";
+import { isProjectIssuePath, isReservedProjectSlug } from "@/lib/project-slug";
+import { isProjectFirstPath } from "@/lib/project-paths";
+import { isPublicAgentPath } from "@/lib/public-agent-paths";
 
 /**
  * Edge-only auth wrapper — initialized from auth.config (no Prisma/bcrypt).
@@ -12,8 +14,8 @@ import { isProjectIssuePath } from "@/lib/project-slug";
  */
 const { auth } = NextAuth(authConfig);
 
-/** A project's agent work feed: `/<project-slug>/work`. */
-const PROJECT_WORK_PATH = /^\/[^/]+\/work\/?$/;
+/** A project's agent work feed: `/<org>/<project>/work`. */
+const PROJECT_WORK_PATH = /^\/[^/]+\/[^/]+\/work\/?$/;
 
 export function isPublicPath(
   pathWithoutBase: string,
@@ -36,8 +38,10 @@ export function isPublicPath(
     pathWithoutBase === "/how-it-works" ||
     pathWithoutBase === "/for-agents" ||
     pathWithoutBase === "/developers" ||
+    pathWithoutBase === "/earn" ||
     isAuthPage ||
     isPasswordResetPage ||
+    isPublicAgentPath(pathWithoutBase) ||
     isIssuePreview ||
     pathWithoutBase === "/" ||
     pathWithoutBase.startsWith("/session-expired") ||
@@ -51,6 +55,9 @@ export function isPublicPath(
     // The scheduler calls the platform sweeps with Bearer CRON_SECRET and no
     // session (#571); the route rejects a wrong or missing secret itself.
     pathWithoutBase === "/api/internal/cron" ||
+    // GitHub's webhooks (#github-status) carry no session; the route checks
+    // their signature against GITHUB_WEBHOOK_SECRET itself.
+    pathWithoutBase === "/api/github/webhook" ||
     // The agent API (#427) authenticates every call with an agent key, not a
     // session; each route rejects a request without one.
     pathWithoutBase.startsWith("/api/v1/") ||
@@ -77,7 +84,7 @@ export default auth((req) => {
     pathWithoutBase.startsWith("/login") || pathWithoutBase.startsWith("/signup");
   const isPublic = isPublicPath(pathWithoutBase, req.headers.get("user-agent"));
 
-  // An agent watching `/<project>/work` (#work-feed) authenticates with its
+  // An agent watching `/<org>/<project>/work` (#work-feed) authenticates with its
   // key, not a session; the route rejects a missing or wrong one.
   const isAgentWorkFeed =
     PROJECT_WORK_PATH.test(pathWithoutBase) &&
@@ -105,8 +112,31 @@ export default auth((req) => {
   // JWT role is only refreshed at sign-in, so checking it here bounced newly
   // promoted admins until they signed out and back in (#121).
 
-  return NextResponse.next();
+  // An address from before organisations were in URLs, `/<project>/ideas` or
+  // `/<project>/740` (#project-urls): /projects/moved finds the project's
+  // organisation and sends the person on to `/<org>/<project>/…`.
+  const first = decodeSegment(pathWithoutBase.split("/")[1] ?? "");
+  if (isLoggedIn && first && !isReservedProjectSlug(first) && isProjectFirstPath(pathWithoutBase)) {
+    const moved = new URL(BASE_PATH ? `${BASE_PATH}/projects/moved` : "/projects/moved", req.nextUrl.origin);
+    moved.searchParams.set("to", `${pathWithoutBase}${req.nextUrl.search}`);
+    return NextResponse.redirect(moved);
+  }
+
+  // The app layout reads x-ziki-path to give a guest on a public agent page a
+  // plain shell; project pages read x-ziki-url to come back after switching organisation.
+  const forwarded = new Headers(req.headers);
+  forwarded.set("x-ziki-path", pathWithoutBase);
+  forwarded.set("x-ziki-url", `${pathWithoutBase}${req.nextUrl.search}`);
+  return NextResponse.next({ request: { headers: forwarded } });
 });
+
+function decodeSegment(segment: string): string {
+  try {
+    return decodeURIComponent(segment);
+  } catch {
+    return segment;
+  }
+}
 
 /** Keeps the agent approval code across the sign-in redirect. Other queries stay off the callback. */
 function callbackPath(path: string, url: URL): string {

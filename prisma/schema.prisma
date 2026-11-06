@@ -279,6 +279,7 @@ model User {
   redesignsOnBehalf         RedesignProposal[]      @relation("RedesignOnBehalfOf")
   redesignsApproved         RedesignProposal[]      @relation("RedesignApprover")
   pointEntries              PointEntry[]
+  earnTasks                 EarnTaskProgress[]
   pointDisputes             PointDispute[]          @relation("DisputeOpener")
   pointDisputesResolved     PointDispute[]          @relation("DisputeResolver")
   auditActions              AgentAuditEvent[]       @relation("AuditActorUser")
@@ -359,6 +360,8 @@ model Bug {
   closeEvidence             String?
   /// When it was last closed (#close-reasons); null while it is not closed.
   closedAt                  DateTime?
+  /// When the issue's owner said they agree with the close other members voted for (#your-decisions).
+  closeAgreedAt             DateTime?
   typeId                    String?
   type                      IssueType?              @relation(fields: [typeId], references: [id], onDelete: SetNull)
   /// The issue's importance (#importance): its marks, a manager or merger agent's counting as 5.
@@ -373,7 +376,6 @@ model Bug {
   proofLinks                String[]                @default([])
   reporterId                String
   assigneeId                String?
-  categoryId                String?
   /// #285: set when this issue is a duplicate of another. One level only:
   /// the target is never itself a duplicate (enforced in the action).
   duplicateOfId             String?
@@ -415,7 +417,6 @@ model Bug {
   reporter                  User                    @relation("BugReporter", fields: [reporterId], references: [id])
   assignee                  User?                   @relation("BugAssignee", fields: [assigneeId], references: [id], onDelete: SetNull)
   attachments               Attachment[]
-  category                  Category?               @relation(fields: [categoryId], references: [id], onDelete: Restrict)
   comments                  Comment[]
   votes                     Vote[]
   watches                   IssueWatch[]
@@ -471,7 +472,6 @@ model Bug {
   @@index([projectId, areaId])
   @@index([beneficiaryUserId])
   @@index([createdByAgentId])
-  @@index([categoryId])
   @@index([typeId])
   @@index([duplicateOfId])
   @@index([isBoosted])
@@ -490,23 +490,6 @@ model Bug {
 /// The same name can exist in another organization; it is a different platform.
 /// A platform (#platforms): Desktop, Web, Mobile and any the workspace adds.
 /// Agents name it by `slug`; issues and ideas carry it as `platform`.
-model Category {
-  id        String   @id @default(cuid())
-  tenantId  String
-  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  name      String
-  /// Lowercase and URL-safe, unique in the workspace, e.g. "desktop". Kept when the name changes.
-  slug      String
-  isActive  Boolean  @default(true)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  bugs      Bug[]
-  ideas     Idea[]
-
-  @@unique([tenantId, name])
-  @@unique([tenantId, slug])
-  @@index([tenantId])
-}
 
 /// A release or sprint grouping issues (#289).
 model Milestone {
@@ -744,14 +727,16 @@ model Tenant {
   nextIssueNumber    Int                 @default(1)
   /// The next idea number this tenant hands out (#idea-table). Ideas are numbered apart from issues.
   nextIdeaNumber     Int                 @default(1)
+  /// What every award in this workspace is multiplied by when it is written (#points-multiplier). 1 is normal.
+  pointsMultiplier   Decimal             @default(1) @db.Decimal(8, 2)
   createdAt          DateTime            @default(now())
   updatedAt          DateTime            @updatedAt
   projects           Project[]
-  categories         Category[]
   issueTypes         IssueType[]
   milestones         Milestone[]
   memberships        Membership[]
   agents             Agent[]
+  skillTags          SkillTag[]
   bugs               Bug[]
   ideas              Idea[]
   auditEvents        AgentAuditEvent[]
@@ -768,8 +753,8 @@ model Tenant {
   goals              Goal[]
 }
 
-/// A product inside a tenant, e.g. Zedu Web or Zedu Desktop. Not the same as
-/// Category, the per-organization platform filter.
+/// A project inside an organisation (tenant), e.g. Zedu Web or Zedu Desktop.
+/// Organisations hold projects and nothing in between (#no-platforms).
 model Project {
   agentNotes            AgentNote[]
   id                    String                @id @default(cuid())
@@ -812,6 +797,7 @@ model Project {
   workflow              ProjectWorkflow?
   mistakes              AgentMistake[]
   notes                 ProjectNotes?
+  brief                 ProjectBrief?
   noteRevisions         ProjectNoteRevision[]
   noteComments          ProjectNoteComment[]
 
@@ -1027,6 +1013,8 @@ model Agent {
   /// next request; no cleanup job flips `burst` off.
   burstUntil           DateTime?
   revokedAt            DateTime?
+  /// Owner has paused this agent; active claim clocks are frozen until resumed.
+  pausedAt             DateTime?
   /// Set when this is the person's personal agent for that project.
   /// Created automatically so they can copy a key without registering one.
   defaultProjectId     String?
@@ -1037,6 +1025,23 @@ model Agent {
   avatar               String?
   /// Global standing (#agent-reputation): down for each penalty on its confirmations, up for each upvote on its comments.
   reputation           Int                   @default(0)
+  /// Its handle and slug (#agent-profile): shown as @username and the address of
+  /// its public page, /agent/{username}. Lowercase letters, digits and dashes,
+  /// unique across the platform. Never empty: a database trigger gives an agent
+  /// created without one a default from its name, with -2, -3, … on a clash.
+  username             String                @unique @default(dbgenerated())
+  /// One line on what it does (#agent-profile), at most AGENT_TAGLINE_MAX characters.
+  tagline              String?
+  /// "About me" (#agent-profile): what it is good at and how it works, at most AGENT_ABOUT_MAX characters.
+  about                String?
+  /// "What I can do for you" (#agent-profile): what it offers the people it works with, at most AGENT_SERVICES_MAX characters.
+  services             String?
+  /// Its rating out of 5 (#agent-profile), from the reviews of its delivered work; null until it has any.
+  rating               Float?
+  /// What it is good at (#agent-profile), each under a tag the workspace shares.
+  skills               AgentSkill[]
+  /// Its profile picture (#agent-profile), uploaded by the agent; none shows its avatar.
+  picture              AgentPicture?
   createdAt            DateTime              @default(now())
   updatedAt            DateTime              @updatedAt
   tenant               Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
@@ -1380,6 +1385,8 @@ model Delivery {
   pullRequestUrl    String?
   /// Links to the finished work, on marketing work.
   deliverableUrls   String[]  @default([])
+  /// The finished work itself as Markdown, on marketing work. Shown as a file.
+  deliverableText   String?
   /// The pull request's head commit when it was delivered, when GitHub said.
   headSha           String?
   /// Links to screenshots of the fix.
@@ -1449,8 +1456,6 @@ model Idea {
   score              Int              @default(0)
   typeId             String?
   type               IssueType?       @relation(fields: [typeId], references: [id], onDelete: SetNull)
-  categoryId         String?
-  category           Category?        @relation(fields: [categoryId], references: [id], onDelete: SetNull)
   areaId             String?
   area               ProjectArea?     @relation(fields: [areaId], references: [id], onDelete: SetNull)
   proofLinks         String[]         @default([])
@@ -1723,6 +1728,7 @@ model JudgingEvent {
 
 /// What a pull request looks like on GitHub, as an agent saw it (#pr-reports).
 /// Ziki never calls GitHub: agents check and report.
+/// What a pull request looks like on GitHub (#pr-reports, #github-status).
 enum PullRequestState {
   open
   closed
@@ -1730,13 +1736,22 @@ enum PullRequestState {
   not_found
 }
 
-/// One agent's report of an issue's linked pull request on GitHub. Only an
-/// agent independent of the issue reports; the latest report for the issue's
-/// current pull request is its state, and every rule (delivery, accept,
-/// resolve, the work feed, triage) reads that one. A wrong report is corrected
-/// by the next one. Rows are never edited: each report is a new row.
+/// Who read the pull request on GitHub: an agent that checked and reported,
+/// or Ziki itself (#github-status), reading through the project's GitHub App.
+enum PullRequestReportSource {
+  agent
+  ziki
+}
+
+/// One report of an issue's linked pull request on GitHub: an independent
+/// agent's, or Ziki's own read (#github-status). The latest report for the
+/// issue's current pull request is its state, and every rule (delivery,
+/// accept, resolve, the work feed, triage) reads that one. A wrong report is
+/// corrected by the next one. Agent reports are never edited: each is a new
+/// row. Ziki's own reads add a row only when what GitHub says changed, and
+/// otherwise move `checkedAt` on the latest one.
 model PullRequestReport {
-  id               String           @id @default(cuid())
+  id               String                  @id @default(cuid())
   bugId            String
   /// The pull request reported on: the issue's linked one when reported.
   pullRequestUrl   String
@@ -1745,7 +1760,7 @@ model PullRequestReport {
   mergedInto       String?
   /// Merged and the repository's default branch contains its merge commit.
   inDefaultBranch  Boolean?
-  /// Its head commit when the agent looked.
+  /// Its head commit when it was read.
   headSha          String?
   /// Its merge commit, once merged.
   mergeCommitSha   String?
@@ -1753,15 +1768,22 @@ model PullRequestReport {
   checks           String?
   /// False when GitHub says it conflicts with its base branch.
   mergeable        Boolean?
-  /// What the agent saw, in its own words.
+  /// What was seen: the agent's words, or Ziki's one-line summary.
   note             String
-  agentId          String
-  /// The agent's owner, for whom it reported.
-  onBehalfOfUserId String
-  createdAt        DateTime         @default(now())
-  bug              Bug              @relation(fields: [bugId], references: [id], onDelete: Cascade)
-  agent            Agent            @relation(fields: [agentId], references: [id], onDelete: Cascade)
-  onBehalfOf       User             @relation("PullRequestReportOnBehalfOf", fields: [onBehalfOfUserId], references: [id], onDelete: Cascade)
+  source           PullRequestReportSource @default(agent)
+  /// Ziki's reads: everything GitHub said, as lib/github/pull-request-snapshot.ts
+  /// stores it (checks, reviews, base and head branches, how far behind).
+  details          Json?
+  /// Ziki's reads: when GitHub last said the same thing.
+  checkedAt        DateTime?
+  /// The reporting agent; null for Ziki's own reads.
+  agentId          String?
+  /// The agent's owner, for whom it reported; null for Ziki's own reads.
+  onBehalfOfUserId String?
+  createdAt        DateTime                @default(now())
+  bug              Bug                     @relation(fields: [bugId], references: [id], onDelete: Cascade)
+  agent            Agent?                  @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  onBehalfOf       User?                   @relation("PullRequestReportOnBehalfOf", fields: [onBehalfOfUserId], references: [id], onDelete: Cascade)
 
   @@index([bugId, createdAt])
   @@index([agentId])
@@ -2086,6 +2108,37 @@ model PointEntry {
   @@index([tenantId, role, correctedAt])
 }
 
+/// Where a person is on each Earn marketing task (#earn-tasks). A task is
+/// started, then submitted with proof, then confirmed or rejected by staff;
+/// only a confirmed task pays (lib/earn/progress.ts).
+enum EarnTaskStatus {
+  started
+  submitted
+  confirmed
+  rejected
+}
+
+model EarnTaskProgress {
+  id          String         @id @default(cuid())
+  userId      String
+  /// A task id from lib/earn/draft.ts: who, research, emails or post.
+  taskKey     String
+  status      EarnTaskStatus @default(started)
+  /// What the person sent back: a sentence, links, pasted text.
+  proof       String?
+  startedAt   DateTime       @default(now())
+  submittedAt DateTime?
+  decidedAt   DateTime?
+  /// The staff member who confirmed or rejected it.
+  decidedById String?
+  /// Why it was rejected, or a note on a confirmation.
+  note        String?
+  user        User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, taskKey])
+  @@index([status, submittedAt])
+}
+
 /// A member saying an award is missing or wrong (#436).
 model PointDispute {
   id            String        @id @default(cuid())
@@ -2362,6 +2415,20 @@ enum MistakeCategory {
 }
 
 /// Official guidance, separate from agent discussion. Version 0 means absent.
+/// The marketing brief agents read before proposing or delivering (M-API-8).
+/// Returned on `GET /api/v1/agents/me` and the marketing work feed.
+model ProjectBrief {
+  projectId    String   @id
+  product      String?
+  audience     String?
+  /// No longer read or written: the project's siteUrl is the site. Drop it in a later migration.
+  website      String?
+  currentFocus String?
+  outOfScope   String?
+  updatedAt    DateTime @updatedAt
+  project      Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+}
+
 model ProjectNotes {
   projectId     String   @id
   body          String
@@ -2559,4 +2626,54 @@ model CloseSuggestion {
 
   @@unique([bugId, onBehalfOfUserId])
   @@index([bugId])
+}
+
+/// A skill tag (#agent-profile), e.g. "React" or "Postgres". Shared by every
+/// agent in the workspace that has the skill; what each agent says about it
+/// lives on its AgentSkill.
+model SkillTag {
+  id        String       @id @default(cuid())
+  tenantId  String
+  /// As shown, e.g. "React Native".
+  name      String
+  /// Lowercased with dashes, e.g. "react-native": one tag per slug.
+  slug      String
+  createdAt DateTime     @default(now())
+  tenant    Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  skills    AgentSkill[]
+
+  @@unique([tenantId, slug])
+}
+
+/// One of an agent's skills (#agent-profile): a shared tag, with this agent's
+/// own short line and longer description of what it does with it.
+model AgentSkill {
+  id          String   @id @default(cuid())
+  agentId     String
+  tagId       String
+  /// At most AGENT_SKILL_SUMMARY_MAX characters.
+  summary     String
+  /// At most AGENT_SKILL_DESCRIPTION_MAX characters.
+  description String
+  /// Its place in the agent's list, first shown first.
+  position    Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  agent       Agent    @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  tag         SkillTag @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@unique([agentId, tagId])
+  @@index([tagId])
+}
+
+/// An agent's profile picture (#agent-profile): an image it uploaded, kept
+/// apart from Agent so reading an agent never loads the bytes.
+model AgentPicture {
+  agentId     String   @id
+  /// image/png, image/jpeg, image/gif or image/webp, from the bytes.
+  contentType String
+  size        Int
+  data        Bytes
+  updatedAt   DateTime @updatedAt
+  agent       Agent    @relation(fields: [agentId], references: [id], onDelete: Cascade)
 }

@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { Suspense } from "react";
-import "@/app/(app)/[project]/issues/_list/issues.css";
+import "@/app/(app)/[org]/[project]/issues/_list/issues.css";
 import { RememberIssueList } from "@/components/back-to-list";
 import { IdeasList } from "@/components/ideas-list";
 import { RowAge } from "@/components/issue-row-meta";
@@ -15,7 +15,7 @@ import { formatIssueNumber } from "@/lib/issue-number";
 import { isDone } from "@/lib/issue-state";
 import type { BugSortOption } from "@/lib/issues-sort";
 import { ISSUE_SORT_COOKIE } from "@/lib/list-sort";
-import { marketingPath } from "@/lib/project-paths";
+import { marketingPath, type ProjectRef } from "@/lib/project-paths";
 import { TASK_STAGES, taskTab, tasksHref, type TaskRow, type TaskTabParam, type TasksBoardData } from "./model";
 
 const EMPTY: Record<TaskTabParam, string> = {
@@ -32,7 +32,7 @@ const EMPTY: Record<TaskTabParam, string> = {
  * the top, each stage's lifecycle steps down the left, ideas as the Ideas list
  * and tasks as issue rows. Tasks open on the shared issue route (D6).
  */
-export function TasksBoard({ slug, board }: { slug: string; board: TasksBoardData }) {
+export function TasksBoard({ slug, board }: { slug: ProjectRef; board: TasksBoardData }) {
   const { tab: current, counts, list, pagination, sortParam } = board;
   const stage = TASK_STAGES.find((candidate) => candidate.steps.includes(current.param));
   const isIdeas = list.kind === "proposals";
@@ -45,7 +45,7 @@ export function TasksBoard({ slug, board }: { slug: string; board: TasksBoardDat
       <Suspense fallback={null}>
         <RememberIssueList />
       </Suspense>
-      {/* No visible title, as on the issue list: the header's Marketing tab and the stages say where you are. */}
+      {/* No visible title here: the section's header above and the stages say where you are. */}
       <h1 className="sr-only">Marketing tasks</h1>
 
       <div className={`relative mx-auto mb-4 flex min-h-8 w-full items-start justify-center ${width}`}>
@@ -74,7 +74,14 @@ export function TasksBoard({ slug, board }: { slug: string; board: TasksBoardDat
 
         <div className="w-full min-w-0 flex-1 space-y-4">
           {list.kind === "proposals" ? (
-            <IdeasList slug={slug} ideas={list.ideas} sort={list.sort} empty={EMPTY.ideas} />
+            <>
+              <div className="flex justify-end">
+                <Link href={marketingPath(slug, "ideas/rejected")} className="rounded-md text-sm font-semibold text-zk-accent hover:underline focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-electric-blue">
+                  Rejected ideas
+                </Link>
+              </div>
+              <IdeasList slug={slug} ideas={list.ideas} sort={list.sort} empty={EMPTY.ideas} />
+            </>
           ) : list.rows.length === 0 ? (
             <div className="rounded-[20px] border border-zk-border bg-zk-surface px-4 py-12 text-center">
               <p className="font-bold text-zk-text">Nothing here right now.</p>

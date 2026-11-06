@@ -91,10 +91,9 @@ const facts = (overrides: Partial<ProjectWork["facts"] extends Map<string, infer
 function work(overrides: Partial<ProjectWork> = {}): ProjectWork {
   return {
     tenantId: "t1",
-    project: { id: "p1", slug: "ziki", name: "Ziki" },
+    project: { id: "p1", slug: "ziki", name: "Ziki", orgSlug: "zedu" },
     importance: [],
     deployments: [],
-    uncategorized: { issues: [], ideas: [], platforms: ["desktop", "web", "mobile"] },
     contests: [],
     rewards: [],
     ideas: [],
@@ -312,7 +311,7 @@ describe("keeping marketing work out of the work feed", () => {
   it("reads only product work into a project's feed", async () => {
     clearWorkCache();
     queries.length = 0;
-    await projectWork("t1", { id: "p1", slug: "acme", name: "Acme" });
+    await projectWork("t1", { id: "p1", slug: "acme", name: "Acme", orgSlug: "acme" });
 
     const lists = queries.filter((q) => (q.model === "bug" || q.model === "idea") && q.method === "findMany" && q.args?.where?.projectId === "p1");
     expect(lists.length).toBeGreaterThan(5);
@@ -325,7 +324,7 @@ describe("keeping marketing work out of the work feed", () => {
   it("reads marketing work when track is marketing", async () => {
     clearWorkCache();
     queries.length = 0;
-    const marketingWork = await projectWork("t1", { id: "p1", slug: "acme", name: "Acme" }, "marketing");
+    const marketingWork = await projectWork("t1", { id: "p1", slug: "acme", name: "Acme", orgSlug: "acme" }, "marketing");
 
     const lists = queries.filter((q) => (q.model === "bug" || q.model === "idea") && q.method === "findMany" && q.args?.where?.projectId === "p1");
     expect(lists.length).toBeGreaterThan(0);
@@ -347,15 +346,15 @@ describe("keeping marketing work out of the work feed", () => {
 describe("workFeed marketing track response shape and items", () => {
   it("returns product work feed with track: product and no brief by default", async () => {
     clearWorkCache();
-    const feed = await workFeed(agent("working"), { id: "p1", slug: "acme", name: "Acme" }, "product");
+    const feed = await workFeed(agent("working"), { id: "p1", slug: "acme", name: "Acme", orgSlug: "acme" }, "product");
     expect(feed.track).toBe("product");
     expect(feed.brief).toBeUndefined();
     expect(feed.workUrl).not.toContain("track=marketing");
   });
 
-  it("returns marketing work feed with track: marketing, brief: null, and marketing workUrl", async () => {
+  it("returns marketing work feed with track: marketing, no brief until one is written, and marketing workUrl", async () => {
     clearWorkCache();
-    const feed = await workFeed(agent("working"), { id: "p1", slug: "acme", name: "Acme" }, "marketing");
+    const feed = await workFeed(agent("working"), { id: "p1", slug: "acme", name: "Acme", orgSlug: "acme" }, "marketing");
     expect(feed.track).toBe("marketing");
     expect(feed.brief).toBeNull();
     expect(feed.workUrl).toContain("?track=marketing");

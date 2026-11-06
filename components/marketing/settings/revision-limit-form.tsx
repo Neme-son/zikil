@@ -1,8 +1,9 @@
 "use client";
+import type { ProjectRef } from "@/lib/project-paths";
 
 import { useState, useTransition } from "react";
 
-import { updateMarketingRevisionLimitAction } from "@/app/(app)/[project]/marketing/settings/actions";
+import { updateMarketingRevisionLimitAction } from "@/app/(app)/[org]/[project]/marketing/settings/actions";
 import { WORKFLOW_LIMITS } from "@/lib/workflow-config";
 import { Button } from "@/components/ui/button";
 
@@ -11,7 +12,7 @@ import { Button } from "@/components/ui/button";
  * delivery takes before the task reopens for bids and the next worker starts
  * with a fresh count. Owner/admin only; the page decides.
  */
-export function RevisionLimitForm({ slug, current }: { slug: string; current: number }) {
+export function RevisionLimitForm({ slug, current }: { slug: ProjectRef; current: number }) {
   const [saved, setSaved] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();

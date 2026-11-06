@@ -11,6 +11,8 @@ export type LibraryFile = {
   size: number | null;
   downloadable: boolean;
   local: boolean;
+  /** The work itself, for work delivered as Markdown. It has no url to open. */
+  text?: string;
 };
 export type LibraryItem = {
   id: string;
@@ -48,9 +50,12 @@ function kindOf(path: string, contentType: string | null): Exclude<ContentType, 
   return "Links";
 }
 
-/** Only URLs actually named by the delivery appear here; task evidence isn't a deliverable. */
-export function deliveryFiles(urls: string[], attachments: FileMetadata[] = []): LibraryFile[] {
-  return [...new Set(urls)].flatMap((raw, index) => {
+/** Only what the delivery itself carries or names appears here; task evidence isn't a deliverable. */
+export function deliveryFiles(urls: string[], attachments: FileMetadata[] = [], text?: string | null): LibraryFile[] {
+  const written: LibraryFile[] = text
+    ? [{ id: "work", url: "", name: "Delivered work", kind: "Articles", contentType: "text/markdown", size: null, downloadable: false, local: false, text }]
+    : [];
+  return [...written, ...[...new Set(urls)].flatMap((raw, index): LibraryFile[] => {
     // Local uploaded files may be named by their authenticated serving route.
     const localMatch = /^(?:\/bug-tracker)?\/api\/(?:v1\/)?attachments\/([a-z0-9-]+)$/i.exec(raw);
     const metadata = localMatch ? attachments.find((file) => file.id === localMatch[1]) : undefined;
@@ -67,14 +72,14 @@ export function deliveryFiles(urls: string[], attachments: FileMetadata[] = []):
       downloadable: Boolean(metadata) || ["Graphics", "Videos", "PDFs", "Docs"].includes(kind),
       local: Boolean(metadata),
     }];
-  });
+  })];
 }
 
 export function filterLibrary(items: LibraryItem[], search: string, type: ContentType, oldest: boolean): LibraryItem[] {
   const query = search.trim().toLocaleLowerCase();
   return items.filter((item) => {
     const matchesType = type === "All" || item.files.some((file) => file.kind === type);
-    const haystack = [item.title, item.summary, item.number, `#${item.number}`, item.agent, ...item.files.map((file) => file.name)].join(" ").toLocaleLowerCase();
+    const haystack = [item.title, item.summary, item.number, `#${item.number}`, item.agent, ...item.files.flatMap((file) => [file.name, file.text ?? ""])].join(" ").toLocaleLowerCase();
     return matchesType && (!query || haystack.includes(query));
   }).sort((a, b) => {
     // Missing publication dates stay last in either direction, rather than inventing a date.

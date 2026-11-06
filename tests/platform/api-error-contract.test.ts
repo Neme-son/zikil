@@ -22,7 +22,6 @@ import { penaltySchema } from "@/lib/agent-api/confirmation-penalties";
 import { ideaVerdictFields } from "@/lib/agent-api/idea-verdicts";
 import { recordMistakeSchema } from "@/lib/agent-api/mistakes";
 import { createIdeaSchema } from "@/lib/agent-api/ideas";
-import { platformAssignSchema } from "@/lib/agent-api/platform-assign";
 import { stakeSchema } from "@/lib/agent-api/stakes";
 import { estimateSchema } from "@/lib/agent-api/reward-estimates";
 import { abandonVoteSchema } from "@/lib/agent-api/abandon";
@@ -31,6 +30,8 @@ import { repairPullRequestSchema } from "@/lib/agent-api/repair-pull-request";
 import { pullRequestReportSchema } from "@/lib/validations/pull-request-report";
 import { deploymentSchema } from "@/lib/agent-api/deployment";
 import { archiveIdeaSchema, withdrawIdeaSchema } from "@/lib/idea-archive";
+import { createMarketingTaskTypeSchema, updateMarketingTaskTypeSchema } from "@/lib/marketing/task-types";
+import { agentProfileUpdateSchema, agentSkillsReplaceSchema, agentSkillUpsertSchema } from "@/lib/validations/agent-profile";
 
 /** The HTTP contract agents rely on: unknown routes and methods answer JSON errors with the allowed methods, and every MCP/CLI tool sends exactly the fields its route accepts. */
 describe("agent API HTTP errors", () => {
@@ -72,11 +73,12 @@ describe("agent API HTTP errors", () => {
  * from the API (#612).
  */
 const ROUTE_SCHEMAS: Record<string, z.ZodType> = {
+  ziki_update_profile: agentProfileUpdateSchema,
+  ziki_set_skills: agentSkillsReplaceSchema,
+  ziki_set_skill: agentSkillUpsertSchema,
   ziki_deliver: deliveryBodySchema,
   ziki_submit_test_result: testVerdictBodySchema,
   ziki_create_idea: createIdeaSchema,
-  ziki_set_issue_platform: platformAssignSchema,
-  ziki_set_idea_platform: platformAssignSchema,
   ziki_stake_issue: stakeSchema,
   ziki_stake_idea: stakeSchema,
   ziki_estimate_reward: estimateSchema,
@@ -113,6 +115,8 @@ const ROUTE_SCHEMAS: Record<string, z.ZodType> = {
   ziki_report_deployment: deploymentSchema,
   ziki_archive_idea: archiveIdeaSchema,
   ziki_withdraw_idea: withdrawIdeaSchema,
+  ziki_create_marketing_task_type: createMarketingTaskTypeSchema,
+  ziki_update_marketing_task_type: updateMarketingTaskTypeSchema,
 };
 
 // The agent comment route extends the shared comment schema with attachmentIds; idea

@@ -3,11 +3,12 @@
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import { refreshLibrary } from "@/app/(app)/[project]/marketing/library/actions";
-import { marketingPath, projectPath } from "@/lib/project-paths";
+import { refreshLibrary } from "@/app/(app)/[org]/[project]/marketing/output-box/actions";
+import { marketingPath, projectPath, type ProjectRef } from "@/lib/project-paths";
 import { formatBytes } from "@/lib/attachments";
 import { formatDate } from "@/lib/format";
 import { CONTENT_TYPES, filterLibrary, type ContentType, type LibraryFile, type LibraryItem, type LibraryResult } from "./model";
+import { DeliveredWork } from "@/components/marketing/delivered-work";
 import { LibraryHeading } from "./heading";
 import "./library.css";
 
@@ -29,7 +30,7 @@ function FileThumbnail({ file }: { file?: LibraryFile }) {
   </span>;
 }
 
-export function Library({ slug, projectName, initial }: { slug: string; projectName: string; initial: LibraryResult }) {
+export function Library({ slug, projectName, initial }: { slug: ProjectRef; projectName: string; initial: LibraryResult }) {
   const params = useSearchParams();
   const [result, setResult] = useState(initial);
   const [refreshError, setRefreshError] = useState(false);
@@ -111,7 +112,7 @@ export function Library({ slug, projectName, initial }: { slug: string; projectN
     <LibraryHeading slug={slug} projectName={projectName} />
     {!result.ok ? <section className="lb-state" aria-busy={pending}>
       <span className="lb-state-icon lb-warning" aria-hidden="true">!</span>
-      <h2 ref={errorHeading} tabIndex={-1} role="alert">We couldn’t load the Library</h2><p>Check your connection and try again in a moment.</p>
+      <h2 ref={errorHeading} tabIndex={-1} role="alert">We couldn’t load the Output box</h2><p>Check your connection and try again in a moment.</p>
       <button className="lb-button lb-primary" onClick={refresh} disabled={pending}>{pending ? "Trying again…" : "Try again"}</button>
     </section> : items.length === 0 ? <section className="lb-state">
       <span className="lb-state-icon" aria-hidden="true">◇</span><h2>No approved work yet</h2>
@@ -141,14 +142,17 @@ export function Library({ slug, projectName, initial }: { slug: string; projectN
           <h2 ref={heading} tabIndex={-1} className="lb-detail-title">{selected.title}</h2>
           <dl className="lb-metadata"><div><dt>Produced by</dt><dd>{selected.agent}</dd></div><div><dt>Published</dt><dd>{selected.publishedAt ? <time dateTime={selected.publishedAt} title={formatDate(selected.publishedAt)}>{publishedDate(selected.publishedAt)}</time> : "Date unavailable"}</dd></div><div><dt>Associated task</dt><dd><Link href={projectPath(slug, `/${selected.number}`)}>Task #{selected.number}</Link></dd></div></dl>
           {selected.files.length > 1 && <div className="lb-attachments" role="group" aria-label="Task deliverables">{selected.files.map((file) => <button key={file.id} className="lb-file-choice" aria-pressed={selectedFile?.id === file.id} onClick={() => update({ file: file.id })}>{file.name}</button>)}</div>}
-          {selectedFile ? <DeliverablePreview key={`${selected.id}:${selectedFile.id}`} file={selectedFile} item={selected} slug={slug} /> : <div className="lb-fallback"><h3>Original unavailable</h3><p>No deliverable source is available. You can still view the task.</p></div>}
+          {selectedFile?.text ? <>
+            <DeliveredWork text={selectedFile.text} title={selected.title} from={selected.agent} />
+            <div className="lb-actions mt-3"><Link className="lb-button" href={projectPath(slug, `/${selected.number}`)}>View task #{selected.number} <span aria-hidden="true">↗</span></Link></div>
+          </> : selectedFile ? <DeliverablePreview key={`${selected.id}:${selectedFile.id}`} file={selectedFile} item={selected} slug={slug} /> : <div className="lb-fallback"><h3>Original unavailable</h3><p>No deliverable source is available. You can still view the task.</p></div>}
         </section>}
       </div>}
     </>}
   </div>;
 }
 
-function DeliverablePreview({ file, item, slug }: { file: LibraryFile; item: LibraryItem; slug: string }) {
+function DeliverablePreview({ file, item, slug }: { file: LibraryFile; item: LibraryItem; slug: ProjectRef }) {
   const supported = ["Graphics", "Videos"].includes(file.kind);
   const [state, setState] = useState<"loading" | "ready" | "error">(supported ? "loading" : "ready");
   const [attempt, setAttempt] = useState(0);

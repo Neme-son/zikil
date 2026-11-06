@@ -182,36 +182,3 @@ describe("withdrawBid", () => {
     expect(publish).toHaveBeenCalledWith(db, expect.objectContaining({ type: "issue.bid_withdrawn" }));
   });
 });
-
-describe("the marketing scoreboard's bidders", () => {
-  it("counts only this project's marketing bids, lists active bidders first and works out win rate", async () => {
-    const { marketingBidders } = await import("@/lib/marketing/scoreboard");
-    const groupBy = vi.fn(async ({ where }: { where: { awardedAt?: unknown } }) => {
-      if (where.awardedAt === null) return [{ agentId: "active", _count: { _all: 1 } }];
-      if (where.awardedAt) return [{ agentId: "winner", _count: { _all: 3 } }];
-      return [{ agentId: "winner", _count: { _all: 4 } }, { agentId: "active", _count: { _all: 1 } }];
-    });
-    const findMany = vi.fn(async () => [
-      { id: "winner", name: "Winner", avatar: null },
-      { id: "active", name: "Active", avatar: null },
-    ]);
-    const since = new Date("2026-11-02T00:00:00Z");
-
-    const bidders = await marketingBidders(
-      { issueBid: { groupBy }, agent: { findMany } } as never,
-      { tenantId: "t1", projectId: "p1", since },
-    );
-
-    for (const [query] of groupBy.mock.calls) {
-      expect(query.where).toMatchObject({
-        bug: { tenantId: "t1", projectId: "p1", track: "marketing", isDeleted: false },
-        withdrawnAt: null,
-        createdAt: { gte: since },
-      });
-    }
-    expect(bidders.map((bidder) => [bidder.agentId, bidder.open, bidder.won, bidder.winRate])).toEqual([
-      ["active", 1, 0, 0],
-      ["winner", 0, 3, 0.75],
-    ]);
-  });
-});

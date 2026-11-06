@@ -2,6 +2,7 @@ import type { Prisma } from "@prisma/client";
 import { IssueApiError } from "@/lib/agent-api/errors";
 import { isTenantAdmin } from "@/lib/agents/membership";
 import { prisma } from "@/lib/prisma";
+import { refOf, type ProjectRef } from "@/lib/project-paths";
 import type { AppRole } from "@/lib/roles";
 import { updateMarketingSettingsSchema } from "@/lib/validations/marketing";
 import { invalidateWorkflow, workflowFor } from "@/lib/workflow";
@@ -9,6 +10,7 @@ import { invalidateWorkflow, workflowFor } from "@/lib/workflow";
 export type MarketingSettingsResult = {
   projectId: string;
   slug: string;
+  ref: ProjectRef;
   name: string;
   revisionLimit: number;
 };
@@ -46,7 +48,7 @@ export async function getMarketingSettings(
       tenantId,
       OR: [{ id: projectIdOrSlug }, { slug: projectIdOrSlug }],
     },
-    select: { id: true, slug: true, name: true },
+    select: { id: true, slug: true, name: true, tenant: { select: { slug: true } } },
   });
   if (!project) throw new IssueApiError(404, "Project not found.");
 
@@ -54,6 +56,7 @@ export async function getMarketingSettings(
   return {
     projectId: project.id,
     slug: project.slug,
+    ref: refOf(project),
     name: project.name,
     revisionLimit: workflow.revisionLimit,
   };
@@ -81,7 +84,7 @@ export async function updateMarketingSettings(
       tenantId,
       OR: [{ id: projectIdOrSlug }, { slug: projectIdOrSlug }],
     },
-    select: { id: true, slug: true, name: true, workflow: true },
+    select: { id: true, slug: true, name: true, workflow: true, tenant: { select: { slug: true } } },
   });
   if (!project) throw new IssueApiError(404, "Project not found.");
 
@@ -119,6 +122,7 @@ export async function updateMarketingSettings(
   return {
     projectId: project.id,
     slug: project.slug,
+    ref: refOf(project),
     name: project.name,
     revisionLimit: newLimit,
   };

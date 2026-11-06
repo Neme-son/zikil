@@ -1,3 +1,4 @@
+import { DEFAULT_MARKETING_TASK_TYPES } from "../lib/marketing/default-task-types";
 import { Prisma, PrismaClient, Status, Substatus } from "@prisma/client";
 import bcrypt from "bcryptjs";
 
@@ -274,28 +275,18 @@ async function seedDemoData() {
   console.log("Demo login: alice@zendor.dev / 12345678 (admin)");
 }
 
-async function ensureDefaultCategories() {
-  const tenant = await prisma.tenant.findUnique({ where: { slug: "zedu" }, select: { id: true } });
-  if (!tenant) {
-    console.log("Skipping default platforms: the Zedu organization is missing.");
-    return;
-  }
-  const defaults = ["Desktop", "Web", "Mobile"];
-  for (const name of defaults) {
-    await prisma.category.upsert({
-      where: { tenantId_name: { tenantId: tenant.id, name } },
-      update: {},
-      // #platforms: the slug agents name it by ("desktop").
-      create: { tenantId: tenant.id, name, slug: name.toLowerCase(), isActive: true },
-    });
-  }
-}
-
 async function ensureDefaultTypes() {
   const tenant = await prisma.tenant.findUnique({ where: { slug: "zedu" }, select: { id: true } });
   if (!tenant) {
     console.log("Skipping default issue types: the Zedu organization is missing.");
     return;
+  }
+  for (const type of DEFAULT_MARKETING_TASK_TYPES) {
+    await prisma.issueType.upsert({
+      where: { tenantId_name: { tenantId: tenant.id, name: type.name } },
+      update: {},
+      create: { ...type, tenantId: tenant.id, track: "marketing" },
+    });
   }
   const count = await prisma.issueType.count({ where: { tenantId: tenant.id } });
   if (count > 0) {
@@ -329,7 +320,6 @@ async function main() {
 
   // Always idempotent; safe when a DB already has real accounts.
   await ensureSuperAdmin();
-  await ensureDefaultCategories();
   await ensureDefaultTypes();
 
   const seedDemo =

@@ -1,11 +1,18 @@
 import Link from "next/link";
 
-import { marketingPath, projectPath } from "@/lib/project-paths";
+import { marketingPath, projectPath, type ProjectRef } from "@/lib/project-paths";
 import { Badge } from "@/components/ui/badge";
-import type { MarketingSettingsData, MarketingTaskType } from "./model";
+import type { MarketingBriefKey, MarketingSettingsData, MarketingTaskType } from "./model";
 import { BriefForm } from "./brief-form";
 import { RevisionLimitForm } from "./revision-limit-form";
 import { TypesManager } from "./types-manager";
+
+const BRIEF_LABELS: { key: MarketingBriefKey; label: string }[] = [
+  { key: "product", label: "Product" },
+  { key: "audience", label: "Audience" },
+  { key: "currentFocus", label: "Current focus" },
+  { key: "outOfScope", label: "Out of scope" },
+];
 
 const card = "rounded-[20px] border border-zk-border bg-zk-surface p-5 sm:p-6";
 
@@ -53,11 +60,11 @@ export function MarketingSettings({
   projectName,
   data,
 }: {
-  slug: string;
+  slug: ProjectRef;
   projectName: string;
   data: MarketingSettingsData;
 }) {
-  const { revisionLimit, canManage, types } = data;
+  const { revisionLimit, canManage, types, brief } = data;
 
   if (!canManage) {
     return (
@@ -95,9 +102,16 @@ export function MarketingSettings({
         <section aria-labelledby="marketing-brief" className={card}>
           {heading("Brief", "marketing-brief")}
           <p className="mt-2 text-sm text-zk-text2">
-            What agents should know before proposing or delivering marketing work. It appears here once it is
-            stored on the project.
+            What agents should know before proposing or delivering marketing work.
           </p>
+          <dl className="m-0 mt-3 flex flex-col gap-3 text-sm">
+            {BRIEF_LABELS.map(({ key, label }) => (
+              <div key={key}>
+                <dt className="font-medium text-zk-text">{label}</dt>
+                <dd className="m-0 whitespace-pre-wrap break-words text-zk-text2">{brief[key] || "—"}</dd>
+              </div>
+            ))}
+          </dl>
         </section>
 
         <TypesReadOnly types={types} />
@@ -142,7 +156,7 @@ export function MarketingSettings({
         </p>
       </header>
 
-      <BriefForm slug={slug} />
+      <BriefForm slug={slug} initial={brief} />
       <TypesManager slug={slug} types={types} />
       <RevisionLimitForm slug={slug} current={revisionLimit} />
     </div>

@@ -17,6 +17,7 @@ import {
 } from "@/lib/invites";
 import { acceptShareLink, createShareLink, revokeShareLink } from "@/lib/share-invites";
 import { prisma } from "@/lib/prisma";
+import { EARN_WORKSPACE_SLUG } from "@/lib/earn/draft";
 import { issueHref } from "@/lib/issue-ref";
 import { RATE_LIMIT_MESSAGE, consumeRateLimit } from "@/lib/rate-limit";
 import {
@@ -31,8 +32,8 @@ import {
   setTenantArchived,
   type PromoteOwnerResult,
 } from "@/lib/tenants";
-import { refererProjectSlug } from "@/lib/referer-path";
-import { ideasPath, orgPath } from "@/lib/project-paths";
+import { refererProjectRef } from "@/lib/referer-path";
+import { orgPath } from "@/lib/project-paths";
 
 /**
  * The tenant picker's actions (#444), and the organization admin's actions
@@ -41,9 +42,9 @@ import { ideasPath, orgPath } from "@/lib/project-paths";
  */
 
 /** The organization admin area. It always shows the tenant this device is working in. */
-/** The org Settings page the action came from (`/<slug>/org/settings`, #project-urls). */
+/** The org Settings page the action came from (`/<org>/<project>/org/settings`, #project-urls). */
 async function orgSettingsPath(): Promise<string> {
-  const slug = await refererProjectSlug();
+  const slug = await refererProjectRef();
   return slug ? orgPath(slug, "settings") : "/home";
 }
 
@@ -56,12 +57,14 @@ export type TenantFormResult = {
 };
 
 /** Work in this tenant on this device, and open its project (#project-urls): the one given, else its first. */
-async function enterTenant(tenantId: string, projectId?: string): Promise<never> {
+async function enterTenant(tenantId: string): Promise<never> {
   await setActiveTenantCookie(tenantId);
   revalidatePath("/", "layout");
-  const project = projectId ? await prisma.project.findFirst({ where: { id: projectId, tenantId, archivedAt: null }, select: { slug: true } }) : null;
-  // /home opens the first project of the workspace just made current.
-  redirect(project ? ideasPath(project.slug) : "/home");
+  // The Earn workspace opens on Earn's own default page, never the builders' Ideas.
+  const tenant = await prisma.tenant.findUnique({ where: { id: tenantId }, select: { slug: true } });
+  if (tenant?.slug === EARN_WORKSPACE_SLUG) redirect("/earn/home");
+  // /home opens the first project of the workspace just made current, or its Projects page when it has none.
+  redirect("/home");
 }
 
 /**
@@ -92,24 +95,24 @@ export async function switchTenantForIssueAction(formData: FormData): Promise<vo
   revalidatePath("/", "layout");
   const bug = await prisma.bug.findFirst({
     where: { id: issueId, tenantId: tenant.id },
-    select: { number: true, project: { select: { slug: true } } },
+    select: { number: true, project: { select: { slug: true, tenant: { select: { slug: true } } } } },
   });
   redirect(bug ? issueHref(bug) : "/home");
 }
 
-/** Create a tenant owned by the person, with its first project, and enter it. */
+/** Create a tenant owned by the person and enter it, on its Projects page to create the first project. */
 export async function createTenantAction(
   _previous: TenantFormResult | undefined,
   formData: FormData,
 ): Promise<TenantFormResult> {
   const user = await requireUser();
-  const input = { name: formData.get("name") ?? "", projectName: formData.get("projectName") ?? "" };
+  const input = { name: formData.get("name") ?? "" };
 
   // Typos don't count against the limit; only real attempts do.
   const parsed = createTenantSchema.safeParse(input);
   if (!parsed.success) {
     const issue = parsed.error.issues[0];
-    return fieldError(issue?.path[0] === "projectName" ? "projectName" : "name", issue?.message ?? "Check the name.");
+    return fieldError("name", issue?.message ?? "Check the name.");
   }
   if (!(await consumeRateLimit(`tenant-create:${user.id}`, CREATE_TENANT_RATE_LIMIT)).allowed) {
     return { error: RATE_LIMIT_MESSAGE };
@@ -124,7 +127,7 @@ export async function createTenantAction(
     const error = fieldError(result.field ?? "name", result.error);
     return result.duplicateName ? { ...error, duplicateName: result.duplicateName } : error;
   }
-  return enterTenant(result.tenant.id, result.projectId);
+  return enterTenant(result.tenant.id);
 }
 
 /** Rename a tenant the person owns; the slug stays the same. */
@@ -223,7 +226,7 @@ export async function createInviteAction(
     });
   }
 
-  revalidatePath("/[project]/org", "layout");
+  revalidatePath("/[org]/[project]/org", "layout");
   return {
     ok: true,
     email: result.invite.email,
@@ -255,7 +258,7 @@ export async function createShareLinkAction(
   });
   if (!result.ok) return result;
 
-  revalidatePath("/[project]/org", "layout");
+  revalidatePath("/[org]/[project]/org", "layout");
   return { ok: true, url: result.url };
 }
 
@@ -263,7 +266,7 @@ export async function createShareLinkAction(
 export async function revokeShareLinkAction(formData: FormData): Promise<void> {
   const user = await requireUser();
   const result = await revokeShareLink(prisma, user, String(formData.get("linkId") ?? ""));
-  if (result.ok) revalidatePath("/[project]/org", "layout");
+  if (result.ok) revalidatePath("/[org]/[project]/org", "layout");
 }
 
 /**
@@ -287,7 +290,7 @@ export async function acceptShareLinkAction(formData: FormData): Promise<void> {
 export async function revokeInviteAction(formData: FormData): Promise<void> {
   const user = await requireUser();
   const result = await revokeInvite(prisma, user, String(formData.get("inviteId") ?? ""));
-  if (result.ok) revalidatePath("/[project]/org", "layout");
+  if (result.ok) revalidatePath("/[org]/[project]/org", "layout");
 }
 
 export type AcceptInviteActionResult = { error?: string };

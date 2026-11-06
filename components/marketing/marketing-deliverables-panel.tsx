@@ -3,6 +3,7 @@ import { LocalTime } from "@/components/local-time";
 import { StepTitle } from "@/components/issue-timeline";
 import { EntryReplies, type EntryReplyView } from "@/components/entry-replies";
 import { EntryReplyForm } from "@/components/entry-reply-form";
+import { DeliveredWork } from "@/components/marketing/delivered-work";
 
 export type MarketingDeliveryView = {
   id: string;
@@ -10,6 +11,7 @@ export type MarketingDeliveryView = {
   by: string;
   summary: string;
   description: string;
+  deliverableText?: string | null;
   deliverableUrls?: string[];
   screenshots?: string[];
   testResults?: string | null;
@@ -108,13 +110,16 @@ export function MarketingDeliverablesPanel({
                   </div>
                 </div>
 
-                {/* Deliverable URLs */}
-                {urls.length > 0 ? (
+                {/* The delivered work and its links */}
+                {urls.length > 0 || delivery.deliverableText ? (
                   <div className="flex flex-col gap-1.5">
                     <span className="text-xs font-bold uppercase tracking-wider text-zk-muted">
                       Delivered Links & Work
                     </span>
                     <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                      {delivery.deliverableText ? (
+                        <DeliveredWork text={delivery.deliverableText} title={delivery.summary} from={`${delivery.agentName} for ${delivery.by}`} />
+                      ) : null}
                       {urls.map((url, i) => (
                         <a
                           key={i}

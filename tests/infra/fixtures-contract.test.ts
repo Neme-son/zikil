@@ -76,7 +76,7 @@ describe("the local fixtures", () => {
       expect(on("deliveries").length).toBeGreaterThan(0);
       for (const delivery of on("deliveries")) {
         expect(delivery.pullRequestUrl).toBeNull();
-        expect((delivery.deliverableUrls as string[]).length).toBeGreaterThan(0);
+        expect((delivery.deliverableUrls as string[]).length > 0 || Boolean(delivery.deliverableText)).toBe(true);
       }
     });
 

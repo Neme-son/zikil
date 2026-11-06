@@ -26,12 +26,12 @@ export function bugSearchDocument(row: Bug): WorkItemDocument {
     projectId: row.projectId, track: row.track, number: row.number, numberText: String(row.number), title: row.title,
     description: row.description, status: row.status, substatus: row.substatus,
     substatusOrder: SUBSTATUS_ORDER.indexOf(row.substatus),
-    typeId: row.typeId ?? undefined, categoryId: row.categoryId ?? undefined,
+    typeId: row.typeId ?? undefined,
     areaId: row.areaId ?? undefined, milestoneId: row.milestoneId ?? undefined,
     reporterId: row.reporterId ?? undefined, assigneeId: row.assigneeId ?? undefined,
     createdByAgentId: row.createdByAgentId ?? undefined,
     duplicateOfId: row.duplicateOfId ?? undefined,
-    hasType: row.typeId !== null, hasCategory: row.categoryId !== null, hasArea: row.areaId !== null,
+    hasType: row.typeId !== null, hasArea: row.areaId !== null,
     hasMilestone: row.milestoneId !== null, hasAssignee: row.assigneeId !== null,
     hasAgentCreator: row.createdByAgentId !== null, hasDuplicateOf: row.duplicateOfId !== null,
     hasBoostedAt: row.boostedAt !== null, isDeleted: row.isDeleted,
@@ -45,9 +45,9 @@ export function ideaSearchDocument(row: Idea): WorkItemDocument {
     id: documentId("idea", row.id), sourceId: row.id, kind: "idea", tenantId: row.tenantId,
     projectId: row.projectId, track: row.track, number: row.number, numberText: String(row.number), title: row.title,
     description: row.description, status: row.status, typeId: row.typeId ?? undefined,
-    categoryId: row.categoryId ?? undefined, areaId: row.areaId ?? undefined, substatusOrder: 0,
+    areaId: row.areaId ?? undefined, substatusOrder: 0,
     reporterId: row.reporterId ?? undefined, createdByAgentId: row.createdByAgentId ?? undefined,
-    hasType: row.typeId !== null, hasCategory: row.categoryId !== null, hasArea: row.areaId !== null,
+    hasType: row.typeId !== null, hasArea: row.areaId !== null,
     hasMilestone: false, hasAssignee: false, hasAgentCreator: row.createdByAgentId !== null,
     hasDuplicateOf: false, hasBoostedAt: false, isDeleted: row.isDeleted, isBoosted: false,
     voteCount: 0, score: row.score, reward: 0, createdAt: epoch(row.createdAt)!, updatedAt: epoch(row.updatedAt)!,
@@ -88,7 +88,7 @@ export function ideaSearchSort(sort: string): string {
 export function typesenseFilter(field: string, value: unknown): string | null {
   if (value === undefined) return null;
   const presenceFields: Record<string, string> = {
-    typeId: "hasType", categoryId: "hasCategory", areaId: "hasArea", milestoneId: "hasMilestone",
+    typeId: "hasType", areaId: "hasArea", milestoneId: "hasMilestone",
     assigneeId: "hasAssignee", createdByAgentId: "hasAgentCreator", duplicateOfId: "hasDuplicateOf", boostedAt: "hasBoostedAt",
   };
   const literal = (item: string | number | boolean) => typeof item === "string" && !/^[\w-]+$/.test(item)

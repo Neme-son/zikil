@@ -8,6 +8,8 @@ export type DeliveredBannerProps = {
   pullRequestUrl: string | null;
   /** Links to finished work for marketing deliveries. */
   deliverableUrls?: string[] | null;
+  /** Whether a marketing delivery carries the work itself, which opens from the deliverables panel. */
+  hasDeliverableText?: boolean;
   deliveredAt: Date | string;
   /**
    * Set when the issue went back after this delivery (a rejected merge
@@ -29,6 +31,7 @@ export function DeliveredBanner({
   summary,
   pullRequestUrl,
   deliverableUrls,
+  hasDeliverableText = false,
   deliveredAt,
   sentBack = null,
 }: DeliveredBannerProps) {
@@ -59,6 +62,10 @@ export function DeliveredBanner({
           {pullRequestUrl ? (
             <a href={pullRequestUrl} target="_blank" rel="noreferrer" className="font-semibold text-zk-accent hover:underline">
               {number ? `PR #${number}` : "Pull request"}
+            </a>
+          ) : hasDeliverableText ? (
+            <a href="#deliverables" className="font-semibold text-zk-accent hover:underline">
+              Read the work
             </a>
           ) : deliverableUrls && deliverableUrls.length > 0 ? (
             <a href={deliverableUrls[0]} target="_blank" rel="noreferrer" className="font-semibold text-zk-accent hover:underline">

@@ -244,6 +244,7 @@ export async function correctEntry(
     role: entry.role,
     points: -pointsNumber(entry.points),
     sourceKey: correctionSourceKey(entry.id),
+    exact: true,
   });
   await db.pointDispute.update({
     where: { id: dispute.id },
@@ -286,7 +287,7 @@ const disputeSelect = {
   createdAt: true,
   pointEntryId: true,
   requestedRole: true,
-  bug: { select: { id: true, number: true, title: true, project: { select: { slug: true } } } },
+  bug: { select: { id: true, number: true, title: true, project: { select: { slug: true, tenant: { select: { slug: true } } } } } },
   user: { select: { id: true, name: true } },
   pointEntry: { select: { id: true, points: true, role: true } },
 } satisfies Prisma.PointDisputeSelect;
@@ -305,7 +306,7 @@ export type DisputeView = {
   bugId: string;
   bugNumber: number;
   bugTitle: string;
-  /** The issue's address, `/<project-slug>/<number>`. */
+  /** The issue's address, `/<org>/<project>/<number>`. */
   bugPath: string;
   openerId: string;
   openerName: string;

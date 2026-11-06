@@ -201,7 +201,7 @@ describe("Typesense outbox delivery", () => {
   });
 
   it("represents nullable filters with indexed presence flags", () => {
-    expect(typesenseFilter("categoryId", null)).toBe("hasCategory:=false");
+    expect(typesenseFilter("areaId", null)).toBe("hasArea:=false");
     expect(typesenseFilter("duplicateOfId", { not: null })).toBe("hasDuplicateOf:=true");
     expect(typesenseFilter("unsupported", null)).toBeNull();
   });
@@ -216,10 +216,10 @@ describe("Typesense outbox delivery", () => {
 
   it("rejects an existing collection whose optional-field contract is incompatible", async () => {
     searchMocks.existingFields = WORK_ITEMS_SCHEMA.fields.map((field) => ({ ...field }));
-    searchMocks.existingFields.find((field) => field.name === "categoryId")!.optional = false;
+    searchMocks.existingFields.find((field) => field.name === "areaId")!.optional = false;
     searchMocks.createCollection.mockRejectedValueOnce(new Error("collection already exists"));
 
-    await expect(ensureWorkItemsCollection()).rejects.toThrow("incompatible field categoryId");
+    await expect(ensureWorkItemsCollection()).rejects.toThrow("incompatible field areaId");
   });
 });
 

@@ -4,7 +4,7 @@ import type { IssueRowWork } from "@/components/issue-row-status";
 import { statusLabel } from "@/lib/labels";
 import { parseBugSort, type BugSortOption } from "@/lib/issues-sort";
 import { parseIdeaSort, type IdeaSortOption } from "@/lib/list-sort";
-import { marketingPath } from "@/lib/project-paths";
+import { marketingPath, type ProjectRef } from "@/lib/project-paths";
 import { toSingleQueryParam } from "@/lib/search";
 
 /**
@@ -98,6 +98,6 @@ export function parseTaskView(
 }
 
 /** A tab's address. The sort isn't carried across: each list keeps its own. */
-export function tasksHref(slug: string, tab: TaskTab): string {
+export function tasksHref(slug: ProjectRef, tab: TaskTab): string {
   return `${marketingPath(slug)}?status=${tab.param}`;
 }

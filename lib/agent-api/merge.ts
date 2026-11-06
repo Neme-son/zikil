@@ -1,3 +1,4 @@
+import { refreshIssueRatings } from "@/lib/agents/profile";
 import { Prisma, type WorkTrack } from "@prisma/client";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
@@ -50,7 +51,7 @@ import { moveTo } from "@/lib/issue-substatus";
  * narrated in comments: the review, the activity log, the audit log and the
  * events are the record.
  *
- * Ziki never calls GitHub (#pr-reports). An accept needs the latest
+ * Agents report pull requests and Ziki reads them on GitHub (#pr-reports, #github-status). An accept needs the latest
  * independent report on the linked pull request to say it can merge
  * (lib/agent-api/pr-gate.ts): open, its checks passing (or none), no conflict,
  * at the head Ziki has. The merge itself happens on GitHub, by the merger agent;
@@ -246,6 +247,8 @@ async function saveMergeReview(
   const saved = existing
     ? await tx.mergeReview.update({ where: { id: existing.id }, data, select: reviewSelect })
     : await tx.mergeReview.create({ data: { ...data, bugId: bug.id, agentId: agent.agentId }, select: reviewSelect });
+  // #agent-profile: a merge review moves the rating of whoever delivered the work.
+  await refreshIssueRatings(tx, bug.id);
   return { review: saved, replaced: Boolean(existing) };
 }
 

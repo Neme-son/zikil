@@ -11,6 +11,8 @@ const upsert = vi.hoisted(() => vi.fn());
 const auditCreate = vi.hoisted(() => vi.fn());
 const transaction = vi.hoisted(() => vi.fn());
 const requireAgent = vi.hoisted(() => vi.fn());
+const briefFindUnique = vi.hoisted(() => vi.fn());
+const briefUpsert = vi.hoisted(() => vi.fn());
 
 vi.mock("@/auth", () => ({ auth: vi.fn() }));
 vi.mock("next-auth", () => ({ default: vi.fn() }));
@@ -42,6 +44,7 @@ vi.mock("@/lib/prisma", () => ({
     projectAuditEvent: { create: auditCreate },
     agentAuditEvent: { create: vi.fn() },
     user: { findUnique },
+    projectBrief: { findUnique: briefFindUnique, upsert: briefUpsert },
     $transaction: transaction,
   },
 }));
@@ -52,15 +55,78 @@ import {
   updateMarketingSettings,
 } from "@/lib/marketing/settings";
 import { updateMarketingSettingsAction } from "@/app/actions/marketing-settings";
-import { GET, PATCH } from "@/app/api/v1/projects/[id]/marketing-settings/route";
-import { GET as MarketingGET, PATCH as MarketingPATCH } from "@/app/api/v1/marketing/settings/route";
+import { GET, PATCH } from "@/app/api/v1/projects/[id]/marketing/settings/route";
+import { readProjectBrief, saveProjectBrief } from "@/lib/marketing/brief";
 import { NextRequest } from "next/server";
+
+describe("The project brief (M-API-8)", () => {
+  const stored = { product: "Ziki", audience: null, currentFocus: "First ten teams", outOfScope: null };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    briefFindUnique.mockResolvedValue(null);
+    findUnique.mockResolvedValue(null);
+    transaction.mockImplementation(async (run: (tx: unknown) => unknown) =>
+      run({ projectBrief: { upsert: briefUpsert }, projectAuditEvent: { create: auditCreate } }),
+    );
+  });
+
+  it("gives agents the contract's field names, and null for a field nobody filled in", async () => {
+    briefFindUnique.mockResolvedValue(stored);
+    await expect(readProjectBrief("p1")).resolves.toEqual({
+      product: "Ziki", audience: null, website: null, current_focus: "First ten teams", out_of_scope: null,
+    });
+  });
+
+  it("gives agents the project's own site link as the website, even before anyone writes a brief", async () => {
+    findUnique.mockResolvedValue({ siteUrl: "https://ziki.dev" });
+    await expect(readProjectBrief("p1")).resolves.toEqual({
+      product: null, audience: null, website: "https://ziki.dev", current_focus: null, out_of_scope: null,
+    });
+  });
+
+  it("gives agents no brief when none exists or every field is blank", async () => {
+    await expect(readProjectBrief("p1")).resolves.toBeNull();
+    briefFindUnique.mockResolvedValue({ product: null, audience: null, currentFocus: null, outOfScope: null });
+    await expect(readProjectBrief("p1")).resolves.toBeNull();
+  });
+
+  it("stores blanks as nothing and audits which fields changed", async () => {
+    await saveProjectBrief("tenant-1", "p1", "user-1", {
+      product: " Ziki ", audience: "", currentFocus: "First ten teams", outOfScope: "",
+    });
+    expect(briefUpsert).toHaveBeenCalledWith({
+      where: { projectId: "p1" },
+      update: stored,
+      create: { projectId: "p1", ...stored },
+    });
+    expect(auditCreate).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        tenantId: "tenant-1", projectId: "p1", actorUserId: "user-1", action: "marketing.brief.updated",
+        changes: { fields: ["product", "currentFocus"] },
+      }),
+    });
+  });
+
+  it("writes nothing when nothing changed", async () => {
+    briefFindUnique.mockResolvedValue(stored);
+    await saveProjectBrief("tenant-1", "p1", "user-1", { product: "Ziki", currentFocus: "First ten teams" });
+    expect(briefUpsert).not.toHaveBeenCalled();
+    expect(auditCreate).not.toHaveBeenCalled();
+  });
+
+  it("refuses a website, which now lives in project settings, and an unknown field", async () => {
+    await expect(saveProjectBrief("tenant-1", "p1", "user-1", { website: "https://ziki.dev" })).rejects.toThrow();
+    await expect(saveProjectBrief("tenant-1", "p1", "user-1", { points: 5 })).rejects.toThrow();
+    expect(briefUpsert).not.toHaveBeenCalled();
+  });
+});
 
 describe("Marketing settings core (M-API-6)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     isTenantAdmin.mockResolvedValue(true);
-    findFirst.mockResolvedValue({ id: "proj-1", slug: "marketing-proj", name: "Marketing Proj", workflow: null });
+    findFirst.mockResolvedValue({ id: "proj-1", slug: "marketing-proj", name: "Marketing Proj", workflow: null, tenant: { slug: "acme" } });
     findUnique.mockResolvedValue({ revisionLimit: 2 });
     transaction.mockImplementation(async (run: (tx: unknown) => unknown) =>
       run({
@@ -94,6 +160,7 @@ describe("Marketing settings core (M-API-6)", () => {
       expect(res).toEqual({
         projectId: "proj-1",
         slug: "marketing-proj",
+        ref: "acme/marketing-proj",
         name: "Marketing Proj",
         revisionLimit: 2,
       });
@@ -131,6 +198,7 @@ describe("Marketing settings core (M-API-6)", () => {
       expect(res).toEqual({
         projectId: "proj-1",
         slug: "marketing-proj",
+        ref: "acme/marketing-proj",
         name: "Marketing Proj",
         revisionLimit: 4,
       });
@@ -174,7 +242,7 @@ describe("Marketing settings API route (M-API-6)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     isTenantAdmin.mockResolvedValue(true);
-    findFirst.mockResolvedValue({ id: "proj-1", slug: "marketing-proj", name: "Marketing Proj", workflow: null });
+    findFirst.mockResolvedValue({ id: "proj-1", slug: "marketing-proj", name: "Marketing Proj", workflow: null, tenant: { slug: "acme" } });
     findUnique.mockResolvedValue({ revisionLimit: 2 });
     requireAgent.mockResolvedValue({
       agentId: "agent-1",
@@ -194,8 +262,8 @@ describe("Marketing settings API route (M-API-6)", () => {
     );
   });
 
-  it("GET /api/v1/projects/[id]/marketing-settings returns 200 with dials for an admin agent", async () => {
-    const req = new NextRequest("http://localhost/api/v1/projects/proj-1/marketing-settings", {
+  it("GET /api/v1/projects/[id]/marketing/settings returns 200 with dials for an admin agent", async () => {
+    const req = new NextRequest("http://localhost/api/v1/projects/proj-1/marketing/settings", {
       headers: { authorization: "Bearer ziki_test" },
     });
     const res = await GET(req, { params: Promise.resolve({ id: "proj-1" }) });
@@ -210,7 +278,7 @@ describe("Marketing settings API route (M-API-6)", () => {
 
   it("GET returns 403 if agent owner is not a workspace admin", async () => {
     isTenantAdmin.mockResolvedValue(false);
-    const req = new NextRequest("http://localhost/api/v1/projects/proj-1/marketing-settings", {
+    const req = new NextRequest("http://localhost/api/v1/projects/proj-1/marketing/settings", {
       headers: { authorization: "Bearer ziki_test" },
     });
     const res = await GET(req, { params: Promise.resolve({ id: "proj-1" }) });
@@ -219,8 +287,8 @@ describe("Marketing settings API route (M-API-6)", () => {
     expect(data.error).toBe("Only workspace owners and admins can view marketing settings.");
   });
 
-  it("PATCH /api/v1/projects/[id]/marketing-settings updates revisionLimit", async () => {
-    const req = new NextRequest("http://localhost/api/v1/projects/proj-1/marketing-settings", {
+  it("PATCH /api/v1/projects/[id]/marketing/settings updates revisionLimit", async () => {
+    const req = new NextRequest("http://localhost/api/v1/projects/proj-1/marketing/settings", {
       method: "PATCH",
       headers: {
         authorization: "Bearer ziki_test",
@@ -243,7 +311,7 @@ describe("Marketing settings API route (M-API-6)", () => {
   });
 
   it("PATCH returns 400 if revisionLimit is out of range", async () => {
-    const req = new NextRequest("http://localhost/api/v1/projects/proj-1/marketing-settings", {
+    const req = new NextRequest("http://localhost/api/v1/projects/proj-1/marketing/settings", {
       method: "PATCH",
       headers: {
         authorization: "Bearer ziki_test",
@@ -254,29 +322,6 @@ describe("Marketing settings API route (M-API-6)", () => {
     const res = await PATCH(req, { params: Promise.resolve({ id: "proj-1" }) });
     expect(res.status).toBe(400);
   });
-
-  it("GET and PATCH work on /api/v1/marketing/settings with ?projectId=", async () => {
-    const getReq = new NextRequest("http://localhost/api/v1/marketing/settings?projectId=proj-1", {
-      headers: { authorization: "Bearer ziki_test" },
-    });
-    const getRes = await MarketingGET(getReq);
-    expect(getRes.status).toBe(200);
-    const getData = await getRes.json();
-    expect(getData.revisionLimit).toBe(2);
-
-    const patchReq = new NextRequest("http://localhost/api/v1/marketing/settings?projectId=proj-1", {
-      method: "PATCH",
-      headers: {
-        authorization: "Bearer ziki_test",
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({ revisionLimit: 5 }),
-    });
-    const patchRes = await MarketingPATCH(patchReq);
-    expect(patchRes.status).toBe(200);
-    const patchData = await patchRes.json();
-    expect(patchData.revisionLimit).toBe(5);
-  });
 });
 
 describe("updateMarketingSettingsAction (M-API-6, M-UI-7)", () => {
@@ -285,7 +330,7 @@ describe("updateMarketingSettingsAction (M-API-6, M-UI-7)", () => {
     requireUser.mockResolvedValue({ id: "user-admin", role: "admin" });
     isTenantAdmin.mockResolvedValue(true);
     currentTenantIdFor.mockResolvedValue("tenant-1");
-    findFirst.mockResolvedValue({ id: "proj-1", slug: "marketing-proj", name: "Marketing Proj", workflow: null });
+    findFirst.mockResolvedValue({ id: "proj-1", slug: "marketing-proj", name: "Marketing Proj", workflow: null, tenant: { slug: "acme" } });
     findUnique.mockResolvedValue({ revisionLimit: 2 });
     transaction.mockImplementation(async (run: (tx: unknown) => unknown) =>
       run({
@@ -307,8 +352,8 @@ describe("updateMarketingSettingsAction (M-API-6, M-UI-7)", () => {
         update: { revisionLimit: 4 },
       }),
     );
-    expect(revalidatePath).toHaveBeenCalledWith("/marketing-proj/marketing/settings");
-    expect(revalidatePath).toHaveBeenCalledWith("/marketing-proj/settings");
+    expect(revalidatePath).toHaveBeenCalledWith("/acme/marketing-proj/marketing/settings");
+    expect(revalidatePath).toHaveBeenCalledWith("/acme/marketing-proj/settings");
   });
 
   it("rejects non-admins", async () => {

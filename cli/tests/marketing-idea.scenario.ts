@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import { fileIssue, ok, refused, unique } from "./helpers";
 
 /**
@@ -16,18 +16,26 @@ const task = (label: string) => ({
   acknowledgeSimilar: true,
 });
 
+/** A marketing task type of this sandbox's own: the Demo workspace's types belong to that workspace. */
+let marketingTypeId: string;
+
+beforeAll(async () => {
+  const project = (await ok("ada", "whoami")).project_id as string;
+  marketingTypeId = (await ok("ada", "create-marketing-task-type", { id: project, name: unique("CLI blog post") })).taskType.id as string;
+});
+
 describe("proposing a marketing task", () => {
   it("files a marketing idea with its rationale and task type", async () => {
     const created = await ok("ada", "create-idea", {
       ...task("CLI marketing: launch post for the issue list"),
       track: "marketing",
       rationale: "People keep asking what changed, and a post answers them all at once.",
-      typeId: "fx-issuetype-blog",
+      typeId: marketingTypeId,
     });
     expect(created.idea).toMatchObject({
       track: "marketing",
       rationale: "People keep asking what changed, and a post answers them all at once.",
-      typeId: "fx-issuetype-blog",
+      typeId: marketingTypeId,
       status: "open",
     });
   });
@@ -40,7 +48,7 @@ describe("proposing a marketing task", () => {
   });
 
   it("refuses a marketing task type on a product idea", async () => {
-    const wrong = await refused("ada", "create-idea", { ...task("CLI marketing: type on product"), typeId: "fx-issuetype-blog" }, 422);
+    const wrong = await refused("ada", "create-idea", { ...task("CLI marketing: type on product"), typeId: marketingTypeId }, 422);
     expect(wrong).toMatchObject({ error: "wrong_track" });
   });
 });

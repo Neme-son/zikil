@@ -18,9 +18,7 @@ import {
   toPage,
   type IssueCursor,
 } from "@/lib/agent-api/create-policy";
-import { issueJson, issueProject, requireKnownFilter } from "@/lib/agent-api/issues";
-import { parsePlatformFilter, PLATFORM_NONE } from "@/lib/platform-filter";
-import { platformSelect, resolvePlatform, withPlatform } from "@/lib/platforms";
+import { issueJson, issueProject } from "@/lib/agent-api/issues";
 import { createBugSchema } from "@/lib/validations/issue";
 import { attachmentIdsInMarkdown, linkAttachments } from "@/lib/attachment-link";
 import { MAX_ATTACHMENT_BYTES, MAX_ATTACHMENTS_PER_ITEM, checkAttachment } from "@/lib/attachments";
@@ -33,6 +31,10 @@ import { workflowFor } from "@/lib/workflow";
 import { ideaVoteTotals, NO_VOTES } from "@/lib/idea-vote-totals";
 import { searchWorkItems } from "@/lib/search-index";
 import { agentAttachmentUrl } from "@/lib/agent-api/attachment-read";
+import { convertVettedIdea } from "@/lib/agent-api/idea-verdicts";
+
+/** How many ideas one person's agents may file as already vetted in 24 hours. */
+export const VETTED_IDEAS_PER_DAY = 5;
 
 /**
  * Ideas through the agent API (#idea-table). Every report is an idea: an
@@ -50,8 +52,6 @@ const attachmentIdsSchema = z.array(idSchema).max(MAX_ATTACHMENTS_PER_ITEM).opti
 export const createIdeaSchema = createBugSchema
   .pick({ title: true, description: true, areaId: true, proofLinks: true })
   .extend({
-    /** #platforms: where it shows up, by slug ("desktop") or id, from GET /api/v1/platforms. */
-    platform: z.string().trim().min(1).max(191).optional(),
     // #494: no beneficiaryUserId. The reporter is always the agent's owner.
     projectId: idSchema.optional(),
     typeId: z.unknown().optional(),
@@ -59,6 +59,10 @@ export const createIdeaSchema = createBugSchema
     track: z.unknown().optional(),
     rationale: z.unknown().optional(),
     acknowledgeSimilar: z.unknown().optional(),
+    /** The owner says this idea was already vetted elsewhere: it becomes an issue at once (needs `vettedNote`). */
+    alreadyVetted: z.boolean().optional(),
+    /** Where and by whom it was approved, for example "Approved by Mark, sheet row 42". Shown on the issue. */
+    vettedNote: z.string().trim().min(5).max(300).optional(),
     attachmentIds: attachmentIdsSchema,
     // Up to three plain lines a person can read at a glance (#report-summary).
     summary: reportSummarySchema,
@@ -78,9 +82,6 @@ export const ideaSelect = {
   status: true,
   score: true,
   typeId: true,
-  categoryId: true,
-  // #platforms: returned as `platform: { id, slug, name }` (ideaJson renames it).
-  category: { select: platformSelect },
   areaId: true,
   proofLinks: true,
   projectId: true,
@@ -102,7 +103,7 @@ type IdeaRow = Prisma.IdeaGetPayload<{ select: typeof ideaSelect }>;
 
 /** The idea as the API shows it: the issue it became, and whether it can be converted now. */
 export function ideaJson(idea: IdeaRow, ideaThreshold: number) {
-  const { issue, rationale, ...rest } = withPlatform(idea);
+  const { issue, rationale, ...rest } = idea;
   return {
     ...rest,
     // Only marketing ideas carry a rationale.
@@ -114,7 +115,7 @@ export function ideaJson(idea: IdeaRow, ideaThreshold: number) {
   };
 }
 
-/** `?track=`, `?status=`, `?convertible=`, `?platform=` (slug, id or "none"), `?q=` and the shared cursor, newest first. */
+/** `?track=`, `?status=`, `?convertible=`, `?q=` and the shared cursor, newest first. */
 export async function listAgentIdeas(scope: Scope, params: URLSearchParams) {
   const track = parseTrackFilter(params.get("track"));
   if (!track.ok) throw new IssueApiError(400, track.message, { error: "invalid_request", field: "track" });
@@ -134,16 +135,10 @@ export async function listAgentIdeas(scope: Scope, params: URLSearchParams) {
   const { ideaThreshold } = await workflowFor(scope.projectId);
   const q = params.get("q")?.trim();
   const term = q ? escapeSearchQuery(boundSearchTerm(q)) : null;
-  const rawPlatform = params.get("platform");
-  const platforms = rawPlatform
-    ? await prisma.category.findMany({ where: { tenantId: scope.tenantId }, select: { id: true, name: true, slug: true } })
-    : [];
-  const platform = requireKnownFilter("platform", rawPlatform, parsePlatformFilter(rawPlatform, platforms));
-  const baseWhere: Prisma.IdeaWhereInput = {
+  const where: Prisma.IdeaWhereInput = {
     ...scope,
     track: track.track,
     isDeleted: false,
-    ...(platform ? { categoryId: platform === PLATFORM_NONE ? null : platform } : {}),
     ...(rawStatus ? { status: rawStatus as IdeaStatus } : {}),
     ...(convertibleRaw === "true" ? { status: "open", score: { gte: ideaThreshold } } : {}),
     ...(convertibleRaw === "false" ? { NOT: { status: "open", score: { gte: ideaThreshold } } } : {}),
@@ -155,7 +150,6 @@ export async function listAgentIdeas(scope: Scope, params: URLSearchParams) {
         ...(rawStatus ? [`status:=${rawStatus}`] : []),
         ...(convertibleRaw === "true" ? ["status:=open", `score:>=${ideaThreshold}`] : []),
         ...(convertibleRaw === "false" ? [`(status:!=open || score:<${ideaThreshold})`] : []),
-        ...(platform === PLATFORM_NONE ? ["hasCategory:=false"] : platform ? [`categoryId:=${platform}`] : []),
         // Typesense supports numeric ranges, not string range filters. Fetch
         // through the cursor timestamp, then apply the full (time, id) cursor
         // predicate in PostgreSQL before counting the page.
@@ -171,7 +165,7 @@ export async function listAgentIdeas(scope: Scope, params: URLSearchParams) {
         if (pageNumber === 1 && found === 0) throw new Error("Typesense returned no candidates; verifying with PostgreSQL.");
         ids.push(...batch.hits.map((hit) => hit.id));
         const currentRows = await prisma.idea.findMany({
-          where: { ...baseWhere, ...(cursor ? ideaCursorWhere(cursor) : {}), id: { in: ids } },
+          where: { ...where, ...(cursor ? ideaCursorWhere(cursor) : {}), id: { in: ids } },
           orderBy: [{ createdAt: "desc" }, { id: "desc" }], take: limit + 1, select: ideaSelect,
         });
         const literalQuery = boundSearchTerm(q).toLocaleLowerCase();
@@ -179,14 +173,14 @@ export async function listAgentIdeas(scope: Scope, params: URLSearchParams) {
         if (rows.length > limit || pageNumber * batchSize >= found || batch.hits.length === 0) break;
         pageNumber += 1;
       }
-      const sourceCount = await prisma.idea.count({ where: { ...baseWhere, ...(term ? { AND: [{ OR: [{ title: { contains: term, mode: "insensitive" as const } }, { description: { contains: term, mode: "insensitive" as const } }] }] } : {}), ...(cursor ? ideaCursorWhere(cursor) : {}) } });
+      const sourceCount = await prisma.idea.count({ where: { ...where, ...(term ? { AND: [{ OR: [{ title: { contains: term, mode: "insensitive" as const } }, { description: { contains: term, mode: "insensitive" as const } }] }] } : {}), ...(cursor ? ideaCursorWhere(cursor) : {}) } });
       if (rows.length < Math.min(limit + 1, sourceCount)) throw new Error("Typesense candidate page is incomplete; verifying with PostgreSQL.");
     } catch (error) {
       console.error("[agent-api/ideas] Typesense search failed; using PostgreSQL", error);
-      rows = await prisma.idea.findMany({ where: { ...baseWhere, ...(term ? { AND: [{ OR: [{ title: { contains: term, mode: "insensitive" as const } }, { description: { contains: term, mode: "insensitive" as const } }] }] } : {}), ...(cursor ? ideaCursorWhere(cursor) : {}) }, orderBy: [{ createdAt: "desc" }, { id: "desc" }], take: limit + 1, select: ideaSelect });
+      rows = await prisma.idea.findMany({ where: { ...where, ...(term ? { AND: [{ OR: [{ title: { contains: term, mode: "insensitive" as const } }, { description: { contains: term, mode: "insensitive" as const } }] }] } : {}), ...(cursor ? ideaCursorWhere(cursor) : {}) }, orderBy: [{ createdAt: "desc" }, { id: "desc" }], take: limit + 1, select: ideaSelect });
     }
   } else {
-    rows = await prisma.idea.findMany({ where: { ...baseWhere, ...(term ? { AND: [{ OR: [{ title: { contains: term, mode: "insensitive" as const } }, { description: { contains: term, mode: "insensitive" as const } }] }] } : {}), ...(cursor ? ideaCursorWhere(cursor) : {}) }, orderBy: [{ createdAt: "desc" }, { id: "desc" }], take: limit + 1, select: ideaSelect });
+    rows = await prisma.idea.findMany({ where: { ...where, ...(term ? { AND: [{ OR: [{ title: { contains: term, mode: "insensitive" as const } }, { description: { contains: term, mode: "insensitive" as const } }] }] } : {}), ...(cursor ? ideaCursorWhere(cursor) : {}) }, orderBy: [{ createdAt: "desc" }, { id: "desc" }], take: limit + 1, select: ideaSelect });
   }
   const page = toPage(rows, limit);
   // #724: each idea's weighted good, bad and neutral votes, as the Ideas list shows them.
@@ -336,20 +330,22 @@ async function createIdeaFromBody(agent: AgentContext, request: NextRequest, bod
     throw new IssueApiError(400, fields.message, { error: "invalid_request", message: fields.message, field: fields.field });
   }
   const { track, rationale } = fields.value;
+  assertVettedFields(input);
   const scope = await issueProject(agent, request.nextUrl.searchParams, input.projectId);
   const beneficiaryUserId = agent.ownerId;
+  let converted: { issueId: string; issueNumber: number } | null = null;
   const requestHash = hashCreateRequest({
     projectId: scope.projectId,
     beneficiaryUserId,
     title: input.title,
     summary: input.summary,
     description: input.description,
-    platform: input.platform ?? null,
     proofLinks: input.proofLinks,
     typeId: input.typeId ?? null,
     acknowledgeSimilar: input.acknowledgeSimilar ?? null,
     // Product requests hash as they always did, so their keys keep replaying.
     ...(track === "marketing" ? { track, rationale } : {}),
+    ...(input.alreadyVetted ? { alreadyVetted: true, vettedNote: input.vettedNote } : {}),
     // Files sent in this request hash by content, not by the ids they were just given (#722).
     ...(input.attachmentIds?.filter((id) => !uploaded.includes(id)).length
       ? { attachmentIds: [...new Set(input.attachmentIds.filter((id) => !uploaded.includes(id)))].sort() }
@@ -372,7 +368,7 @@ async function createIdeaFromBody(agent: AgentContext, request: NextRequest, bod
         select: { userId: true },
       });
       if (!member) throw new IssueApiError(422, "The beneficiary must be a member of the tenant.");
-      const categoryId = input.platform ? (await resolvePlatform(tx, scope.tenantId, input.platform)).id : null;
+      if (input.alreadyVetted) await assertVettedCap(tx, agent);
       const areaId = input.areaId || null;
       if (areaId) {
         const area = await tx.projectArea.findFirst({ where: { id: areaId, projectId: scope.projectId }, select: { id: true } });
@@ -388,7 +384,6 @@ async function createIdeaFromBody(agent: AgentContext, request: NextRequest, bod
           description,
           track,
           rationale,
-          categoryId,
           areaId,
           proofLinks: input.proofLinks,
           reporterId: beneficiaryUserId,
@@ -406,11 +401,41 @@ async function createIdeaFromBody(agent: AgentContext, request: NextRequest, bod
         actorAgentId: agent.agentId,
         projectId: scope.projectId,
       });
+      // Already vetted: the idea becomes an issue now, and the note goes on the audit log with it.
+      if (input.alreadyVetted && input.vettedNote) {
+        await audit(agent, "idea.vetted", `idea:${idea.id}`, { vettedNote: input.vettedNote, number: idea.number }, { db: tx });
+        const made = await convertVettedIdea(tx, agent, scope.projectId, idea.id, input.vettedNote);
+        converted = { issueId: made.issueId, issueNumber: made.issueNumber };
+      }
       return idea;
     },
   });
   if (result.status !== 200 && result.status !== 201) return NextResponse.json(result, { status: result.status });
   // A reused key can refer to another project; never return an out-of-scope idea.
   const idea = await readAgentIdea(scope, result.ideaId);
-  return NextResponse.json({ idea, replayed: result.replayed }, { status: result.status });
+  return NextResponse.json({ idea, replayed: result.replayed, ...(input.alreadyVetted ? { converted: converted ?? (idea.issueId && idea.issueNumber ? { issueId: idea.issueId, issueNumber: idea.issueNumber } : null) } : {}) }, { status: result.status });
+}
+
+/** alreadyVetted and vettedNote go together: a vetted idea says where it was approved, and a note alone means nothing. */
+export function assertVettedFields(input: { alreadyVetted?: boolean; vettedNote?: string }) {
+  if (input.alreadyVetted && !input.vettedNote) {
+    const message = "Say where it was approved: send a vettedNote with alreadyVetted, for example \"Approved by Mark, sheet row 42\".";
+    throw new IssueApiError(400, message, { error: "invalid_request", message, field: "vettedNote" });
+  }
+  if (input.vettedNote && !input.alreadyVetted) {
+    const message = "vettedNote is only for an idea sent with alreadyVetted: true.";
+    throw new IssueApiError(400, message, { error: "invalid_request", message, field: "alreadyVetted" });
+  }
+}
+
+/** One person's agents may file `VETTED_IDEAS_PER_DAY` already-vetted ideas in 24 hours: an honest flag, not a way round the verdicts. */
+export async function assertVettedCap(tx: Prisma.TransactionClient, agent: AgentContext) {
+  await tx.$queryRaw`SELECT "id" FROM "User" WHERE "id" = ${agent.ownerId} FOR UPDATE`;
+  const used = await tx.agentAuditEvent.count({
+    where: { action: "idea.vetted", undoneAt: null, createdAt: { gte: new Date(Date.now() - 24 * 60 * 60 * 1000) }, agent: { ownerUserId: agent.ownerId } },
+  });
+  if (used >= VETTED_IDEAS_PER_DAY) {
+    const message = `You can file ${VETTED_IDEAS_PER_DAY} already vetted ideas in 24 hours, and they are used up. Send this one without alreadyVetted and it waits for verdicts as usual.`;
+    throw new IssueApiError(429, message, { error: "vetted_limit", message, limit: VETTED_IDEAS_PER_DAY });
+  }
 }

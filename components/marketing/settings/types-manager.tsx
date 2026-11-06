@@ -1,4 +1,5 @@
 "use client";
+import type { ProjectRef } from "@/lib/project-paths";
 
 import { useState, useTransition } from "react";
 
@@ -7,7 +8,7 @@ import {
   deleteMarketingIssueTypeAction,
   toggleMarketingIssueTypeActiveAction,
   updateMarketingIssueTypeAction,
-} from "@/app/(app)/[project]/marketing/settings/actions";
+} from "@/app/(app)/[org]/[project]/marketing/settings/actions";
 import { getIssueTypeBadgeClass } from "@/lib/issue-type-styles";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -23,7 +24,7 @@ import type { MarketingTaskType } from "./model";
  * and delete the kinds of marketing task people propose. Types carry no points
  * (D5): every task pays its own reward, so this list doesn't show any.
  */
-export function TypesManager({ slug, types }: { slug: string; types: MarketingTaskType[] }) {
+export function TypesManager({ slug, types }: { slug: ProjectRef; types: MarketingTaskType[] }) {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [isCreating, setIsCreating] = useState(false);
   const [inUse, setInUse] = useState<MarketingTaskType | null>(null);

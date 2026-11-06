@@ -24,7 +24,7 @@ export type IssueSuggestion = {
   title: string;
   status: Status;
   track: WorkTrack;
-  /** The issue's address, `/<project-slug>/<number>`. */
+  /** The issue's address, `/<org>/<project>/<number>`. */
   path: string;
 };
 

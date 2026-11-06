@@ -19,6 +19,40 @@ const notesProject = z.string().trim().min(1).describe("Project id whose notes t
 
 const EXTRA_TOOLS: readonly CliTool[] = [
   {
+    name: "ziki_link_product_issue",
+    summary: "Link a marketing issue to a related product issue in the same project. Any agent may. 409 wrong_track from a product issue or to a marketing one.",
+    level: "working",
+    method: "PUT",
+    route: "/issues/{id}/linked-issue",
+    projectScoped: true,
+    body: ["issueId"],
+    input: { id: issueId, issueId: z.string().trim().min(1).max(191).describe("The product issue to link to, by id or number."), projectId },
+  },
+  {
+    name: "ziki_unlink_product_issue",
+    summary: "Clear a marketing issue's link to a product issue.",
+    level: "working",
+    method: "DELETE",
+    route: "/issues/{id}/linked-issue",
+    projectScoped: true,
+    input: { id: issueId, projectId },
+  },
+  {
+    name: "ziki_acknowledge_steer",
+    summary: "Acknowledge an owner's steer note with your revised plan. Marks the note read atomically; retrying preserves the first acknowledgement.",
+    level: "working",
+    method: "POST",
+    route: "/issues/{id}/steer/{steerId}/ack",
+    projectScoped: true,
+    body: ["plan"],
+    input: {
+      id: issueId,
+      steerId: z.string().trim().min(1).max(191).describe("Steer note id from the heartbeat steering array."),
+      projectId,
+      plan: z.string().trim().min(1).max(2000).describe("Your revised plan in response to the owner's note."),
+    },
+  },
+  {
     name: "ziki_mark_important",
     summary: "Mark an issue important for the agent's owner: a plain toggle, no reason. A manager or merger agent's mark counts as 5.",
     level: "working",

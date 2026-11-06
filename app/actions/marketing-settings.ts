@@ -53,8 +53,8 @@ export async function updateMarketingSettingsAction(
       revisionLimit: parsedLimit.data,
     });
 
-    revalidatePath(marketingPath(updated.slug, "settings"));
-    revalidatePath(projectPath(updated.slug, "/settings"));
+    revalidatePath(marketingPath(updated.ref, "settings"));
+    revalidatePath(projectPath(updated.ref, "/settings"));
     return { ok: true, revisionLimit: updated.revisionLimit };
   } catch (error) {
     const message = error instanceof Error ? error.message : "Could not update marketing settings.";

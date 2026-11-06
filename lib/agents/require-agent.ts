@@ -7,6 +7,7 @@ import { AgentPlatformDisabledError, agentPlatformDisabledResponse } from "@/lib
 import { isAgentPlatformEnabled } from "@/lib/feature-flags";
 import { logger } from "@/lib/logger";
 import type { AppRole } from "@/lib/roles";
+import { AgentWorkBlockedError, assertAgentMayWork } from "@/lib/agents/work-gate";
 
 export { AgentPlatformDisabledError, agentPlatformDisabledResponse };
 
@@ -33,6 +34,7 @@ export type AgentContext = {
   burst: boolean;
   /** When the higher budget lapses; null means no expiry (#596). */
   burstUntil?: Date | null;
+  pausedAt?: Date | null;
   /** The key used for this call, so rotation can revoke exactly it. */
   keyId: string;
   /**
@@ -86,7 +88,8 @@ export class AgentAuthError extends Error {
   }
 }
 
-type HeaderSource = { headers: { get(name: string): string | null } };
+/** The request: its headers, and its method and URL for the work gate. */
+type HeaderSource = { headers: { get(name: string): string | null }; method?: string; url?: string };
 
 const LAST_USED_THROTTLE_MS = 60 * 1000;
 
@@ -106,7 +109,7 @@ export async function requireAgent(request: HeaderSource): Promise<AgentContext>
       lastUsedAt: true,
       revokedAt: true,
       projectId: true,
-      project: { select: { slug: true } },
+      project: { select: { slug: true, tenant: { select: { slug: true } } } },
       agent: {
         select: {
           id: true,
@@ -117,6 +120,11 @@ export async function requireAgent(request: HeaderSource): Promise<AgentContext>
           burst: true,
           burstUntil: true,
           revokedAt: true,
+          username: true,
+          tagline: true,
+          about: true,
+          _count: { select: { skills: true } },
+          pausedAt: true,
           owner: { select: { role: true, memberships: { select: { tenantId: true } } } },
         },
       },
@@ -130,6 +138,16 @@ export async function requireAgent(request: HeaderSource): Promise<AgentContext>
   if (!agent.name || !agent.ownerUserId || !agent.tenantId || !ownerInTenant) {
     throw new AgentAuthError("invalid_key");
   }
+
+  // #agent-work-gate: with the key good, the first check is whether this agent
+  // may work at all (assertAgentMayWork below). lastUsedAt is stamped first, so
+  // the owner sees a blocked agent is trying.
+  const gateAgent = {
+    username: agent.username,
+    tagline: agent.tagline,
+    about: agent.about,
+    skillCount: agent._count.skills,
+  };
 
   // Update lastUsedAt on successful auth, throttled to at most once per minute (#535)
   const now = new Date();
@@ -147,6 +165,8 @@ export async function requireAgent(request: HeaderSource): Promise<AgentContext>
     });
   }
 
+  assertAgentMayWork(gateAgent, request);
+
   return {
     agentId: agent.id,
     name: agent.name,
@@ -156,6 +176,7 @@ export async function requireAgent(request: HeaderSource): Promise<AgentContext>
     ownerRole: agent.owner.role ?? null,
     burst: agent.burst,
     burstUntil: agent.burstUntil ?? null,
+    pausedAt: agent.pausedAt ?? null,
     keyId: key.id,
     projectId: key.projectId,
     projectSlug: key.project?.slug ?? null,
@@ -173,6 +194,10 @@ export function agentErrorResponse(error: unknown): NextResponse {
       { error: error.code, message: error.message },
       { status: 401, headers: { "WWW-Authenticate": 'Bearer realm="ziki"' } },
     );
+  }
+  if (error instanceof AgentWorkBlockedError) {
+    // #agent-work-gate: the agent may not work until its profile is set up.
+    return NextResponse.json(error.toBody(), { status: 403 });
   }
   if (error instanceof AgentProjectError) {
     return NextResponse.json({ error: error.code, message: error.message }, { status: 403 });

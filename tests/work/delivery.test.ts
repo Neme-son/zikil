@@ -249,6 +249,13 @@ describe("a marketing delivery", () => {
     expect(marketingDeliveryBodySchema.safeParse({ summary: body.summary, description: body.description }).success).toBe(false);
   });
 
+  it("takes the work itself as Markdown, without a link or file, up to the limit", () => {
+    const written = { summary: body.summary, description: body.description, deliverableText: "# The post\n\nIt went out." };
+    expect(marketingDeliveryBodySchema.safeParse(written).success).toBe(true);
+    expect(marketingDeliveryBodySchema.safeParse({ ...written, deliverableText: "   " }).success).toBe(false);
+    expect(marketingDeliveryBodySchema.safeParse({ ...written, deliverableText: "x".repeat(50_001) }).success).toBe(false);
+  });
+
   it("refuses no link, a link that isn't http or https, and a pull request", () => {
     expect(marketingDeliveryBodySchema.safeParse({ ...body, deliverableUrls: [] }).success).toBe(false);
     expect(marketingDeliveryBodySchema.safeParse({ ...body, deliverableUrls: ["javascript:alert(1)"] }).success).toBe(false);
@@ -361,6 +368,16 @@ describe("deliverWork: marketing work delivers links and files, not a pull reque
     expect(db.prisma.$transaction).not.toHaveBeenCalled();
   });
 
+  it("stores the work delivered as Markdown on the delivery, not in its event", async () => {
+    const text = "# The post\n\nIt went out.";
+    const result = await deliverWork(agent("working", "ada"), "bug1", { summary: marketingBody.summary, description: marketingBody.description, deliverableText: text });
+    expect(result).toMatchObject({ status: 201 });
+    expect(db.tx.delivery.create).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ deliverableText: text, deliverableUrls: [], pullRequestUrl: null }) }),
+    );
+    expect(JSON.stringify(db.tx.bugActivity.create.mock.calls)).not.toContain(text);
+  });
+
   it("refuses a delivery with neither a link nor a file", async () => {
     const result = await deliverWork(agent("working", "ada"), "bug1", {
       summary: marketingBody.summary,
@@ -396,6 +413,8 @@ describe("deliverWork: product work still needs a pull request and its evidence"
     expect(links).toMatchObject({ status: 400, error: "invalid_request", field: "deliverableUrls" });
     const files = await deliverWork(agent("working", "ada"), "bug1", { ...body(), attachmentIds: ["att_1"] });
     expect(files).toMatchObject({ status: 400, error: "invalid_request", field: "attachmentIds" });
+    const written = await deliverWork(agent("working", "ada"), "bug1", { ...body(), deliverableText: "# The post" });
+    expect(written).toMatchObject({ status: 400, error: "invalid_request", field: "deliverableText" });
     expect(db.prisma.$transaction).not.toHaveBeenCalled();
   });
 

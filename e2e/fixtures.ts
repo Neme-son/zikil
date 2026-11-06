@@ -17,6 +17,18 @@ export const test = base.extend<Fixtures & Options>({
   width: async ({}, provide, testInfo) => provide(widthOf(testInfo.project.name)),
   me: async ({ as, width }, provide) => provide(as ? nameFor(as, width) : ""),
   storageState: async ({ as, width }, provide) => provide(as ? authFile(as, width) : { cookies: [], origins: [] }),
+  // Every test starts as a visitor who already answered the cookie banner
+  // (declined), so it never sits over the page being tested.
+  page: async ({ page }, provide) => {
+    await page.addInitScript(() => {
+      try {
+        window.localStorage.setItem("ziki-cookie-consent", JSON.stringify({ choice: "denied", at: Date.now() }));
+      } catch {
+        // Storage blocked: the banner shows, as it would for that visitor.
+      }
+    });
+    await provide(page);
+  },
   // Titles unique to this run, width and test, so parallel tests never
   // find each other's issues.
   uniq: async ({ width }, provide, testInfo) => {
@@ -27,17 +39,36 @@ export const test = base.extend<Fixtures & Options>({
 
 export { expect };
 
-/** The seeded project every spec works in (e2e/seed.ts); pages live under its slug (#project-urls). */
-export const PROJECT = "/zedu";
+/** The seeded project every spec works in (e2e/seed.ts); pages live under its organisation and slug (#project-urls). */
+export const PROJECT = "/zedu/zedu";
 
-/** Reports an issue through the form and returns its page URL. */
+/**
+ * Filing an idea is limited to 10 a minute per person (ACTION_RATE_LIMITS.createBug in lib/rate-limit.ts), and every submit
+ * counts. The busiest desktop user files close to that many in one run, and a retried test files more, so in a fast minute the
+ * form answers "too fast" and the test used to fail on a limit it is not about. Wait it out and press the button again.
+ */
+const TOO_FAST = /doing that too fast/i;
+const TOO_FAST_PAUSE_MS = 15_000;
+const TOO_FAST_TRIES = 5;
+
+/** Reports an issue through the form and returns its page URL. Waits out the create limit rather than failing on it. */
 export async function reportIssue(page: Page, title: string, description = "Steps: open the page, click Save. Expected it to save; it shows a blank page.") {
   await page.goto(`${PROJECT}/issues/new`);
   await page.getByLabel("Title").fill(title);
   // The description is the Markdown editor's textarea.
   await page.locator("#description").fill(description);
+  const heading = page.getByRole("heading", { level: 1, name: new RegExp(escapeRe(title)) });
+  const tooFast = page.getByText(TOO_FAST);
+  for (let attempt = 1; attempt < TOO_FAST_TRIES; attempt += 1) {
+    await page.getByRole("button", { name: "Create issue" }).click();
+    await expect(heading.or(tooFast)).toBeVisible();
+    if (await heading.isVisible()) return page.url();
+    // Limited: give this test the time it is about to wait, so the wait cannot time it out, then try again.
+    test.info().setTimeout(test.info().timeout + TOO_FAST_PAUSE_MS + 10_000);
+    await page.waitForTimeout(TOO_FAST_PAUSE_MS);
+  }
   await page.getByRole("button", { name: "Create issue" }).click();
-  await expect(page.getByRole("heading", { level: 1, name: new RegExp(escapeRe(title)) })).toBeVisible();
+  await expect(heading).toBeVisible();
   return page.url();
 }
 

@@ -1,6 +1,6 @@
 {
   "name": "issue-tracker",
-  "version": "0.1.26",
+  "version": "0.1.41",
   "private": true,
   "scripts": {
     "dev": "next dev --port 3001",
@@ -18,7 +18,9 @@
     "verify:status": "node scripts/verify.mjs status",
     "db:migrate": "prisma migrate dev",
     "db:scenario:open-bids": "tsx --env-file=.env scripts/dev/scenario-open-bids.ts",
+    "db:scenario:agents-dock": "tsx --env-file=.env scripts/dev/scenario-agents-dock.ts",
     "db:fixtures": "tsx --env-file=.env scripts/dev/fixtures/run.ts",
+    "db:fill-agent-profiles": "tsx --env-file=.env scripts/dev/fill-agent-profiles.ts",
     "db:fixtures:generate": "tsx scripts/dev/fixtures/generate.ts",
     "search:setup": "tsx --env-file=.env scripts/search/index.ts --init",
     "search:enable": "tsx --env-file=.env scripts/search/enable.ts",
