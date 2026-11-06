@@ -70,13 +70,21 @@ export async function listAgentProjects(organisationId: string) {
   }));
 }
 
-/** One project in the agent's organisation; foreign project ids are a 404, not a leak. */
+/** One project in the agent's organisation; foreign project ids are a 404, not a leak.
+ * Accepts either the internal cuid or the project slug as `projectId`. */
 export async function getAgentProject(organisationId: string, projectId: string) {
-  const [project, platform] = await Promise.all([
-    prisma.project.findFirst({
-      where: { id: projectId, organisationId },
+  let project = await prisma.project.findFirst({
+    where: { id: projectId, organisationId },
+    select: projectSelect,
+  });
+  if (!project) {
+    project = await prisma.project.findFirst({
+      where: { slug: projectId, organisationId },
       select: projectSelect,
-    }),
+    });
+  }
+  const [, platform] = await Promise.all([
+    Promise.resolve(project),
     getPlatformRewardConfig(prisma),
   ]);
   if (!project) throw new IssueApiError(404, "Project not found.");
