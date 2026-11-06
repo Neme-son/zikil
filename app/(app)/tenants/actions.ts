@@ -17,6 +17,7 @@ import {
 } from "@/lib/invites";
 import { acceptShareLink, createShareLink, revokeShareLink } from "@/lib/share-invites";
 import { prisma } from "@/lib/prisma";
+import { EARN_WORKSPACE_SLUG } from "@/lib/earn/draft";
 import { issueHref } from "@/lib/issue-ref";
 import { RATE_LIMIT_MESSAGE, consumeRateLimit } from "@/lib/rate-limit";
 import {
@@ -59,6 +60,9 @@ export type TenantFormResult = {
 async function enterTenant(tenantId: string, projectId?: string): Promise<never> {
   await setActiveTenantCookie(tenantId);
   revalidatePath("/", "layout");
+  // The Earn workspace opens on Earn's own default page, never the builders' Ideas.
+  const tenant = await prisma.tenant.findUnique({ where: { id: tenantId }, select: { slug: true } });
+  if (tenant?.slug === EARN_WORKSPACE_SLUG) redirect("/earn/home");
   const project = projectId ? await prisma.project.findFirst({ where: { id: projectId, tenantId, archivedAt: null }, select: { slug: true, tenant: { select: { slug: true } } } }) : null;
   // /home opens the first project of the workspace just made current.
   redirect(project ? ideasPath(refOf(project)) : "/home");
