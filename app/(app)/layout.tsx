@@ -1,3 +1,4 @@
+import { cache } from "react";
 import Link from "next/link";
 import { cookies, headers } from "next/headers";
 import { auth } from "@/auth";
@@ -10,8 +11,8 @@ import { MAIN_CONTENT_ID, SkipLink } from "@/components/skip-link";
 import { PAGE_CONTAINER_CLASS } from "@/components/page-container";
 import { FocusMainOnNavigate } from "@/components/focus-main-on-navigate";
 import { KeyboardShortcuts } from "@/components/keyboard-shortcuts";
-
-import type { OrganisationOption } from "@/components/organisation-switcher";
+import { isOrganisationAdmin, type OrganisationRole } from "@/lib/organisation-role";
+import type { OrganisationOption, ExternalProjectChoice } from "@/components/organisation-switcher";
 import { prisma } from "@/lib/prisma";
 import { currentOrganisationIdFor } from "@/lib/organisation-context";
 import { firstProjectRefFor } from "@/lib/project-route";
@@ -29,6 +30,14 @@ import { EarnWelcomeToast } from "@/components/earn-welcome-toast";
 import { isEarnPath } from "@/lib/earn/paths";
 import { withdrawInfo } from "@/lib/earn/draft";
 import { earnAgentWhere, earnOrganisation } from "@/lib/earn/earner";
+
+async function getOrganisationProjects(organisationId: string) {
+  return prisma.project.findMany({
+    where: { organisationId, archivedAt: null },
+    select: { id: true, name: true, slug: true, organisationId: true },
+    orderBy: { name: "asc" },
+  });
+}
 
 export default async function AppLayout({
   children,
@@ -57,7 +66,8 @@ export default async function AppLayout({
 
   // #agent-profile: a guest on a public agent page (a profile, the directory)
   // gets a plain shell with a way to sign in, not the sign-in redirect.
-  if (!session?.user && isPublicAgentPath((await headers()).get("x-ziki-path") ?? "")) {
+  const reqPath = (await headers()).get("x-ziki-path") ?? "";
+  if (!session?.user && (isPublicAgentPath(reqPath) || reqPath === "/discover")) {
     return (
       <div className="flex min-h-screen flex-col bg-background">
         <header className="border-b border-zk-border bg-zk-surface">
@@ -85,15 +95,75 @@ export default async function AppLayout({
   // The header lists this person's organisations. Pages still resolve the active
   // project inside the current organisation, so a foreign project id is ignored.
   let organisationOptions: OrganisationOption[] = [];
+  let externalProjects: ExternalProjectChoice[] = [];
   let activeOrganisationId: string | null = null;
   let organisationId: string | null = null;
+  let membershipRole: OrganisationRole | null = null;
   try {
     organisationId = await currentOrganisationIdFor(user.id);
     activeOrganisationId = organisationId;
     const memberships = await organisationsForUser(prisma, user.id, user.role);
-    organisationOptions = memberships
-      .filter((organisation) => organisation.archivedAt === null)
-      .map((organisation) => ({ id: organisation.id, name: organisation.name, slug: organisation.slug }));
+    const activeOrganisations = memberships.filter((organisation) => organisation.archivedAt === null);
+
+    const pathSegments = requestPath.split("/").filter(Boolean);
+    const routeOrg = pathSegments[0] ? decodeURIComponent(pathSegments[0]) : null;
+    const matchedOrg = routeOrg ? activeOrganisations.find((t) => t.slug === routeOrg) : null;
+    if (matchedOrg) {
+      organisationId = matchedOrg.id;
+      activeOrganisationId = matchedOrg.id;
+    }
+    membershipRole = memberships.find((organisation) => organisation.id === organisationId)?.role ?? null;
+
+    const [orgProjects, userProjectMemberships] = await Promise.all([
+      organisationId ? getOrganisationProjects(organisationId) : Promise.resolve([]),
+      prisma.projectMembership.findMany({
+        where: {
+          userId: user.id,
+          project: {
+            archivedAt: null,
+            organisation: { archivedAt: null },
+          },
+        },
+        select: {
+          project: {
+            select: {
+              id: true,
+              name: true,
+              slug: true,
+              organisationId: true,
+              organisation: { select: { id: true, name: true, slug: true } },
+            },
+          },
+        },
+      }),
+    ]);
+
+    const projectsByOrg = new Map<string, Array<{ id: string; name: string; slug: string }>>();
+    const orgProjectIds = new Set<string>();
+    for (const p of orgProjects) {
+      orgProjectIds.add(p.id);
+      const list = projectsByOrg.get(p.organisationId) ?? [];
+      list.push({ id: p.id, name: p.name, slug: p.slug });
+      projectsByOrg.set(p.organisationId, list);
+    }
+
+    organisationOptions = activeOrganisations.map((organisation) => ({
+      id: organisation.id,
+      name: organisation.name,
+      slug: organisation.slug,
+      projects: projectsByOrg.get(organisation.id) ?? [],
+    }));
+
+    externalProjects = userProjectMemberships
+      .filter((m) => !orgProjectIds.has(m.project.id))
+      .map((m) => ({
+        id: m.project.id,
+        name: m.project.name,
+        slug: m.project.slug,
+        organisationId: m.project.organisationId,
+        organisationName: m.project.organisation.name,
+        organisationSlug: m.project.organisation.slug,
+      }));
   } catch (error) {
     console.error("[layout] organisation context failed", error);
   }
@@ -194,7 +264,9 @@ export default async function AppLayout({
           pendingEscalationsCount={pendingEscalationsCount}
           userId={user.id}
           organisationOptions={organisationOptions}
+          externalProjects={externalProjects}
           activeOrganisationId={activeOrganisationId}
+          organisationAdmin={isOrganisationAdmin(membershipRole, user.role)}
           defaultProjectSlug={defaultProjectSlug}
           earned={earnSample ? earnSample.earned : null}
           inEarnOrganisation={inEarnOrganisation}

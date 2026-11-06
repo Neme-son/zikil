@@ -8,6 +8,9 @@ import { prisma } from "@/lib/prisma";
 import { joinedSummary, listShareLinks, shareLinkStatusLabel } from "@/lib/share-invites";
 import { MEMBERSHIP_ROLE_LABELS, organisationMembersFrom } from "@/lib/organisations";
 import { revokeInviteAction, revokeShareLinkAction } from "@/app/(app)/organisations/actions";
+import { acceptJoinRequestAction, rejectJoinRequestAction } from "@/app/actions/project-join-requests";
+import { projectPath, projectRef } from "@/lib/project-paths";
+import Link from "next/link";
 import { loadOrg } from "../org-context";
 import { OrgPageHeader, ReadOnlyNote, orgCard, orgListCard, orgListHeading } from "../org-ui";
 import { InviteForm } from "./invite-form";
@@ -49,6 +52,29 @@ async function loadManagers(organisationId: string) {
   );
 }
 
+async function loadPendingJoinRequests(organisationId: string) {
+  try {
+    return await prisma.projectJoinRequest.findMany({
+      where: { project: { organisationId }, status: "pending" },
+      include: {
+        project: {
+          select: {
+            id: true,
+            name: true,
+            slug: true,
+            organisation: { select: { slug: true } },
+          },
+        },
+        user: { select: { id: true, name: true, email: true } },
+      },
+      orderBy: { createdAt: "desc" },
+    });
+  } catch (error) {
+    console.error("[org] loadPendingJoinRequests failed", error);
+    return [];
+  }
+}
+
 /**
  * The only two ways into an organisation: an email invite for one person, or
  * a share link for several. Owners and admins send and revoke them here.
@@ -88,7 +114,9 @@ export default async function OrgInvitesPage() {
               {managers.map((manager) => (
                 <li key={manager.user.id} className="flex items-center gap-2 text-sm text-zk-text">
                   <span className="truncate">{manager.user.name ?? manager.user.email}</span>
-                  <Badge className="rounded-full bg-zk-chip text-zk-text2">{MEMBERSHIP_ROLE_LABELS[manager.role]}</Badge>
+                  <Badge className="rounded-full border border-zk-border bg-zk-chip text-xs font-medium text-zk-text2">
+                    {MEMBERSHIP_ROLE_LABELS[manager.role]}
+                  </Badge>
                 </li>
               ))}
             </ul>
@@ -98,17 +126,95 @@ export default async function OrgInvitesPage() {
     );
   }
 
-  const [invites, shareLinks] = await Promise.all([
+  const [invites, shareLinks, pendingRequests] = await Promise.all([
     loadQuietly("invites", pendingInvites(prisma, org.id), []),
     loadQuietly("share links", listShareLinks(prisma, org.id), []),
+    loadPendingJoinRequests(org.id),
   ]);
 
   return (
     <div className="space-y-6">
       <OrgPageHeader title="Invites">
-        People join {org.name} only by an invite. Send an email invite to one person, or share an
-        invite link with several. Revoking either stops it working at once.
+        Manage member invites and review external contributor applications for your projects.
       </OrgPageHeader>
+
+      <section aria-labelledby="join-requests" className={orgListCard}>
+        <div className="flex items-center justify-between px-4 py-3 sm:px-6">
+          <h3 id="join-requests" className={orgListHeading}>
+            Project Join Requests
+          </h3>
+          {pendingRequests.length > 0 ? (
+            <Badge className="rounded-full border border-amber-500/30 bg-amber-500/10 text-xs font-semibold text-amber-400">
+              {pendingRequests.length} pending
+            </Badge>
+          ) : null}
+        </div>
+        {pendingRequests.length === 0 ? (
+          <p className="px-4 py-4 text-sm text-zk-text2 sm:px-6">
+            No pending join requests. When contributors apply to join your projects from the Discover page, their applications appear here.
+          </p>
+        ) : (
+          <ul className="divide-y divide-zk-border">
+            {pendingRequests.map((req) => (
+              <li key={req.id} className="flex flex-col gap-3 p-4 sm:p-6">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <span className="font-semibold text-zk-text">
+                        {req.user.name || req.user.email}
+                      </span>
+                      {req.user.name && req.user.email ? (
+                        <span className="text-xs text-zk-muted">({req.user.email})</span>
+                      ) : null}
+                    </div>
+                    <p className="mt-1 text-xs text-zk-muted">
+                      Applied to collaborate on{" "}
+                      <Link
+                        href={projectPath(projectRef(req.project.organisation.slug, req.project.slug))}
+                        className="font-medium text-zk-accent hover:underline cursor-pointer"
+                      >
+                        {req.project.name}
+                      </Link>{" "}
+                      · <LocalTime date={req.createdAt} />
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <form action={acceptJoinRequestAction}>
+                      <input type="hidden" name="requestId" value={req.id} />
+                      <button
+                        type="submit"
+                        className="inline-flex cursor-pointer items-center justify-center rounded-full bg-electric-blue-strong px-4 py-1.5 text-xs font-bold text-white shadow-sm transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        Accept
+                      </button>
+                    </form>
+                    <form action={rejectJoinRequestAction}>
+                      <input type="hidden" name="requestId" value={req.id} />
+                      <ConfirmSubmitButton
+                        aria-label={`Reject request from ${req.user.name || req.user.email}`}
+                        variant="danger-secondary"
+                        confirm={{
+                          title: `Reject request from ${req.user.name || req.user.email}?`,
+                          body: "They will not be added as a collaborator to this project. They can re-apply later.",
+                          confirmLabel: "Reject request",
+                        }}
+                      >
+                        Reject
+                      </ConfirmSubmitButton>
+                    </form>
+                  </div>
+                </div>
+                {req.message ? (
+                  <div className="mt-1 rounded-xl border border-zk-border bg-zk-card p-3 text-xs text-zk-text2">
+                    <span className="font-semibold text-zk-text">Note: </span>
+                    {req.message}
+                  </div>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
 
       <section aria-labelledby="invite-someone" className={orgCard}>
         <h3 id="invite-someone" className="text-base font-semibold text-zk-text">

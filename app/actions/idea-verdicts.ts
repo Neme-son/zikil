@@ -32,7 +32,15 @@ async function ideaForVerdict(user: { id: string; role?: string | null }, ideaId
     where: {
       id: ideaId,
       isDeleted: false,
-      organisation: { archivedAt: null, ...(user.role === "super_admin" ? {} : { memberships: { some: { userId: user.id } } }) },
+      organisation: { archivedAt: null },
+      ...(user.role === "super_admin"
+        ? {}
+        : {
+            OR: [
+              { organisation: { memberships: { some: { userId: user.id } } } },
+              { project: { memberships: { some: { userId: user.id } } } },
+            ],
+          }),
     },
     select: { id: true, number: true, projectId: true, organisationId: true },
   });

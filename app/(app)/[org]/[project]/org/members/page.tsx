@@ -5,6 +5,7 @@ import { MEMBERSHIP_ROLE_LABELS, organisationMembersFrom } from "@/lib/organisat
 import { loadOrg } from "../org-context";
 import { OrgPageHeader, ReadOnlyNote } from "../org-ui";
 import { MemberList, type OrgMember } from "./member-list";
+import { ProjectCollaboratorsSection, type ProjectCollaboratorItem } from "./project-collaborators";
 
 export const metadata: Metadata = { title: "Members" };
 
@@ -58,12 +59,48 @@ async function loadMembers(organisationId: string): Promise<OrgMember[]> {
   }
 }
 
+async function loadProjectCollaborators(organisationId: string): Promise<ProjectCollaboratorItem[]> {
+  try {
+    const rows = await prisma.projectMembership.findMany({
+      where: { project: { organisationId } },
+      include: {
+        project: {
+          select: {
+            id: true,
+            name: true,
+            slug: true,
+            organisation: { select: { slug: true } },
+          },
+        },
+        user: { select: { id: true, name: true, email: true } },
+      },
+      orderBy: { createdAt: "desc" },
+    });
+    return rows.map((r) => ({
+      projectId: r.projectId,
+      projectName: r.project.name,
+      projectSlug: r.project.slug,
+      orgSlug: r.project.organisation.slug,
+      userId: r.userId,
+      userName: r.user.name,
+      userEmail: r.user.email,
+      createdAt: r.createdAt,
+    }));
+  } catch (error) {
+    console.error("[org] loadProjectCollaborators failed", error);
+    return [];
+  }
+}
+
 /** Who is in the organisation, their roles and agents, and leaving it. */
 export default async function OrgMembersPage() {
   const { user, org } = await loadOrg();
   if (!org) return null;
 
-  const members = await loadMembers(org.id);
+  const [members, collaborators] = await Promise.all([
+    loadMembers(org.id),
+    loadProjectCollaborators(org.id),
+  ]);
   const ownerCount = members.filter((member) => member.role === "owner").length;
 
   return (
@@ -88,6 +125,10 @@ export default async function OrgMembersPage() {
         canChangeRoles={org.owner}
         canRemove={org.admin}
         agentLevels={org.admin ? settableLevels({ isOwner: false, isAdminOfOrganisation: true }) : []}
+      />
+      <ProjectCollaboratorsSection
+        collaborators={collaborators}
+        canRemove={org.admin}
       />
     </div>
   );

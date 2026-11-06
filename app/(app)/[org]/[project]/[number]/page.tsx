@@ -1,3 +1,4 @@
+import { requireProject } from "@/lib/project-route";
 import Link from "next/link";
 import { ideaPath, issuesPath, projectRef, refOf } from "@/lib/project-paths";
 import { MarketingAreaMarker } from "@/components/marketing/marketing-area";
@@ -83,7 +84,7 @@ import {
   deletedSummary,
   deletionCounts,
 } from "@/lib/ticket-deletion";
-import { currentOrganisationAccess } from "@/lib/organisation-access";
+import { organisationAccessFor } from "@/lib/organisation-access";
 import { MilestoneDue } from "@/components/milestone-due";
 import { LoadError } from "@/components/load-error";
 import { logLoadFailure } from "@/lib/load-error";
@@ -307,10 +308,11 @@ export default async function BugDetailPage({ params, searchParams }: BugPagePro
     );
   }
 
-  const user = await requireUser();
-  const access = await currentOrganisationAccess(user.id, user.role);
-  const canTriage = access.admin;
-  const canDelete = canDeleteTicket(user.role, access.membershipRole);
+  const projectContext = await requireProject(org, projectSlug);
+  const { user, organisationId, isOrgMember, isOrgAdmin, canContribute } = projectContext;
+  const access = await organisationAccessFor(user.id, organisationId, user.role);
+  const canTriage = isOrgAdmin;
+  const canDelete = isOrgAdmin || (isOrgMember && canDeleteTicket(user.role, access.membershipRole));
   if (!lookup) notFound();
   if (lookup.kind === "elsewhere") {
     // A link into another of the viewer's organisations should not dead-end (#519):
@@ -339,7 +341,7 @@ export default async function BugDetailPage({ params, searchParams }: BugPagePro
   // missing used to reject this whole Promise and blank the page.
   let loadedBug = await prisma.bug
     .findUnique({
-      where: { id, ...bugInOrganisation(await currentOrganisationIdFor(userId)) },
+      where: { id, organisationId },
       include: {
         type: { select: { id: true, name: true, isActive: true } },
         reporter: { select: { name: true, email: true, role: true, image: true } },
@@ -375,7 +377,7 @@ export default async function BugDetailPage({ params, searchParams }: BugPagePro
   if ("detail" in loadedBug && /milestoneId|Milestone/i.test(loadedBug.detail)) {
     loadedBug = await prisma.bug
       .findUnique({
-        where: { id, ...bugInOrganisation(await currentOrganisationIdFor(userId)) },
+        where: { id, organisationId },
         include: {
           type: { select: { id: true, name: true, isActive: true } },
           reporter: { select: { name: true, email: true, role: true, image: true } },
@@ -420,7 +422,6 @@ export default async function BugDetailPage({ params, searchParams }: BugPagePro
     notFound();
   }
 
-  const organisationId = await currentOrganisationIdFor(userId);
   // These tables arrived after the issue row. A missing one must not blank the page.
   const [redesignProposals, membership] = organisationId ? await Promise.all([
     loadOptional("redesigns", [], () =>
@@ -914,7 +915,7 @@ export default async function BugDetailPage({ params, searchParams }: BugPagePro
   }
 
   // Comments on the issue itself, at every stage (lib/comment-placement.ts).
-  const takesComments = !bug.isDeleted;
+  const takesComments = !bug.isDeleted && canContribute;
   // Looked up here, not on `hold`: holder is also what agents read through the API.
   const workingAgent = hold?.status === "active"
     ? await loadOptional("working agent", null, () => prisma.agent.findFirst({
@@ -1401,7 +1402,7 @@ export default async function BugDetailPage({ params, searchParams }: BugPagePro
                 currentUserId={user.id}
                 currentUserRole={user.role}
                 organisationAdmin={access.admin}
-                readOnly={bug.isDeleted}
+                readOnly={bug.isDeleted || !canContribute}
                 markedImportantBy={importanceMarkers}
               >
                 {comments.hiddenThreads > 0 ? (
@@ -1444,7 +1445,7 @@ export default async function BugDetailPage({ params, searchParams }: BugPagePro
             likeVoters={voterSummary.likes.voters}
             size="md"
             showAvatars={false}
-            readOnly={bug.isDeleted}
+            readOnly={bug.isDeleted || !canContribute}
           />
         }
         actionsMenuSlot={
@@ -1813,7 +1814,7 @@ export default async function BugDetailPage({ params, searchParams }: BugPagePro
               likeVoters={voterSummary.likes.voters}
               size="md"
               showAvatars={false}
-              readOnly={bug.isDeleted}
+              readOnly={bug.isDeleted || !canContribute}
             />
             {canMarkDuplicate || canDeleteHere ? (
               <IssueActionsMenu>
@@ -1996,7 +1997,7 @@ export default async function BugDetailPage({ params, searchParams }: BugPagePro
                     currentUserId={user.id}
                     currentUserRole={user.role}
                     organisationAdmin={access.admin}
-                    readOnly={bug.isDeleted}
+                    readOnly={bug.isDeleted || !canContribute}
                     markedImportantBy={importanceMarkers}
                   >
                     {comments.hiddenThreads > 0 ? (

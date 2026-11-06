@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { ReactElement } from "react";
 
@@ -43,9 +43,16 @@ vi.mock("@/lib/project-route", () => ({
     user: { id: "dave", role: "user" },
     organisationId: "organisation-acme",
     project: { id: "project-acme", slug: "acme", name: "Acme Web", goal: null, organisationId: "organisation-acme", orgSlug: "zedu", ref: "zedu/acme" },
+    isOrgMember: true,
+    isOrgAdmin: false,
+    isProjectMember: false,
+    canContribute: true,
   })),
 }));
-vi.mock("@/lib/organisation-access", () => ({ currentOrganisationAccess: vi.fn(async () => ({ membershipRole: "member" })) }));
+vi.mock("@/lib/organisation-access", () => ({
+  currentOrganisationAccess: vi.fn(async () => ({ membershipRole: "member", admin: false })),
+  organisationAccessFor: vi.fn(async () => ({ membershipRole: "member", admin: false })),
+}));
 vi.mock("@/lib/lookups", () => ({
   getIssueTypes: vi.fn(async () => []),
 }));
@@ -94,6 +101,8 @@ vi.mock("@/app/actions/issues", async (importOriginal) => ({ ...(await importOri
 // Your call (#your-call) asks the database for the split issues on every view (for its step's count): the layout tests below read the list's own queries, so it gets an empty answer here.
 vi.mock("@/lib/your-call", async (importOriginal) => ({ ...(await importOriginal<typeof import("@/lib/your-call")>()), loadYourCall: vi.fn(async () => []) }));
 import { IssuesList } from "@/app/(app)/[org]/[project]/issues/_list/issues-list";
+import { requireProject } from "@/lib/project-route";
+import { organisationAccessFor } from "@/lib/organisation-access";
 import { answerFrom, topShare, urgencyOf, yardsticksFor, type UrgencySignals } from "@/lib/your-call";
 import { currentOrganisationAccess } from "@/lib/organisation-access";
 import { addCommentAction } from "@/app/actions/issues";
@@ -101,6 +110,7 @@ import { answerYourCallAction } from "@/app/actions/your-call";
 import { TasksBoard } from "@/components/marketing/tasks/tasks-board";
 import { taskTab, type TaskRow, type TasksBoardData } from "@/components/marketing/tasks/model";
 import { projectRef } from "@/lib/project-paths";
+import { PROJECT_ALL, PROJECT_ALL_PARAM } from "@/lib/issue-list-filters";
 
 const BUG = {
   id: "bug-1",
@@ -328,6 +338,53 @@ describe("issue list layout", () => {
 });
 
 /** The agents dock's settings (#agents-dock): saved per browser, and the dock still works when they can't be. */
+describe("a signed-in stranger on another organisation's public project", () => {
+  const visitor = {
+    user: { id: "stranger", role: "user" },
+    organisationId: "organisation-acme",
+    project: { id: "project-acme", slug: "acme", name: "Acme Web", goal: null, organisationId: "organisation-acme", orgSlug: "zedu", ref: projectRef("zedu", "acme"), visibility: "public", isOpenForContributors: true },
+    isOrgMember: false,
+    isOrgAdmin: false,
+    isProjectMember: false,
+    canContribute: false,
+  } as unknown as Awaited<ReturnType<typeof requireProject>>;
+  const asMember = vi.mocked(requireProject).getMockImplementation()!;
+  const memberRole = vi.mocked(organisationAccessFor).getMockImplementation()!;
+  const ownRole = vi.mocked(currentOrganisationAccess).getMockImplementation()!;
+  const owner = { organisationId: "own", organisationName: "Own", organisationSlug: "own", membershipRole: "owner", admin: true } as const;
+  const none = { organisationId: "organisation-acme", organisationName: null, organisationSlug: null, membershipRole: null, admin: false } as const;
+  const listQuery = () => findMany.mock.calls[0][0].where as { projectId?: string; isDeleted?: boolean };
+
+  beforeEach(() => {
+    vi.mocked(requireProject).mockImplementation(async () => visitor);
+    // They own an organisation of their own, as every new account does, and have no role in this one.
+    vi.mocked(currentOrganisationAccess).mockImplementation(async () => owner);
+    vi.mocked(organisationAccessFor).mockImplementation(async () => none);
+  });
+
+  afterEach(() => {
+    vi.mocked(requireProject).mockImplementation(asMember);
+    vi.mocked(currentOrganisationAccess).mockImplementation(ownRole);
+    vi.mocked(organisationAccessFor).mockImplementation(memberRole);
+  });
+
+  it("can't reach the organisation's private projects with ?project=all, which a member can", async () => {
+    await renderList({ status: "all", [PROJECT_ALL_PARAM]: PROJECT_ALL });
+    expect(listQuery().projectId).toBe("project-acme");
+    for (const [args] of ideaCount.mock.calls) expect((args as { where: { projectId?: string } }).where.projectId).toBe("project-acme");
+
+    findMany.mockClear();
+    vi.mocked(requireProject).mockImplementation(asMember);
+    await renderList({ status: "all", [PROJECT_ALL_PARAM]: PROJECT_ALL });
+    expect(listQuery().projectId).toBeUndefined();
+  });
+
+  it("can't list deleted issues, though they own an organisation of their own", async () => {
+    await renderList({ status: "all", deleted: "true" });
+    expect(listQuery().isDeleted).toBe(false);
+  });
+});
+
 describe("agents dock settings", () => {
   function fakeStorage(saved: string | null, blocked = false) {
     const store = new Map(saved === null ? [] : [["ziki-agents-dock", saved]]);
