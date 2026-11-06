@@ -2,6 +2,7 @@ import { notFound } from "next/navigation";
 import Link from "next/link";
 import { JsonLd } from "@/components/json-ld";
 import { getSkillBySlug } from "../skills-data";
+import type { SkillItem } from "../skills-data";
 import { CopyPromptButton, CopyCommandButton } from "./copy-button";
 
 export async function generateMetadata({
@@ -10,7 +11,15 @@ export async function generateMetadata({
   params: Promise<{ slug: string }>;
 }) {
   const { slug } = await params;
-  const skill = await getSkillBySlug(slug);
+  let skill: SkillItem | undefined;
+  try {
+    skill = await getSkillBySlug(slug);
+  } catch {
+    return {
+      title: "Skill Unavailable — Skills Library — Ziki",
+      description: "The requested skill could not be loaded right now.",
+    };
+  }
 
   if (!skill) {
     return {
@@ -41,7 +50,28 @@ export default async function SkillDetailPage({
   params: Promise<{ slug: string }>;
 }) {
   const { slug } = await params;
-  const skill = await getSkillBySlug(slug);
+  let skill: SkillItem | undefined;
+  let loadError: string | null = null;
+  try {
+    skill = await getSkillBySlug(slug);
+  } catch (error) {
+    loadError = error instanceof Error ? error.message : "Unable to load this skill right now.";
+    skill = undefined;
+  }
+
+  if (loadError) {
+    return (
+      <div className="mx-auto max-w-5xl space-y-8 pb-16">
+        <div className="rounded-2xl border border-rose-500/20 bg-rose-500/10 p-6 sm:p-8 text-center space-y-3">
+          <p className="text-base font-semibold text-rose-600 dark:text-rose-400">Skill unavailable</p>
+          <p className="text-xs text-zk-muted max-w-sm mx-auto">{loadError}</p>
+          <Link href="/skills" className="inline-block text-xs font-bold text-zk-accent hover:underline">
+            ← Back to Library
+          </Link>
+        </div>
+      </div>
+    );
+  }
 
   if (!skill) {
     notFound();

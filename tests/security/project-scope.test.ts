@@ -496,7 +496,7 @@ describe("skills library public scope and review authorization", () => {
 
     const { skills, error } = await getSkills();
     expect(error).toBeUndefined();
-    expect(skills).toHaveLength(1);
+    expect(skills).toHaveLength(2);
     expect(skills[0].title).toBe("Vitest Deterministic Suite Runner");
     expect(skillSubmissionFindMany).toHaveBeenCalledWith(
       expect.objectContaining({

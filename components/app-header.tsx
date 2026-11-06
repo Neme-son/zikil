@@ -409,6 +409,9 @@ export function AppHeader({
                 <MenuLink href="/docs" active={isNavItemActive(pathname, "/docs")}>
                   Documentation
                 </MenuLink>
+                <MenuLink href="/skills" active={isNavItemActive(pathname, "/skills")}>
+                  Skills library
+                </MenuLink>
                 <div className="mx-2 h-px bg-zk-divider" />
                 <SignOutButton
                   userId={userId}

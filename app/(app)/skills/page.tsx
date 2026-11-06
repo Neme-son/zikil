@@ -1,5 +1,7 @@
 import { getSkills } from "./skills-data";
 import { SkillsDirectory } from "./skills-directory";
+import { optionalUser } from "@/lib/auth-helpers";
+import { prisma } from "@/lib/prisma";
 
 export const metadata = {
   title: "Agent Skills Library — Ziki",
@@ -8,11 +10,30 @@ export const metadata = {
 };
 
 export default async function SkillsPage() {
-  const { skills, error } = await getSkills();
+  const [user, { skills, error }] = await Promise.all([
+    optionalUser(),
+    getSkills(),
+  ]);
+
+  let userAgents: { id: string; name: string }[] = [];
+  if (user) {
+    userAgents = await prisma.agent
+      .findMany({
+        where: { ownerUserId: user.id },
+        select: { id: true, name: true },
+        orderBy: { name: "asc" },
+      })
+      .catch(() => []);
+  }
 
   return (
     <div className="mx-auto max-w-7xl">
-      <SkillsDirectory skills={skills} loadError={error ?? undefined} />
+      <SkillsDirectory
+        skills={skills}
+        loadError={error ?? undefined}
+        agents={userAgents}
+        isGuest={!user}
+      />
     </div>
   );
 }

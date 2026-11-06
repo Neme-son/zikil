@@ -1,7 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
-import { requireUser } from "@/lib/auth-helpers";
+import { resolveSessionUserId } from "@/lib/session-user";
 import { checkRateLimit } from "@/lib/rate-limit";
 
 import {
@@ -18,10 +18,14 @@ export type { SkillCategory };
 
 
 export async function POST(req: NextRequest) {
-  const user = await requireUser();
+  const session = await resolveSessionUserId();
+  if ("error" in session) {
+    return NextResponse.json({ error: "Not signed in" }, { status: 401 });
+  }
+  const userId = session.userId;
 
   // Rate limit: at most 5 submissions per 60 seconds per user
-  const rateCheck = checkRateLimit(`skill-submission:${user.id}`, {
+  const rateCheck = checkRateLimit(`skill-submission:${userId}`, {
     max: 5,
     windowMs: 60 * 1000,
   });
@@ -56,7 +60,7 @@ export async function POST(req: NextRequest) {
   // If revising an existing rejected submission, update it back to pending rather than creating an orphan
   if (parsed.data.revisionOfId) {
     const existingSubmission = await prisma.skillSubmission.findFirst({
-      where: { id: parsed.data.revisionOfId, submittedById: user.id },
+      where: { id: parsed.data.revisionOfId, submittedById: userId },
     });
     if (existingSubmission && existingSubmission.status === "rejected") {
       const updated = await prisma.skillSubmission.update({
@@ -124,7 +128,7 @@ export async function POST(req: NextRequest) {
       sampleCommand: parsed.data.sampleCommand || null,
       documentationUrl: parsed.data.documentationUrl || null,
       status: "pending",
-      submittedById: user.id,
+      submittedById: userId,
     },
     select: {
       id: true,
