@@ -48,7 +48,7 @@ function keyFor(agentId: string, ownerUserId = "owner-1") {
       id: agentId,
       name: "Worker",
       ownerUserId,
-      tenantId: "tenant-1",
+      organisationId: "organisation-1",
       level: "working",
       burst: false,
       burstUntil: null,
@@ -57,7 +57,7 @@ function keyFor(agentId: string, ownerUserId = "owner-1") {
       tagline: "Test agent",
       about: "A test agent.",
       _count: { skills: 1 },
-      owner: { role: "user", memberships: [{ tenantId: "tenant-1" }] },
+      owner: { role: "user", memberships: [{ organisationId: "organisation-1" }] },
     },
   };
 }

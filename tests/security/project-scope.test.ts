@@ -327,23 +327,23 @@ describe("canManageProject permissions", () => {
   });
 
   it("allows site super_admin", async () => {
-    expect(await canManageProject({ id: "admin-1", role: "super_admin" }, "tenant-1")).toBe(true);
+    expect(await canManageProject({ id: "admin-1", role: "super_admin" }, "organisation-1")).toBe(true);
   });
 
   it("allows organisation owners and admins", async () => {
     membershipFindUnique.mockResolvedValue({ role: "owner" });
-    expect(await canManageProject({ id: "user-1", role: "user" }, "tenant-1")).toBe(true);
+    expect(await canManageProject({ id: "user-1", role: "user" }, "organisation-1")).toBe(true);
 
     membershipFindUnique.mockResolvedValue({ role: "admin" });
-    expect(await canManageProject({ id: "user-1", role: "user" }, "tenant-1")).toBe(true);
+    expect(await canManageProject({ id: "user-1", role: "user" }, "organisation-1")).toBe(true);
   });
 
   it("denies regular organisation members and outsiders", async () => {
     membershipFindUnique.mockResolvedValue({ role: "member" });
-    expect(await canManageProject({ id: "user-1", role: "user" }, "tenant-1")).toBe(false);
+    expect(await canManageProject({ id: "user-1", role: "user" }, "organisation-1")).toBe(false);
 
     membershipFindUnique.mockResolvedValue(null);
-    expect(await canManageProject({ id: "stranger-1", role: "user" }, "tenant-1")).toBe(false);
+    expect(await canManageProject({ id: "stranger-1", role: "user" }, "organisation-1")).toBe(false);
   });
 });
 

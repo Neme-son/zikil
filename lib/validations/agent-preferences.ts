@@ -4,7 +4,7 @@ import { z } from "zod";
  * Standing instructions one person keeps for every agent they own (#838).
  *
  * A preference belongs to a user alone — never to an agent or an issue — so
- * the same set answers every key that user owns, across all their workspaces.
+ * the same set answers every key that user owns, across all their organisations.
  * The limits match the per-agent standing brief (`AGENT_INSTRUCTIONS_MAX`),
  * because both end up in front of the same model.
  */

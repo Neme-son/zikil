@@ -55,7 +55,7 @@ export function DiscoverFilters({
           name="q"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          placeholder="Search projects by name, goal, or organization..."
+          placeholder="Search projects by name, goal, or organisation..."
           className="w-full rounded-xl border border-zk-border bg-zk-card py-2 pl-9 pr-3 text-sm text-zk-text placeholder:text-zk-muted focus:border-zk-accent focus:outline-none focus:ring-1 focus:ring-zk-accent"
         />
         <svg

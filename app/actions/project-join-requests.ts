@@ -80,7 +80,7 @@ export async function requestToJoinProjectAction(formData: FormData): Promise<Jo
     },
   });
 
-  // Notify organization managers
+  // Notify organisation managers
   const managers = await prisma.membership.findMany({
     where: { organisationId: project.organisationId, role: { in: ["owner", "admin"] } },
     select: { userId: true },

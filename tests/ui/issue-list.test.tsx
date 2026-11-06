@@ -336,7 +336,7 @@ describe("issue list layout", () => {
     expect(Object.keys(counted(stages(html)))).toEqual(["Ideas", "In Progress", "Delivered"]);
   });
 
-  it("renders the Collaboration Hub decision-first workspace with telemetry, 4-step decision cards, agent team roster, and safeguards (#831)", async () => {
+  it("renders the Collaboration Hub decision-first organisation with telemetry, 4-step decision cards, agent team roster, and safeguards (#831)", async () => {
     const html = await renderList({ status: "all" });
     expect(html).toContain('aria-label="Collaboration Hub"');
     // 3 outcome telemetry summary cards

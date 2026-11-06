@@ -69,7 +69,7 @@ export function NewProjectForm({ orgSlug, startOpen = false }: { orgSlug?: strin
             <span>Private</span>
           </label>
           <p className="pl-5 text-[11px] text-zk-muted">
-            Only members of this organization can view, open, and contribute to this project.
+            Only members of this organisation can view, open, and contribute to this project.
           </p>
 
           <label className="flex items-center gap-2 text-xs font-medium text-zk-text cursor-pointer">

@@ -41,7 +41,7 @@ function extractFirstName(name?: string | null): string {
 }
 
 /**
- * Collaboration Hub (#831): a decision-first workspace for people and agents
+ * Collaboration Hub (#831): a decision-first organisation for people and agents
  * above the issue tracker on `/<org>/<project>/issues`.
  */
 export function CollaborationHub({

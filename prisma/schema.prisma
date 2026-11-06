@@ -81,8 +81,8 @@ enum ActivityType {
   duplicate_changed
 }
 
-/// A person's role inside a organisation (#423). Everyone who existed when the
-/// agent platform landed is a member of Zedu; a organisation's creator is its owner.
+/// A person's role inside an organisation (#423). Everyone who existed when the
+/// agent platform landed is a member of Zedu; an organisation's creator is its owner.
 enum MembershipRole {
   owner
   admin
@@ -92,7 +92,7 @@ enum MembershipRole {
 /// What an agent may do (#427). Each level includes the ones before it.
 /// What an agent may do. A ladder: every agent is `working`; `manager` adds
 /// accepting fixes and assigning work; `merger` adds executing Git merges.
-/// Both higher classes are granted by a organisation admin.
+/// Both higher classes are granted by an organisation admin.
 enum AgentLevel {
   working
   manager
@@ -720,7 +720,7 @@ model RateLimitHit {
 
 // ---------------------------------------------------------------------------
 // Agent platform (#422, #423). People and their agents work the same issues
-// inside a organisation. This block is owned by #423: later platform issues add
+// inside an organisation. This block is owned by #423: later platform issues add
 // files, not columns.
 // ---------------------------------------------------------------------------
 
@@ -780,7 +780,7 @@ model Project {
   stagingUrl            String?
   /// GitHub App installation used to merge accepted fixes (#452). Never a token.
   githubInstallationId  String?
-  /// Set when a organisation owner archives the project (#573). Archived projects
+  /// Set when an organisation owner archives the project (#573). Archived projects
   /// are hidden from the switcher and cannot be selected.
   archivedAt            DateTime?
   /// Deprecated (#595): the delivery window now lives on ProjectWorkflow.
@@ -986,7 +986,7 @@ model Membership {
   @@index([userId])
 }
 
-/// A change to who is in a organisation and what they can do there.
+/// A change to who is in an organisation and what they can do there.
 /// Site-wide User.role is not this: an admin of one organisation is a member of another.
 model MembershipChange {
   id           String          @id @default(cuid())
@@ -1005,7 +1005,7 @@ model MembershipChange {
   @@index([organisationId, createdAt])
 }
 
-/// Direct membership in a project, for external contributors who are not members of the parent organization.
+/// Direct membership in a project, for external contributors who are not members of the parent organisation.
 model ProjectMembership {
   id        String   @id @default(cuid())
   projectId String
@@ -1040,7 +1040,7 @@ model ProjectJoinRequest {
   @@index([userId])
 }
 
-/// A named agent working for its owner inside a organisation (#427). It always acts
+/// A named agent working for its owner inside an organisation (#427). It always acts
 /// as itself and for a named person.
 model Agent {
   requests             AgentRequest[]
@@ -1056,7 +1056,7 @@ model Agent {
   /// When the level last changed (#390). Silence releases before this moment
   /// do not count towards a fresh demotion, so a person's restore sticks.
   levelChangedAt       DateTime?
-  /// Higher rate budget, set only by a organisation admin (#440).
+  /// Higher rate budget, set only by an organisation admin (#440).
   burst                Boolean               @default(false)
   /// When the higher budget stops (#596). Null on an enabled grant means it
   /// has no expiry. An expired time falls back to the standard budget on the
@@ -1208,11 +1208,11 @@ model AgentAuditEvent {
   target      String?
   /// The issue, when there is one, so the log can be filtered by it (#447).
   bugId       String?
-  /// A person acting on the agent, e.g. a organisation admin's undo (#450) or a
+  /// A person acting on the agent, e.g. an organisation admin's undo (#450) or a
   /// level change (#451). Null when the agent acted.
   actorUserId String?
   payload     Json?
-  /// Set by a organisation admin's undo; the row itself is kept.
+  /// Set by an organisation admin's undo; the row itself is kept.
   undoneAt    DateTime?
   createdAt   DateTime  @default(now())
   organisation      Organisation    @relation(fields: [organisationId], references: [id], onDelete: Cascade)
@@ -1637,7 +1637,7 @@ model IssueConfirmation {
   description      String
   /// With reject only: the issue this one duplicates.
   duplicateOfId    String?
-  /// Set when a organisation admin undid it; giving it again clears it.
+  /// Set when an organisation admin undid it; giving it again clears it.
   undoneAt         DateTime?
   createdAt        DateTime             @default(now())
   /// When it was last given. Only entries given after the latest edit count.
@@ -2237,7 +2237,7 @@ model AgentMessage {
   @@index([fromUserId])
 }
 
-/// A single-use invite to a organisation (#444). Only the token's hash is stored.
+/// A single-use invite to an organisation (#444). Only the token's hash is stored.
 model OrganisationInvite {
   id          String         @id @default(cuid())
   organisationId    String
@@ -2255,7 +2255,7 @@ model OrganisationInvite {
   @@index([email])
 }
 
-/// A shareable invite link for a organisation. Not tied to one email address.
+/// A shareable invite link for an organisation. Not tied to one email address.
 /// The raw token is encrypted so an owner can copy it again; acceptance
 /// looks up the hash. maxUses null means anyone can join until it expires
 /// or is revoked. A redemption is one person, so the same account cannot
@@ -2716,7 +2716,7 @@ model AgentPicture {
 
 /// A standing instruction one person writes for every agent they own (#838).
 /// Scoped to the user alone, never to an agent or an issue, so the same set
-/// answers every key that user owns — across all their workspaces.
+/// answers every key that user owns — across all their organisations.
 model AgentPreference {
   id        String   @id @default(cuid())
   userId    String

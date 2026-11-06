@@ -11,7 +11,7 @@ export type UserIdentifier = {
  * Checks whether a user can contribute to a project (report issues, comment, bid, claim).
  * Allowed if:
  * 1. User is a site super_admin.
- * 2. User is an organization owner, admin, or member of the project's organisation.
+ * 2. User is an organisation owner, admin, or member of the project's organisation.
  * 3. User is an accepted project member (ProjectMembership).
  */
 export async function canContributeToProject(
@@ -39,7 +39,7 @@ export async function canContributeToProject(
   }
   if (!resolvedOrganisationId) return false;
 
-  // Check Organization Membership
+  // Check Organisation Membership
   const orgMember = await prisma.membership.findUnique({
     where: { organisationId_userId: { organisationId: resolvedOrganisationId, userId: user.id } },
     select: { id: true },
