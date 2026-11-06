@@ -29,10 +29,10 @@ import { areaMatches, matchedAreas, ownFix } from "@/lib/revalidation";
 import { giveRevalidation, reportCodeChange } from "@/lib/agent-api/revalidation";
 
 function agent(agentId: string, ownerId = "ada"): AgentContext {
-  return { agentId, name: agentId, ownerId, tenantId: "tenant-1", level: "working", burst: false, keyId: `key-${agentId}` };
+  return { agentId, name: agentId, ownerId, organisationId: "tenant-1", level: "working", burst: false, keyId: `key-${agentId}` };
 }
 
-const scope = { tenantId: "tenant-1", projectId: "project-1" };
+const scope = { organisationId: "tenant-1", projectId: "project-1" };
 const PR = "https://github.com/emerjent/ziki/pull/900";
 const SHA = "9f2c1ab34de5";
 
@@ -40,7 +40,7 @@ const SHA = "9f2c1ab34de5";
 function issue(overrides: Record<string, unknown> = {}) {
   return {
     id: "bug1",
-    tenantId: "tenant-1",
+    organisationId: "tenant-1",
     projectId: "project-1",
     number: 1,
     title: "Filters forget their state",
@@ -92,7 +92,7 @@ function repro(bug: Record<string, unknown>, overrides: Record<string, unknown> 
     bugId: bug.id,
     affectedPaths: ["lib/agent-api"],
     affectedEndpoints: [],
-    bug: { tenantId: "tenant-1", pullRequestUrl: null, status: "open", substatus: "open", ...bug },
+    bug: { organisationId: "tenant-1", pullRequestUrl: null, status: "open", substatus: "open", ...bug },
     ...overrides,
   };
 }

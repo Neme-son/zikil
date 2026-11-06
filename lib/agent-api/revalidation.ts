@@ -44,7 +44,7 @@ type Db = PrismaClient | Prisma.TransactionClient;
 /** The issue columns every route and the feed need to judge and show a re-check. */
 const issueForRevalidation = {
   id: true,
-  tenantId: true,
+  organisationId: true,
   projectId: true,
   number: true,
   title: true,
@@ -225,10 +225,10 @@ export async function revalidationForIssue(
  * in the caller's scope: another project's issue is a 404.
  */
 export async function revalidationFor(
-  scope: { tenantId: string; projectId: string },
+  scope: { organisationId: string; projectId: string },
   issueRef: string,
 ): Promise<{ repro: ReproView | null; waiting: RevalidationView[]; revalidated: RevalidationView[] }> {
-  const bugId = await issueIdFor(prisma, issueRef, scope.tenantId);
+  const bugId = await issueIdFor(prisma, issueRef, scope.organisationId);
   if (!bugId) throw new IssueApiError(404, "Issue not found.");
   const bug = await prisma.bug.findFirst({
     where: { id: bugId, ...scope, isDeleted: false },
@@ -303,7 +303,7 @@ export type ReproResult =
  */
 export async function recordIssueRepro(
   agent: AgentContext,
-  scope: { tenantId: string; projectId: string },
+  scope: { organisationId: string; projectId: string },
   issueRef: string,
   rawBody: unknown,
 ): Promise<ReproResult> {
@@ -311,11 +311,11 @@ export async function recordIssueRepro(
   if (!parsed.success) return invalid(parsed.error.issues);
   const body = parsed.data;
 
-  const bugId = await issueIdFor(prisma, issueRef, scope.tenantId);
+  const bugId = await issueIdFor(prisma, issueRef, scope.organisationId);
   if (!bugId) return fail(404, "not_found", "No such issue in this project.");
   const bug = await prisma.bug.findFirst({
     where: { id: bugId, ...scope, isDeleted: false },
-    select: { id: true, tenantId: true, projectId: true, status: true },
+    select: { id: true, organisationId: true, projectId: true, status: true },
   });
   if (!bug) return fail(404, "not_found", "No such issue in this project.");
   if (bug.status === "closed") {
@@ -356,7 +356,7 @@ export async function recordIssueRepro(
       commitSha: body.commitSha ?? null,
     };
     await audit(agent, "issue.repro_recorded", `bug:${bug.id}`, payload, { bugId: bug.id, db: tx });
-    await publish(tx, { tenantId: bug.tenantId, type: "issue.repro_recorded", payload, actorAgentId: agent.agentId, bugId: bug.id });
+    await publish(tx, { organisationId: bug.organisationId, type: "issue.repro_recorded", payload, actorAgentId: agent.agentId, bugId: bug.id });
     return repro;
   });
 
@@ -395,14 +395,14 @@ export type CodeChangeResult =
  */
 export async function reportCodeChange(
   agent: AgentContext,
-  scope: { tenantId: string; projectId: string },
+  scope: { organisationId: string; projectId: string },
   rawBody: unknown,
 ): Promise<CodeChangeResult> {
   const parsed = codeChangeSchema.safeParse(rawBody ?? {});
   if (!parsed.success) return invalid(parsed.error.issues);
   const body = parsed.data;
   const project = await prisma.project.findFirst({
-    where: { id: scope.projectId, tenantId: scope.tenantId },
+    where: { id: scope.projectId, organisationId: scope.organisationId },
     select: { id: true },
   });
   if (!project) return fail(404, "not_found", "No such project.");
@@ -421,7 +421,7 @@ export async function reportCodeChange(
       bug: {
         select: {
           id: true,
-          tenantId: true,
+          organisationId: true,
           number: true,
           title: true,
           status: true,
@@ -498,7 +498,7 @@ export async function reportCodeChange(
         };
         await audit(agent, "issue.revalidation_asked", `bug:${entry.bug.id}`, payload, { bugId: entry.bug.id, db: tx });
         await publish(tx, {
-          tenantId: entry.bug.tenantId,
+          organisationId: entry.bug.organisationId,
           type: "issue.revalidation_asked",
           payload,
           actorAgentId: agent.agentId,
@@ -540,7 +540,7 @@ export type RevalidationResult =
  */
 export async function giveRevalidation(
   agent: AgentContext,
-  scope: { tenantId: string; projectId: string },
+  scope: { organisationId: string; projectId: string },
   issueRef: string,
   rawBody: unknown,
 ): Promise<RevalidationResult> {
@@ -548,7 +548,7 @@ export async function giveRevalidation(
   if (!parsed.success) return invalid(parsed.error.issues);
   const body = parsed.data;
 
-  const bugId = await issueIdFor(prisma, issueRef, scope.tenantId);
+  const bugId = await issueIdFor(prisma, issueRef, scope.organisationId);
   if (!bugId) return fail(404, "not_found", "No such issue in this project.");
   const bug = await prisma.bug.findFirst({
     where: { id: bugId, ...scope, isDeleted: false },
@@ -614,7 +614,7 @@ export async function giveRevalidation(
     };
     await audit(agent, "issue.revalidated", `bug:${bug.id}`, payload, { bugId: bug.id, db: tx });
     await publish(tx, {
-      tenantId: bug.tenantId,
+      organisationId: bug.organisationId,
       type: "issue.revalidated",
       payload,
       actorAgentId: agent.agentId,

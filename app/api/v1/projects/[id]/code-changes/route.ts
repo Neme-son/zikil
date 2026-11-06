@@ -3,7 +3,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { agentIssueRequest, issueJson } from "@/lib/agent-api/issues";
 import { assertKeyProject } from "@/lib/agents/require-agent";
 import { reportCodeChange } from "@/lib/agent-api/revalidation";
-import { eventStreamBus, TENANT_WRITE } from "@/lib/events/stream-bus";
+import { eventStreamBus, ORGANISATION_WRITE } from "@/lib/events/stream-bus";
 
 export const runtime = "nodejs";
 
@@ -29,8 +29,8 @@ export async function POST(request: NextRequest, context: { params: Promise<{ id
   return agentIssueRequest(request, "project.code_change_reported", "working", projectId, async (agent) => {
     assertKeyProject(agent, projectId);
     const body = await issueJson(request);
-    const result = await reportCodeChange(agent, { tenantId: agent.tenantId, projectId }, body);
-    if (result.status === 201 && result.body.affected.length > 0) eventStreamBus.emit(TENANT_WRITE, agent.tenantId);
+    const result = await reportCodeChange(agent, { organisationId: agent.organisationId, projectId }, body);
+    if (result.status === 201 && result.body.affected.length > 0) eventStreamBus.emit(ORGANISATION_WRITE, agent.organisationId);
     return NextResponse.json(result.body, { status: result.status });
   });
 }
