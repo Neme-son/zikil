@@ -1250,7 +1250,7 @@ export async function editPullRequestUrlAction(
       project: { select: { repoUrl: true } },
       claims: {
         where: { releasedAt: null, status: { in: ["active", "offered"] } },
-        select: { beneficiaryUserId: true, agent: { select: { ownerUserId: true } } },
+        select: { status: true, beneficiaryUserId: true, agent: { select: { ownerUserId: true } } },
       },
       deliveries: {
         select: { beneficiaryUserId: true, pullRequestUrl: true, agent: { select: { ownerUserId: true } } },
