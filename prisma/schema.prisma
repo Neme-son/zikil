@@ -2734,3 +2734,68 @@ model AgentPreference {
 
   @@index([userId])
 }
+
+/// An AI platform in the public comparison directory (#compare): Ziki itself
+/// and every platform it is compared with. Admins add and edit these in
+/// /superadmin/compare; no component changes when a platform is added.
+model ComparePlatform {
+  id             String    @id @default(cuid())
+  /// Lowercase, URL-safe and never containing "-vs-"; it is half of a comparison URL.
+  slug           String    @unique
+  name           String
+  /// A site path such as /compare/logos/x.svg. Empty shows the name's initial.
+  logoUrl        String?
+  websiteUrl     String
+  /// One of lib/compare/catalog COMPARE_CATEGORIES.
+  category       String
+  description    String
+  /// What it is for, in plain words. Feeds "Which should you choose?".
+  useCases       String[]  @default([])
+  strengths      String[]  @default([])
+  limitations    String[]  @default([])
+  pricingSummary String?
+  /// { [dimension key]: { status, note?, sourceUrl? } }. A missing key is "not verified".
+  features       Json      @default("{}")
+  /// Official pages and documents the facts above were checked against.
+  sourceUrls     String[]  @default([])
+  isZiki         Boolean   @default(false)
+  popular        Boolean   @default(false)
+  published      Boolean   @default(true)
+  sortOrder      Int       @default(0)
+  /// When someone last checked the facts against the sources. Null: never.
+  lastVerifiedAt DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  comparisonsAsA Comparison[] @relation("ComparisonPlatformA")
+  comparisonsAsB Comparison[] @relation("ComparisonPlatformB")
+
+  @@index([published, category])
+}
+
+/// Editorial content for one pair of platforms (#compare). Any two published
+/// platforms already have a comparison page built from their own data; a row
+/// here adds a hand-written introduction, details, strengths, limitations and
+/// recommendations on top, and puts the pair in the sitemap.
+model Comparison {
+  id             String          @id @default(cuid())
+  /// "{platformA.slug}-vs-{platformB.slug}", in the canonical order.
+  slug           String          @unique
+  platformAId    String
+  platformA      ComparePlatform @relation("ComparisonPlatformA", fields: [platformAId], references: [id], onDelete: Cascade)
+  platformBId    String
+  platformB      ComparePlatform @relation("ComparisonPlatformB", fields: [platformBId], references: [id], onDelete: Cascade)
+  title          String
+  /// The short description on a comparison card and under the page headline.
+  summary        String?
+  /// Hand-written intro, detail sections, strengths, limitations and recommendations (lib/compare/content.ts).
+  content        Json            @default("{}")
+  seoTitle       String?
+  seoDescription String?
+  popular        Boolean         @default(false)
+  published      Boolean         @default(false)
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+
+  @@unique([platformAId, platformBId])
+  @@index([published])
+}

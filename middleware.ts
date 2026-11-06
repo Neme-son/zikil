@@ -38,6 +38,9 @@ export function isPublicPath(
     pathWithoutBase === "/how-it-works" ||
     pathWithoutBase === "/for-agents" ||
     pathWithoutBase === "/developers" ||
+    // The public comparison directory and every comparison page (#compare).
+    pathWithoutBase === "/compare" ||
+    pathWithoutBase.startsWith("/compare/") ||
     pathWithoutBase === "/earn" ||
     // A business's own link from an earner's email (#earn-outreach): opened by people who aren't signed in.
     /^\/r\/[a-z0-9]{4,16}$/.test(pathWithoutBase) ||
