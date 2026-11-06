@@ -42,6 +42,7 @@ import { issuePath } from "@/lib/issue-ref";
 import { ideaPath, projectPath, projectRef } from "@/lib/project-paths";
 import { contestsIn, liveStakesOf, STAKE_REFRESH_MS, sweepStakes } from "@/lib/agent-api/stakes";
 import { eventStreamBus, TENANT_WRITE, type StreamEvent } from "@/lib/events/stream-bus";
+import { IssueApiError } from "@/lib/agent-api/errors";
 
 /**
  * One list of everything an agent can do in a project (#work-feed).
@@ -137,6 +138,8 @@ export type WorkFeed = {
   agent: { id: string; name: string; level: AgentLevel };
   workUrl: string;
   pollAfterSeconds: number;
+  /** How long the feed may be held open waiting for it to change (`?wait=`). */
+  waitAfterSeconds: number;
   /** What Ziki asks of the agent right now, in plain words. */
   ask: string[];
   inbox: { unread: number; path: string };
@@ -1833,6 +1836,7 @@ export async function workFeed(agent: AgentContext, project: FeedProject, now = 
     agent: { id: agent.agentId, name: agent.name, level: agent.level },
     workUrl: absoluteUrl(projectPath(refIn(project), "/work")),
     pollAfterSeconds: WORK_POLL_SECONDS,
+    waitAfterSeconds: WORK_WAIT_MAX_SECONDS,
     ask,
     inbox: { unread: mine.unread, path: "/api/v1/inbox?unread=1" },
     counts,
@@ -1844,4 +1848,114 @@ export async function workFeed(agent: AgentContext, project: FeedProject, now = 
 /** A weak ETag over the feed, so an unchanged poll can answer 304 with no body. */
 export function workEtag(feed: WorkFeed): string {
   return `W/"${createHash("sha256").update(JSON.stringify(feed)).digest("base64url").slice(0, 27)}"`;
+}
+
+/** How long a caller may hold the feed open waiting for it to change. */
+export const WORK_WAIT_MAX_SECONDS = 25;
+/** How long a waiter lets a burst of writes settle before it reads the feed again. */
+const WORK_SETTLE_MS = 250;
+
+/**
+ * Reads the `wait` parameter: how long the feed may be held open, in seconds.
+ * Absent means no wait; anything outside 0–25 is refused.
+ */
+export function parseWait(raw: string | null): number {
+  if (raw === null) return 0;
+  const seconds = Number(raw);
+  if (raw === "" || !Number.isFinite(seconds) || seconds < 0 || seconds > WORK_WAIT_MAX_SECONDS) {
+    throw new IssueApiError(400, `wait must be between 0 and ${WORK_WAIT_MAX_SECONDS} seconds.`);
+  }
+  return seconds;
+}
+
+/**
+ * Waits until the feed this agent sees differs from `clientEtag`, or the
+ * deadline passes. Returns true when the feed changed.
+ *
+ * The wait rides the in-process event bus: a write that commits in the tenant
+ * drops the cached feed, so the waiter reads it again and compares ETags. A
+ * burst settles first, so a crowd of waiting agents costs one rebuild, not one
+ * per write.
+ *
+ * The feed is always read again by the caller, so a missed signal (a write
+ * that landed on another instance, a dropped event) can only cost a later
+ * poll, never a wrong answer: the ETag check is what decides, the signal only
+ * says when to look.
+ */
+export async function waitForWorkChange(
+  tenantId: string,
+  clientEtag: string,
+  waitSeconds: number,
+  readEtag: () => Promise<string>,
+  options: { settleMs?: number } = {},
+): Promise<boolean> {
+  const wait = Number.isFinite(waitSeconds) ? Math.max(0, Math.min(waitSeconds, WORK_WAIT_MAX_SECONDS)) : 0;
+  if (wait === 0) return false;
+  const deadline = Date.now() + wait * 1000;
+  const settleMs = options.settleMs ?? WORK_SETTLE_MS;
+
+  return new Promise<boolean>((resolve) => {
+    let deadlineTimer: NodeJS.Timeout | null = null;
+    let settleTimer: NodeJS.Timeout | null = null;
+    let done = false;
+
+    const finish = (changed: boolean) => {
+      if (done) return;
+      done = true;
+      eventStreamBus.off("event", onEvent);
+      eventStreamBus.off(TENANT_WRITE, onTenantWrite);
+      if (deadlineTimer) clearTimeout(deadlineTimer);
+      if (settleTimer) clearTimeout(settleTimer);
+      resolve(changed);
+    };
+
+    const check = async () => {
+      if (done) return;
+      settleTimer = null;
+      let etag: string;
+      try {
+        etag = await readEtag();
+      } catch {
+        finish(false);
+        return;
+      }
+      if (done) return;
+      if (etag !== clientEtag) {
+        finish(true);
+        return;
+      }
+      if (Date.now() >= deadline) {
+        finish(false);
+        return;
+      }
+      armDeadline();
+    };
+
+    /** A write landed. Let the burst settle, then look once. */
+    const onSignal = () => {
+      if (done || settleTimer) return;
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) {
+        void check();
+        return;
+      }
+      settleTimer = setTimeout(() => void check(), Math.min(settleMs, remaining));
+    };
+
+    const onEvent = (event: StreamEvent) => {
+      if (event.tenantId === tenantId) onSignal();
+    };
+    const onTenantWrite = (writtenTenantId: string) => {
+      if (writtenTenantId === tenantId) onSignal();
+    };
+
+    const armDeadline = () => {
+      if (deadlineTimer) clearTimeout(deadlineTimer);
+      deadlineTimer = setTimeout(() => void check(), Math.max(0, deadline - Date.now()));
+    };
+
+    eventStreamBus.on("event", onEvent);
+    eventStreamBus.on(TENANT_WRITE, onTenantWrite);
+    armDeadline();
+  });
 }

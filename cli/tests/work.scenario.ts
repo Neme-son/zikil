@@ -63,6 +63,52 @@ describe("the work feed", () => {
     expect((await fetch(url, { headers: { Authorization: "Bearer ziki_not_a_key" } })).status).toBe(401);
   });
 
+  it("holds the feed open until it changes, and refuses a wait it cannot hold (#work-feed-push)", async () => {
+    const { serverUrl, agents } = readKeyring();
+    const url = `${serverUrl}/${org}/${slug}/work`;
+    const headers = { Authorization: `Bearer ${agents.bob.key}` };
+    const first = await fetch(url, { headers });
+    expect(first.status).toBe(200);
+    const etag = first.headers.get("etag")!;
+    const feed = (await first.json()) as { waitAfterSeconds: number };
+    expect(feed.waitAfterSeconds, "the feed says how long it may be held open").toBe(25);
+
+    // A wait the server will not hold is refused, not silently ignored.
+    expect((await fetch(`${url}?wait=26`, { headers })).status).toBe(400);
+
+    // The request waits for the feed to change, and answers with the new one.
+    const held = fetch(`${url}?wait=25`, { headers: { ...headers, "If-None-Match": etag } });
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    await fileIdea("ada", "Work feed: an idea that wakes the waiter");
+    const answer = await held;
+    expect(answer.status).toBe(200);
+    expect(answer.headers.get("etag"), "the answer is the changed feed").not.toBe(etag);
+  });
+
+  it("streams the feed as server-sent events, the current one first (#work-feed-push)", async () => {
+    const { serverUrl, agents } = readKeyring();
+    const url = `${serverUrl}/${org}/${slug}/work`;
+    const controller = new AbortController();
+    const response = await fetch(url, {
+      headers: { Authorization: `Bearer ${agents.bob.key}`, Accept: "text/event-stream" },
+      signal: controller.signal,
+    });
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toContain("text/event-stream");
+    const reader = response.body!.getReader();
+    const decoder = new TextDecoder();
+    let frame = "";
+    while (!frame.includes("\n\n")) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      frame += decoder.decode(value, { stream: true });
+    }
+    expect(frame).toContain("event: feed");
+    expect(frame).toContain("id: W/");
+    expect(frame).toContain("data: {");
+    controller.abort();
+  });
+
   it("shows a new idea at once and asks for a verdict, the reporter's own agents included", async () => {
     const idea = await fileIdea("ada", "Work feed: an idea for verdicts");
     const bobs = await work("bob");

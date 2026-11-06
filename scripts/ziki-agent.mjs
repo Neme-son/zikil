@@ -500,10 +500,15 @@ export async function workUrl(ctx, config, project) {
 
 /**
  * Read the work feed: everything this agent can do in the project. Without
- * `watch` it prints the feed once. With `watch` it polls every
- * `pollAfterSeconds` with If-None-Match (an unchanged feed is a 304, still one
- * read) and prints each new item you can act on (`canAct`) as a JSON line,
+ * `watch` it prints the feed once. With `watch` it waits for the feed to
+ * change and prints each new item you can act on (`canAct`) as a JSON line,
  * keyed by `key`. The feed's `ask` lines go to stderr when they change.
+ *
+ * The wait is the server's: the feed says how long it may be held open
+ * (`waitAfterSeconds`), and each request then carries `If-None-Match` and
+ * `wait`, so the server holds the request open until the feed changes instead
+ * of the client sleeping between polls (#work-feed-push). A server that does
+ * not say so is polled every `pollAfterSeconds` instead.
  * @param {Context} ctx
  * @param {{ configFile: string, project?: string, watch?: boolean, maxPolls?: number, signal?: AbortSignal }} options
  */
@@ -530,12 +535,28 @@ export async function work(ctx, options) {
   let seen = new Set();
   let asked = "";
   let pollSeconds = WORK_POLL_SECONDS;
+  // How long the server may hold the feed open. It says so in the feed
+  // (`waitAfterSeconds`); a server that does not say so is polled instead.
+  let waitSeconds = 0;
   for (let polls = 0; polls < maxPolls && !signal?.aborted; polls++) {
-    if (polls > 0) await ctx.sleep(pollSeconds * 1000);
-    const result = await api(ctx, config.url, url, {
-      key: config.apiKey,
-      headers: etag ? { "If-None-Match": etag } : {},
-    });
+    if (waitSeconds === 0 && polls > 0) await ctx.sleep(pollSeconds * 1000);
+    const target = waitSeconds > 0 ? withParam(url, "wait", waitSeconds) : url;
+    let result;
+    try {
+      result = await api(ctx, config.url, target, {
+        key: config.apiKey,
+        headers: etag ? { "If-None-Match": etag } : {},
+      });
+    } catch (error) {
+      // A server that refuses `wait` still serves the feed: poll it instead.
+      if (waitSeconds > 0 && error instanceof ApiError && error.status === 400) {
+        waitSeconds = 0;
+        ctx.log("This server does not wait for changes; polling instead.");
+        polls -= 1;
+        continue;
+      }
+      throw error;
+    }
     const pause = budgetPauseMs(result.headers, ctx.now());
     if (pause) {
       ctx.log(
@@ -549,6 +570,7 @@ export async function work(ctx, options) {
       Number(result.data.pollAfterSeconds) || WORK_POLL_SECONDS,
       1,
     );
+    waitSeconds = Math.max(Number(result.data.waitAfterSeconds) || 0, 0);
 
     const ask = (result.data.ask ?? []).join("\n");
     if (ask && ask !== asked) ctx.log(ask);
@@ -562,6 +584,13 @@ export async function work(ctx, options) {
     // An item that goes away and comes back is new work again.
     seen = current;
   }
+}
+
+/** The same URL with a query parameter added. */
+function withParam(url, name, value) {
+  const target = new URL(url);
+  target.searchParams.set(name, String(value));
+  return target.href;
 }
 
 const HELP = `ziki-agent: reference client for the Ziki agent API

@@ -3,7 +3,9 @@ import type { AgentContext } from "@/lib/agents/require-agent";
 
 vi.mock("@/lib/prisma", () => ({ prisma: {} }));
 
-import { itemsFor, workEtag, type AgentWork, type ProjectWork, type WorkFeed } from "@/lib/agent-api/work";
+import { itemsFor, parseWait, waitForWorkChange, workEtag, type AgentWork, type ProjectWork, type WorkFeed } from "@/lib/agent-api/work";
+import { workFeedStream } from "@/lib/agent-api/work-stream";
+import { eventStreamBus, TENANT_WRITE } from "@/lib/events/stream-bus";
 import { prGate } from "@/lib/agent-api/pr-gate";
 import type { StoredPullRequestReport } from "@/lib/agent-api/pull-request-report";
 
@@ -278,3 +280,88 @@ describe("workEtag", () => {
     expect(workEtag(feed)).toMatch(/^W\/"[\w-]+"$/);
   });
 });
+
+/** The push channels (#work-feed-push): the agent is told about work sooner, and the ETag still decides what changed. */
+describe("the work feed told sooner", () => {
+  it("refuses a wait the server will not hold", () => {
+    expect(parseWait(null)).toBe(0);
+    expect(parseWait("25")).toBe(25);
+    expect(() => parseWait("26")).toThrow();
+    expect(() => parseWait("-1")).toThrow();
+    expect(() => parseWait("soon")).toThrow();
+  });
+
+  it("waits for the feed to change, and says so", async () => {
+    let etag = 'W/"one"';
+    const waiting = waitForWorkChange("t1", 'W/"one"', 5, async () => etag);
+    etag = 'W/"two"';
+    eventStreamBus.emit(TENANT_WRITE, "t1");
+    await expect(waiting).resolves.toBe(true);
+  });
+
+  it("gives up at the deadline when nothing changes", async () => {
+    const waiting = waitForWorkChange("t1", 'W/"one"', 0.05, async () => 'W/"one"');
+    await expect(waiting).resolves.toBe(false);
+  });
+
+  it("ignores a write in another tenant", async () => {
+    const waiting = waitForWorkChange("t1", 'W/"one"', 0.05, async () => 'W/"one"');
+    eventStreamBus.emit(TENANT_WRITE, "t2");
+    await expect(waiting).resolves.toBe(false);
+  });
+
+  it("streams the feed, and every change after it", async () => {
+    let feed = { items: [], ask: ["one"] } as unknown as WorkFeed;
+    const response = workFeedStream({
+      agent: agent("working"),
+      project: { id: "p1", slug: "demo", name: "Demo", orgSlug: "acme" },
+      request: new Request("http://localhost/acme/demo/work"),
+      readFeed: async () => feed,
+    });
+    expect(response.headers.get("content-type")).toContain("text/event-stream");
+    const reader = response.body!.getReader();
+    const decoder = new TextDecoder();
+
+    const first = await readFrame(reader, decoder);
+    expect(first).toContain("event: feed");
+    expect(first).toContain('"one"');
+
+    feed = { items: [], ask: ["two"] } as unknown as WorkFeed;
+    eventStreamBus.emit(TENANT_WRITE, "t1");
+    const second = await readFrame(reader, decoder);
+    expect(second).toContain('"two"');
+
+    await reader.cancel();
+  });
+
+  it("skips the first frame when the client already holds that feed", async () => {
+    const feed = { items: [], ask: ["one"] } as unknown as WorkFeed;
+    const response = workFeedStream({
+      agent: agent("working"),
+      project: { id: "p1", slug: "demo", name: "Demo", orgSlug: "acme" },
+      request: new Request("http://localhost/acme/demo/work"),
+      lastEventId: workEtag(feed),
+      readFeed: async () => feed,
+    });
+    const reader = response.body!.getReader();
+    const decoder = new TextDecoder();
+    const raced = await Promise.race([
+      reader.read().then(() => "frame"),
+      new Promise((resolve) => setTimeout(() => resolve("nothing"), 300)),
+    ]);
+    expect(raced).toBe("nothing");
+    await reader.cancel();
+  });
+});
+
+/** Reads one SSE frame: everything up to the blank line that ends it. */
+async function readFrame(reader: ReadableStreamDefaultReader<Uint8Array>, decoder: TextDecoder): Promise<string> {
+  let frame = "";
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) return frame;
+    frame += decoder.decode(value, { stream: true });
+    const end = frame.indexOf("\n\n");
+    if (end !== -1) return frame.slice(0, end);
+  }
+}
