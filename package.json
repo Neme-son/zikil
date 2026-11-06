@@ -1,6 +1,6 @@
 ﻿{
   "name": "issue-tracker",
-  "version": "0.1.65",
+  "version": "0.1.68",
   "private": true,
   "scripts": {
     "dev": "next dev --port 3001",
@@ -84,6 +84,7 @@
   },
   "packageManager": "pnpm@10.14.0"
 }
+
 
 
 
