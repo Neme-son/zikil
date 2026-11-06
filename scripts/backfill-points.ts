@@ -14,7 +14,10 @@ import { backfillPoints, parseBackfillArgs, type BackfillLine } from "../lib/poi
 
 function describe(line: BackfillLine): string {
   const state = line.alreadyAwarded ? "skip (already awarded)" : "award";
-  return `${state.padEnd(22)} ${line.role.padEnd(8)} +${String(line.points).padEnd(3)} user=${line.userId} bug=${line.bugId}`;
+  const earnedAt = line.createdAt?.toISOString() ?? "at-write-time";
+  return `${state.padEnd(22)} ${line.role.padEnd(8)} +${String(line.ledgerPoints).padEnd(3)} ` +
+    `organisation=${line.organisationId} user=${line.userId} bug=${line.bugId} ` +
+    `sourceKey=${line.sourceKey} agent=${line.agentId ?? "none"} earnedAt=${earnedAt}`;
 }
 
 async function main() {

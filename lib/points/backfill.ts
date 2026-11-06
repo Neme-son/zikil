@@ -7,6 +7,7 @@ import {
   type ProjectRewardConfig,
 } from "./project-rewards";
 import { pointSourceKey } from "./rules";
+import { pointsMultiplierFor, scaledPoints } from "./multiplier";
 import { isConfirmed, standingConfirmationAwards } from "@/lib/agent-api/confirmations";
 
 /**
@@ -100,7 +101,11 @@ export function backfillEntries(
   return entries;
 }
 
-export type BackfillLine = PointAward & { alreadyAwarded: boolean };
+export type BackfillLine = PointAward & {
+  alreadyAwarded: boolean;
+  /** Amount the ledger would store, after the organisation's multiplier. */
+  ledgerPoints: number;
+};
 
 export type BackfillResult = {
   bugs: number;
@@ -207,7 +212,10 @@ export async function backfillPoints(db: Db, options: BackfillOptions = {}): Pro
           else alreadyAwarded = true;
         }
         if (alreadyAwarded) result.existing++;
-        onLine?.({ ...entry, alreadyAwarded });
+        if (onLine) {
+          const multiplier = entry.exact ? 1 : await pointsMultiplierFor(db, entry.organisationId);
+          onLine({ ...entry, ledgerPoints: scaledPoints(entry.points, multiplier), alreadyAwarded });
+        }
       }
     }
     if (bugs.length < batchSize) break;
