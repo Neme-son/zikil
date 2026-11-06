@@ -1,6 +1,5 @@
 "use server";
 
-import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/prisma";
 import { requireUser } from "@/lib/auth-helpers";
 import { currentTenantIdFor, bugInTenant } from "@/lib/tenant-context";
@@ -24,7 +23,6 @@ async function requireOrgAdmin() {
 
 function revalidate() {
   revalidateIssue();
-  revalidatePath("/[project]", "layout");
 }
 
 /** Link an issue as a prerequisite for this one. */

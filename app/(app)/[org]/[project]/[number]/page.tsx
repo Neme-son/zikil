@@ -131,7 +131,6 @@ import { IssueRewardPanel } from "@/components/issue-reward-panel";
 import { rewardEstimatesFor } from "@/lib/agent-api/reward-estimates";
 import { IssueBlockersPanel } from "@/components/issue-blockers-panel";
 import type { IssueBlockerCandidate } from "@/app/actions/issue-blockers";
-import { activeIn, activeLevels, levelIn } from "@/lib/agents/active-in";
 
 type BugPageProps = {
   params: Promise<{ org: string; project: string; number: string }>;
@@ -424,6 +423,7 @@ export default async function BugDetailPage({ params, searchParams }: BugPagePro
       },
     }),
   ) : [];
+
   const blockedBy = blockerRows.filter((row) => row.blockedBugId === bug.id).map((row) => row.blockerBug) satisfies IssueBlockerCandidate[];
   const blocking = blockerRows.filter((row) => row.blockerBugId === bug.id).map((row) => row.blockedBug) satisfies IssueBlockerCandidate[];
   // These tables arrived after the issue row. A missing one must not blank the page.

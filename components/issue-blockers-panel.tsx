@@ -8,20 +8,21 @@ import { blockerGuidance } from "@/lib/issue-blockers";
 import { issuePath } from "@/lib/issue-ref";
 import { formatIssueNumber } from "@/lib/issue-number";
 import { stateLabel } from "@/lib/labels";
+import type { ProjectRef } from "@/lib/project-paths";
 
 type Props = {
-  projectSlug: string;
+  projectRef: ProjectRef;
   issueId: string;
   blockedBy: IssueBlockerCandidate[];
   blocking: IssueBlockerCandidate[];
   canEdit: boolean;
 };
 
-function IssueLink({ issue, projectSlug }: { issue: IssueBlockerCandidate; projectSlug: string }) {
-  return <Link href={issuePath(projectSlug, issue.number)} className="font-semibold text-zk-accent hover:underline">{formatIssueNumber(issue.number)} · {issue.title}</Link>;
+function IssueLink({ issue, projectRef }: { issue: IssueBlockerCandidate; projectRef: ProjectRef }) {
+  return <Link href={issuePath(projectRef, issue.number)} className="font-semibold text-zk-accent hover:underline">{formatIssueNumber(issue.number)} · {issue.title}</Link>;
 }
 
-export function IssueBlockersPanel({ projectSlug, issueId, blockedBy, blocking, canEdit }: Props) {
+export function IssueBlockersPanel({ projectRef, issueId, blockedBy, blocking, canEdit }: Props) {
   const router = useRouter();
   const [reference, setReference] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -66,7 +67,7 @@ export function IssueBlockersPanel({ projectSlug, issueId, blockedBy, blocking, 
               return (
                 <li key={issue.id} className="space-y-1">
                   <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-                    <IssueLink issue={issue} projectSlug={projectSlug} />
+                    <IssueLink issue={issue} projectRef={projectRef} />
                     <span className="rounded-full bg-zk-chip px-2 py-0.5 text-xs text-zk-muted">{stateLabel(issue.substatus)}</span>
                     {canEdit ? <button type="button" disabled={pending} onClick={() => remove(issue.id)} className="text-xs text-zk-muted underline hover:text-zk-text">Remove blocker</button> : null}
                   </div>
@@ -83,7 +84,7 @@ export function IssueBlockersPanel({ projectSlug, issueId, blockedBy, blocking, 
         <div className="mt-4 border-t border-zk-border pt-3">
           <h3 className="m-0 text-sm font-semibold text-zk-text">Blocking</h3>
           <ul className="mt-1 space-y-1 pl-5 text-sm text-zk-text2">
-            {blocking.map((issue) => <li key={issue.id}><IssueLink issue={issue} projectSlug={projectSlug} /> <span className="text-zk-muted">· {stateLabel(issue.substatus)}</span></li>)}
+            {blocking.map((issue) => <li key={issue.id}><IssueLink issue={issue} projectRef={projectRef} /> <span className="text-zk-muted">· {stateLabel(issue.substatus)}</span></li>)}
           </ul>
         </div>
       ) : null}
