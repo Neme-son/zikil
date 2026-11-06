@@ -3,10 +3,17 @@ import assert from 'node:assert/strict';
 import path from 'node:path';
 import {
   OPENCODE_GLOBAL_DIR,
+  OPENCODE_MCP_SERVER_NAME,
+  DENIED_MCP_TOOLS,
+  ZIKI_TOOL_DENY_GLOB,
   buildMcpBlock,
+  buildToolsMap,
+  exposedToolName,
   resolveMcpServerPath,
   mergeOpencodeConfig,
+  mergeToolsMap,
 } from '../../src/adapters/opencode.js';
+import { ZIKI_MCP_TOOL_ALLOWLIST } from '../../src/allowlist.js';
 
 test('global dir is ~/.config/opencode', () => {
   assert.equal(OPENCODE_GLOBAL_DIR('/home/u'), path.join('/home/u', '.config', 'opencode'));
@@ -59,4 +66,46 @@ test('merge accepts an identical ziki block as unchanged', () => {
   const block = { ziki: { type: 'local', command: ['node', '/x'] } };
   const merged = mergeOpencodeConfig({ mcp: block }, block);
   assert.deepEqual(merged.mcp, block);
+});
+
+test('exposed names prefix the MCP name with the server name', () => {
+  assert.equal(exposedToolName('ziki_get_work'), `${OPENCODE_MCP_SERVER_NAME}_ziki_get_work`);
+});
+
+test('denied list is 88 audited tools, disjoint from the 16 allowlisted', () => {
+  assert.equal(DENIED_MCP_TOOLS.length, 88);
+  assert.equal(new Set(DENIED_MCP_TOOLS).size, 88);
+  const allowed = new Set(ZIKI_MCP_TOOL_ALLOWLIST);
+  assert.ok(DENIED_MCP_TOOLS.every((name) => !allowed.has(name)));
+  assert.ok(DENIED_MCP_TOOLS.every((name) => name.startsWith('ziki_')));
+});
+
+test('tools map denies the backstop glob plus every denied tool, nothing allowlisted', () => {
+  const tools = buildToolsMap();
+  assert.equal(tools[ZIKI_TOOL_DENY_GLOB], false);
+  assert.equal(Object.keys(tools).length, 1 + DENIED_MCP_TOOLS.length);
+  assert.ok(Object.values(tools).every((value) => value === false));
+  for (const allowed of ZIKI_MCP_TOOL_ALLOWLIST) {
+    assert.equal(tools[exposedToolName(allowed)], undefined);
+  }
+  assert.equal(tools[exposedToolName('ziki_deliver')], false);
+  assert.equal(tools[exposedToolName('ziki_bid')], false);
+});
+
+test('tools merge preserves foreign entries and accepts already-denied', () => {
+  const merged = mergeToolsMap({ other_tool: true }, { 'ziki_*': false, ziki_ziki_bid: false });
+  assert.equal(merged.other_tool, true);
+  assert.equal(merged['ziki_*'], false);
+  const again = mergeToolsMap({ ziki_ziki_bid: false }, { ziki_ziki_bid: false });
+  assert.equal(again.ziki_ziki_bid, false);
+});
+
+test('tools merge refuses to silently flip an enabled denied tool', () => {
+  assert.throws(() => mergeToolsMap({ ziki_ziki_bid: true }, { ziki_ziki_bid: false }), /already sets tool/);
+});
+
+test('config merge carries the tools map alongside mcp', () => {
+  const merged = mergeOpencodeConfig({ theme: 'dark' }, { ziki: { type: 'local' } }, { 'ziki_*': false });
+  assert.equal(merged.theme, 'dark');
+  assert.deepEqual(merged.tools, { 'ziki_*': false });
 });

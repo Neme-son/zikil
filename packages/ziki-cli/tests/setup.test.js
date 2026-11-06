@@ -86,6 +86,9 @@ test('foreign opencode.json merges as a confirmed update with backup', () => {
     const merged = JSON.parse(fs.readFileSync(path.join(cfgDir, 'opencode.json'), 'utf8'));
     assert.equal(merged.theme, 'dark');
     assert.ok(merged.mcp.ziki);
+    assert.equal(merged.tools['ziki_*'], false);
+    assert.equal(merged.tools.ziki_ziki_deliver, false);
+    assert.equal(merged.tools.ziki_ziki_get_work, undefined);
     const backups = fs.readdirSync(cfgDir).filter((n) => n.startsWith('opencode.json.ziki-backup-'));
     assert.equal(backups.length, 1);
   } finally {
