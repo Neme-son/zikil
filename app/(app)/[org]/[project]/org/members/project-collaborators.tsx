@@ -34,7 +34,7 @@ export function ProjectCollaboratorsSection({
             Project Collaborators
           </h3>
           <p className="mt-0.5 text-xs text-zk-muted">
-            Contributors with direct access to individual projects, without full organization membership.
+            Contributors with direct access to individual projects, without full organisation membership.
           </p>
         </div>
         {collaborators.length > 0 ? (

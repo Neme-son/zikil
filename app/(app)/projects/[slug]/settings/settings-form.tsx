@@ -77,7 +77,7 @@ export function ProjectSettingsForm({
             <span>Private</span>
           </label>
           <p className="text-xs text-zk-muted pl-6">
-            Only members of this organization can view, open, and contribute to this project.
+            Only members of this organisation can view, open, and contribute to this project.
           </p>
 
           <label className="flex items-center gap-2 text-sm font-medium text-zk-text cursor-pointer">

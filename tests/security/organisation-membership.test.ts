@@ -207,7 +207,7 @@ describe("canContributeToProject permissions", () => {
     expect(allowed).toBe(true);
   });
 
-  it("allows organization members", async () => {
+  it("allows organisation members", async () => {
     projectMembershipFindUnique.mockResolvedValue(null);
     membershipFindUnique.mockResolvedValue({ id: "m-1" });
     const allowed = await canContributeToProject({ id: "user-1", role: "user" }, "p-1", "t-1");

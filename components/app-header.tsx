@@ -308,7 +308,7 @@ export function AppHeader({
   externalProjects?: ExternalProjectChoice[];
   activeOrganisationId?: string | null;
   reportFormUrl?: string;
-  /** Owner or admin of the current organization, or the site super admin: shows /org in the menus. */
+  /** Owner or admin of the current organisation, or the site super admin: shows /org in the menus. */
   organisationAdmin?: boolean;
 }) {
   const pathname = usePathname();

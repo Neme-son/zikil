@@ -175,7 +175,7 @@ export default async function DiscoverPage(props: DiscoverPageProps) {
           <p className="mt-1 text-sm text-zk-text2">
             {query || openOnly
               ? "Try adjusting your search query or filters."
-              : "There are no public projects available right now. Check back soon or create your own organization."}
+              : "There are no public projects available right now. Check back soon or create your own organisation."}
           </p>
         </div>
       ) : (

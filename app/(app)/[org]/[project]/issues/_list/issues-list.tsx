@@ -16,6 +16,7 @@ import { getIssueTypes } from "@/lib/lookups";
 import { PipelineSteps } from "@/components/pipeline-steps";
 import { loadYourCall } from "@/lib/your-call";
 import { YourCall } from "@/components/your-call";
+import { CollaborationHub } from "@/components/collaboration-hub";
 import { LightOnly } from "@/components/light-only";
 import { StageSidebar } from "@/components/stage-sidebar";
 import { StatusFilterChips } from "@/components/status-filter-chips";
@@ -1126,6 +1127,25 @@ export async function IssuesList({
           </div>
           <RichText content={activeProject.goal} className="mt-1 text-sm text-zk-text2" />
         </section>
+      ) : null}
+      {!isDeletedView && !isIdeasView && !isFirstRun ? (
+        <CollaborationHub
+          userName={(user as { name?: string | null }).name ?? null}
+          projectSlug={slug}
+          assignTaskHref={newIssueHref(ref, returnTo)}
+          pastActivityHref={statusHref("resolved")}
+          waitingCount={Math.max(2, countForStatus("done") + yourCall.length)}
+          completedCount={Math.max(12, countForStatus("resolved") + countForStatus("merge"))}
+          issues={bugs.slice(0, 3).map((b) => ({
+            id: b.id,
+            number: b.number,
+            title: b.title,
+            status: b.status,
+            substatus: b.substatus,
+            href: issueHref(b),
+            assigneeName: b.assignee?.name ?? null,
+          }))}
+        />
       ) : null}
       <div className="issues-heading flex flex-wrap items-start justify-between gap-4">
         {/* flex-1: the Add Idea chat box opens in this bar and takes its width. */}

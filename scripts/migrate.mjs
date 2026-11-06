@@ -172,6 +172,12 @@ END $$;
   // step skips what is already done, so a partial apply is safe to run again.
   "20261214000001_deliveries": `SELECT 1;
 `,
+  // 2026-11-06: deadlocked against the live app on its first deploy and rolled
+  // back whole (one statement does every rename). It now takes its locks
+  // without waiting, and only renames what is still named after tenants, so
+  // running it again over any state is safe: the probe always passes.
+  "20270110000000_organisations": `SELECT 1;
+`,
 };
 
 /** True when `name` has a probe and the probe finds none of its objects. */
