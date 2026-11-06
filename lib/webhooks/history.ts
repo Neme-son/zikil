@@ -158,7 +158,7 @@ export async function retryDelivery(
     return { ok: false, status: 409, error: "This subscription is disabled. Re-enable it with PATCH /api/v1/webhooks/{id} first." };
   }
   if (delivery.status === "delivered") return { ok: false, status: 409, error: "This delivery already succeeded." };
-  if (delivery.status === "pending") return { ok: false, status: 409, error: "This delivery is already queued." };
+  if (delivery.status === "pending" || delivery.status === "failed") return { ok: false, status: 409, error: "This delivery is already queued." };
   // Conditional on the status read above, so two retries at once queue it once.
   const requeued = await db.webhookDelivery.updateMany({
     where: { id: delivery.id, subscriptionId, status: delivery.status },

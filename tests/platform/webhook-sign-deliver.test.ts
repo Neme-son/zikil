@@ -75,12 +75,18 @@ describe("durable delivery attempts", () => {
     expect(db.webhookDelivery.updateMany).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ status: "delivered", attemptCount: 1, nextAttemptAt: null }) }));
     expect(db.webhookSubscription.update).toHaveBeenCalledWith(expect.objectContaining({ data: { failureCount: 0 } }));
   });
+  it("marks a failed attempt as failed (not pending) so it can be retried", async () => {
+    status = 500;
+    await processDelivery("delivery-a");
+    expect(db.webhookDelivery.updateMany).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ status: "failed", attemptCount: 1, nextAttemptAt: expect.any(Date) }) }));
+    expect(db.webhookSubscription.update).toHaveBeenCalledWith(expect.objectContaining({ data: { failureCount: { increment: 1 } } }));
+  });
   it("does not take a live lease or resend a delivered row", async () => {
     db.webhookDelivery.updateMany.mockResolvedValueOnce({ count: 0 });
     await processDelivery("delivery-a");
     expect(db.webhookDelivery.findUnique).not.toHaveBeenCalled();
     expect(mocks.request).not.toHaveBeenCalled();
-    expect(db.webhookDelivery.updateMany).toHaveBeenCalledWith(expect.objectContaining({ where: expect.objectContaining({ status: "pending", OR: expect.any(Array) }) }));
+    expect(db.webhookDelivery.updateMany).toHaveBeenCalledWith(expect.objectContaining({ where: expect.objectContaining({ status: { in: ["pending", "failed"] }, OR: expect.any(Array) }) }));
   });
   it("does not send events outside the subscription filter (#512)", async () => {
     const filtered = delivery();
