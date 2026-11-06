@@ -91,6 +91,7 @@ function work(overrides: Partial<ProjectWork> = {}): ProjectWork {
     toAwaitRelease: [],
     toRepair: [],
     toReportPr: [],
+    toRevalidate: [],
     prGates: new Map(),
     toConfirm: [],
     ideaThreshold: 3,

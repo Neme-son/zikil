@@ -61,6 +61,8 @@ import { markAtCapacity } from "@/lib/agent-api/capacity";
 import { testVerdictEntries } from "@/lib/agent-api/test-verdict";
 import { deliveryEntries } from "@/lib/agent-api/delivery";
 import { mergeReviewEntries } from "@/lib/agent-api/merge";
+import { revalidationForIssue } from "@/lib/agent-api/revalidation";
+import { shortSha } from "@/lib/revalidation";
 import { DeliveriesPanel, MergeReviewsPanel, TestVerdictsPanel, type DeliveryView, type MergeReviewView, type TestVerdictView } from "@/components/issue-review-entries";
 import { Badge } from "@/components/ui/badge";
 import { VoteButton } from "@/components/vote-button";
@@ -926,6 +928,11 @@ export default async function BugDetailPage({ params, searchParams }: BugPagePro
   const stale = bug.isDeleted ? null : (await loadOptional("stale hold", null, () => staleHold(bug.id)))?.kind ?? null;
   const abandonCheck = bug.isDeleted || bug.status !== "in_progress" ? null : await loadOptional("sense check", null, () => senseCheck(bug.id));
   const closeSuggestions = await loadOptional<CloseSuggestionsData | null>("close suggestions", null, () => closeSuggestionsFor(bug.id));
+  // #revalidation: the repro profile this issue records, and the re-checks a
+  // reported code change asked for since. Advisory: it never moves the status.
+  const revalidation = bug.isDeleted
+    ? null
+    : await loadOptional("revalidation", null, () => revalidationForIssue(bug.id));
   // The judgements as the Delivered rule counts them (independent, weighted, on
   // the delivered pull request), so the bar says what will actually move it.
   const judgementCount = bug.status === "done" && !bug.isDeleted
@@ -1130,6 +1137,77 @@ export default async function BugDetailPage({ params, searchParams }: BugPagePro
             <p className="mt-1 text-xs text-zk-muted">
               And {bug._count.duplicates - bug.duplicates.length} more.
             </p>
+          ) : null}
+        </section>
+      ) : null}
+
+      {revalidation && (revalidation.repro || revalidation.waiting.length || revalidation.revalidated.length) ? (
+        <section aria-label="Revalidation" className="rounded-[20px] border border-zk-border bg-zk-surface p-4 sm:p-5">
+          <h2 className="text-sm font-semibold text-zk-text">Revalidation</h2>
+          <p className="mt-1 text-xs text-zk-muted">
+            Where this issue reproduces, so a later code change in that area asks an agent to re-check it rather than letting the report go stale.
+            A re-check never closes the issue: a person decides.
+          </p>
+          {revalidation.repro ? (
+            <div className="mt-3 rounded-[16px] border border-zk-border bg-zk-chip/40 p-3 text-sm">
+              <p className="text-xs text-zk-muted">
+                Repro profile recorded by {revalidation.repro.recordedBy.agentName} for {revalidation.repro.recordedBy.name}
+                {revalidation.repro.commitSha ? ` on commit ${shortSha(revalidation.repro.commitSha)}` : ""}
+              </p>
+              <div className="mt-2 flex flex-wrap gap-1">
+                {revalidation.repro.affectedPaths.map((path) => (
+                  <code key={path} className="rounded-full bg-zk-surface px-2 py-0.5 text-xs text-zk-text2">{path}</code>
+                ))}
+                {revalidation.repro.affectedEndpoints.map((endpoint) => (
+                  <code key={endpoint} className="rounded-full bg-zk-surface px-2 py-0.5 text-xs text-zk-text2">{endpoint}</code>
+                ))}
+              </div>
+              <dl className="mt-2 grid gap-1 text-sm text-zk-text2">
+                <div><dt className="text-xs font-semibold text-zk-muted">Steps</dt><dd className="whitespace-pre-wrap break-words">{revalidation.repro.steps}</dd></div>
+                <div><dt className="text-xs font-semibold text-zk-muted">Expected</dt><dd className="whitespace-pre-wrap break-words">{revalidation.repro.expected}</dd></div>
+                <div><dt className="text-xs font-semibold text-zk-muted">Actual</dt><dd className="whitespace-pre-wrap break-words">{revalidation.repro.actual}</dd></div>
+              </dl>
+            </div>
+          ) : (
+            <p className="mt-3 text-sm text-zk-muted">No repro profile yet: no code change can be matched to this issue until an agent records where it lives.</p>
+          )}
+          {revalidation.waiting.length ? (
+            <div className="mt-3 space-y-2">
+              <h3 className="text-xs font-semibold uppercase tracking-wide text-zk-muted">Waiting for a re-check</h3>
+              {revalidation.waiting.map((row) => (
+                <div key={row.id} className="rounded-[16px] border border-zk-warn-bd bg-zk-warn-bg p-3 text-sm text-zk-warn-fg">
+                  <p className="font-semibold">
+                    {row.triggerLabel}
+                    {row.commitSha ? ` · ${shortSha(row.commitSha)}` : ""}
+                    {row.pullRequestUrl ? ` · ${row.pullRequestUrl}` : ""}
+                  </p>
+                  <p className="mt-1 text-xs">
+                    Touched {row.matchedPaths.map((path) => `\`${path}\``).join(", ")}, asked by {row.askedBy.agentName} for {row.askedBy.name} on <LocalTime date={row.askedAt} />.
+                  </p>
+                </div>
+              ))}
+            </div>
+          ) : null}
+          {revalidation.revalidated.length ? (
+            <div className="mt-3 space-y-2">
+              <h3 className="text-xs font-semibold uppercase tracking-wide text-zk-muted">Re-checks</h3>
+              {revalidation.revalidated.map((row) => (
+                <div key={row.id} className="text-sm">
+                  <p className="font-semibold text-zk-text">
+                    {row.verdictLabel}
+                    {row.commitSha ? ` · ${shortSha(row.commitSha)}` : ""}
+                    <span className="ml-2 text-xs font-normal text-zk-muted">
+                      {row.verdictBy ? `${row.verdictBy.agentName} for ${row.verdictBy.name}` : "An agent"}
+                      {row.verdictAt ? <> on <LocalTime date={row.verdictAt} /></> : null}
+                    </span>
+                  </p>
+                  {row.summary ? <p className="text-zk-text2">{row.summary}</p> : null}
+                  {row.matchedPaths.length ? (
+                    <p className="text-xs text-zk-muted">Matched {row.matchedPaths.map((path) => `\`${path}\``).join(", ")}</p>
+                  ) : null}
+                </div>
+              ))}
+            </div>
           ) : null}
         </section>
       ) : null}

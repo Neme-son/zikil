@@ -27,6 +27,8 @@ import { findStrandedDeliveries, type StrandedIssue } from "@/lib/agent-api/stra
 import { prGate, reportWanted, type PrGate } from "@/lib/agent-api/pr-gate";
 import { gateReport, latestPullRequestReports, type StoredPullRequestReport } from "@/lib/agent-api/pull-request-report";
 import { parseGitHubRepoUrl } from "@/lib/github/pull-request-url";
+import { shortSha, REVALIDATION_TRIGGER_LABELS, REVALIDATION_VERDICT_LABELS } from "@/lib/revalidation";
+import { waitingRevalidations, type WaitingRevalidation } from "@/lib/agent-api/revalidation";
 
 /** Why a hold is stale, in the work item's words (#reclaim). */
 const RECLAIM_WHY: Record<StaleHold["kind"], string> = {
@@ -99,7 +101,8 @@ export type WorkKind =
   | "reconcile_merged"
   | "await_release"
   | "repair_pull_request"
-  | "report_pr_status";
+  | "report_pr_status"
+  | "revalidate_issue";
 
 export type WorkAction = {
   name: string;
@@ -282,6 +285,8 @@ export type ProjectWork = {
   toRepair: (PrIssue & { linkState: "old_repository" | "other_repository" })[];
   /** Pull requests an independent agent should check on GitHub and report: none yet, out of date, or old (#pr-reports). */
   toReportPr: (PrIssue & { why: string })[];
+  /** Issues a reported code change touched, waiting for an agent to say whether they still reproduce (#revalidation). */
+  toRevalidate: WaitingRevalidation[];
   /** What the gate makes of each linked pull request In progress or later, by issue id. */
   prGates: Map<string, PrGate>;
   jobs: { id: string; brief: string; pointsPerAccepted: number; open: number }[];
@@ -398,6 +403,8 @@ async function buildProjectWork(tenantId: string, project: FeedProject): Promise
   ]);
   const toAward = await awardableIssues(bids, workflow.offerWindowSeconds);
   const { toReconcile, toAwaitRelease, toRepair, toReportPr, prGates } = await pullRequestWork(tenantId, project.id);
+  // #revalidation: changes an agent reported that touch an issue's own files or endpoints.
+  const toRevalidate = await waitingRevalidations(project.id);
   const { toInvestigate, comments } = await openIssueComments(tenantId, project.id, ready);
   const ids = new Set([
     ...toConfirm.map((i) => i.id),
@@ -409,6 +416,7 @@ async function buildProjectWork(tenantId: string, project: FeedProject): Promise
     ...toAwaitRelease.map((t) => t.id),
     ...toRepair.map((t) => t.id),
     ...toReportPr.map((t) => t.id),
+    ...toRevalidate.map((r) => r.bug.id),
     ...toReviewIdle.map((t) => t.id),
   ]);
   return {
@@ -426,6 +434,7 @@ async function buildProjectWork(tenantId: string, project: FeedProject): Promise
     toAwaitRelease,
     toRepair,
     toReportPr,
+    toRevalidate,
     prGates,
     toConfirm,
     ideaThreshold: workflow.ideaThreshold,
@@ -1229,6 +1238,29 @@ export function itemsFor(agent: AgentContext, work: ProjectWork, mine: AgentWork
       ],
     });
   }
+  // Issues a reported code change just touched (#revalidation): the report says
+  // it lives in these files or endpoints, so an independent agent re-checks it
+  // before it goes stale. The agent that reported the change can't answer it.
+  for (const pending of work.toRevalidate ?? []) {
+    if (!independent(pending.bug.id)) continue;
+    if (pending.reportedByAgentId === agent.agentId) continue;
+    const where = pending.matchedPaths.length ? pending.matchedPaths.map((path) => `\`${path}\``).join(", ") : "its area";
+    const change = pending.commitSha ? `commit ${shortSha(pending.commitSha)}` : pending.pullRequestUrl ?? "a code change";
+    const asked = pending.askedAt.toISOString();
+    items.push({
+      kind: "revalidate_issue",
+      key: `revalidate_issue:${pending.id}`,
+      title: `Re-check #${pending.bug.number}: ${change} touched ${where}`,
+      detail: `The ${REVALIDATION_TRIGGER_LABELS[pending.trigger].toLowerCase()} ${change} changed ${where}, which is where #${pending.bug.number} reproduces. Follow the issue's repro profile (${pending.bug.title}) on the code today and say what you saw: ${REVALIDATION_VERDICT_LABELS.still_reproducible.toLowerCase()} if it happens, ${REVALIDATION_VERDICT_LABELS.possibly_fixed.toLowerCase()} the change looks like it addressed it, ${REVALIDATION_VERDICT_LABELS.no_longer_reproducible.toLowerCase()} the steps no longer reproduce anything, ${REVALIDATION_VERDICT_LABELS.feature_removed.toLowerCase()} the feature is gone. Asked ${asked}. The answer is advisory: it never moves the issue's status, and a person closes it.`,
+      minimumRole: "working",
+      canAct: true,
+      issue: issueRef(pending.bug),
+      actions: [
+        { name: "revalidate_issue", minimumRole: "working", method: "POST", path: apiPath(pending.bug.id, "revalidation", pid), cli: `revalidate-issue --id ${pending.bug.id} --verdict still_reproducible|possibly_fixed|no_longer_reproducible|feature_removed --summary <what you saw> --description <how you checked>` },
+        { name: "get_issue", minimumRole: "working", method: "GET", path: apiPath(pending.bug.id, "", pid), cli: `issue --id ${pending.bug.id}` },
+      ],
+    });
+  }
   // Issues to bid on: not those this owner already bid on, and the ones with
   // the fewest bids first, then the most important, then the oldest (no cap).
   const bidsByIssue = new Map<string, OpenBid[]>();
@@ -1799,6 +1831,8 @@ export async function workFeed(agent: AgentContext, project: FeedProject, now = 
   }
   const toReport = counts.report_pr_status ?? 0;
   if (toReport) ask.push(`${toReport} pull request${toReport === 1 ? " needs" : "s need"} checking on GitHub. Ziki never asks GitHub itself: open each, then report its state (open, closed, merged and where, or not found), its head commit, its checks and whether it can merge.`);
+  const toRevalidate = counts.revalidate_issue ?? 0;
+  if (toRevalidate) ask.push(`${toRevalidate} issue${toRevalidate === 1 ? " was" : "s were"} touched by a code change agents reported (revalidate_issue). Follow each repro profile on today's code and say whether it still reproduces, looks fixed, no longer reproduces or describes a feature that is gone. The answer is advisory: it never moves the issue's status.`);
   const toUpvote = counts.review_comment ?? 0;
   if (toUpvote) ask.push(`${toUpvote} comment${toUpvote === 1 ? "" : "s"} on Open issues ${toUpvote === 1 ? "is" : "are"} waiting for your read. Upvote the ones that would help the implementer.`);
   const thresholdOnly = work.governance.thresholdOnly;

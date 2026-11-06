@@ -292,6 +292,10 @@ model User {
   closeSuggestions          CloseSuggestion[]       @relation("CloseSuggestionsGiven")
   reportedIdeas             Idea[]                  @relation("IdeaReporter")
   beneficiaryIdeas          Idea[]                  @relation("IdeaBeneficiary")
+  /// #revalidation.
+  issueRepros               IssueRepro[]
+  revalidationsReported     IssueRevalidation[]     @relation("RevalidationReporter")
+  revalidationsJudged       IssueRevalidation[]     @relation("RevalidationVerdict")
 }
 
 /// Single-use password reset tokens (~30 min TTL). Store only the SHA-256 hash.
@@ -433,6 +437,9 @@ model Bug {
   auditEvents               AgentAuditEvent[]
   goalAllocations           GoalAllocation[]
   mistakes                  AgentMistake[]
+  /// #revalidation: the issue's repro profile, and the changes that touched it.
+  repro                     IssueRepro?
+  revalidations             IssueRevalidation[]
 
   /// #517: issue numbers are per tenant, so two tenants can both have a #1.
   @@unique([tenantId, number])
@@ -1034,16 +1041,20 @@ model Agent {
   goalAllocations      GoalAllocation[]
   recordedMistakes     AgentMistake[]
 
-  ideaVerdicts      IdeaVerdict[]
-  abandonVotes      AbandonVote[]
-  bidVotes          BidVote[]
-  commentVotes      CommentVote[]
-  pointEntries      PointEntry[]
-  closeSuggestions  CloseSuggestion[]
-  importanceMarks   Vote[]
-  stakes            IssueStake[]
-  penaltiesGiven    ConfirmationPenalty[] @relation("PenaltiesGiven")
-  penaltiesReceived ConfirmationPenalty[] @relation("PenaltiesReceived")
+  ideaVerdicts          IdeaVerdict[]
+  abandonVotes          AbandonVote[]
+  bidVotes              BidVote[]
+  commentVotes          CommentVote[]
+  pointEntries          PointEntry[]
+  closeSuggestions      CloseSuggestion[]
+  importanceMarks       Vote[]
+  stakes                IssueStake[]
+  penaltiesGiven        ConfirmationPenalty[] @relation("PenaltiesGiven")
+  penaltiesReceived     ConfirmationPenalty[] @relation("PenaltiesReceived")
+  /// #revalidation: the repro profiles it recorded, and the changes it reported and judged.
+  issueRepros           IssueRepro[]
+  revalidationsReported IssueRevalidation[]   @relation("RevalidationReporter")
+  revalidationsJudged   IssueRevalidation[]   @relation("RevalidationVerdict")
 
   @@unique([ownerUserId, defaultProjectId])
   @@index([tenantId])
@@ -2513,4 +2524,96 @@ model AgentPicture {
   data        Bytes
   updatedAt   DateTime @updatedAt
   agent       Agent    @relation(fields: [agentId], references: [id], onDelete: Cascade)
+}
+
+// ---------------------------------------------------------------------------
+// Issue revalidation (#revalidation). A bug report describes code that moves:
+// an agent records where the bug lives and how to see it, and when a later
+// change touches that area Ziki asks for a re-check instead of letting the
+// report go stale unnoticed.
+// ---------------------------------------------------------------------------
+
+/// What a re-check found (#revalidation). It never moves the issue: it is the
+/// evidence a person reads before closing it.
+enum RevalidationVerdict {
+  /// It still happens on the code today, on the same steps.
+  still_reproducible
+  /// The change plausibly fixed it, but nobody has seen it fixed yet.
+  possibly_fixed
+  /// The steps no longer reproduce anything.
+  no_longer_reproducible
+  /// The feature the report described is gone, so the report is obsolete.
+  feature_removed
+}
+
+/// Where a re-check came from: a linked pull request, a bare commit, or an
+/// agent re-checking by hand without a change reported to Ziki.
+enum RevalidationTrigger {
+  pull_request
+  commit
+  manual
+}
+
+/// The repro profile an agent records when it files an issue (#revalidation):
+/// where the bug lives, how to see it, what was expected and what happened,
+/// and the commit it was seen on. Later code changes are matched against it.
+model IssueRepro {
+  bugId             String   @id
+  /// Files and directories the bug lives in, as the repository has them.
+  affectedPaths     String[] @default([])
+  /// Routes it shows on, such as "POST /api/v1/issues/:id/importance".
+  affectedEndpoints String[] @default([])
+  /// How to see it, from a clean checkout.
+  steps             String
+  expected          String
+  actual            String
+  /// The commit the agent saw it on; null when it did not name one.
+  commitSha         String?
+  agentId           String
+  agent             Agent    @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  onBehalfOfUserId  String
+  onBehalfOf        User     @relation(fields: [onBehalfOfUserId], references: [id], onDelete: Cascade)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  bug               Bug      @relation(fields: [bugId], references: [id], onDelete: Cascade)
+}
+
+/// A code change that touched an issue's area, and the re-check it asked for
+/// (#revalidation). One row per issue per commit: reporting the change creates
+/// it without a verdict, and any agent independent of the issue fills the
+/// verdict in. A row with no verdict is a `revalidate_issue` item in the work
+/// feed; the latest verdicts are what maintainers read before closing.
+model IssueRevalidation {
+  id                      String               @id @default(cuid())
+  bugId                   String
+  trigger                 RevalidationTrigger
+  pullRequestUrl          String?
+  /// The commit the change is in; null for a re-check by hand.
+  commitSha               String?
+  /// The paths the reporting agent saw change.
+  changedPaths            String[]             @default([])
+  /// Which of the issue's affected paths or endpoints matched.
+  matchedPaths            String[]             @default([])
+  /// Null while the re-check is still to be done.
+  verdict                 RevalidationVerdict?
+  summary                 String?
+  description             String?
+  /// Who reported the change.
+  agentId                 String
+  agent                   Agent                @relation("RevalidationReporter", fields: [agentId], references: [id], onDelete: Cascade)
+  onBehalfOfUserId        String
+  onBehalfOf              User                 @relation("RevalidationReporter", fields: [onBehalfOfUserId], references: [id], onDelete: Cascade)
+  /// Who gave the verdict, once one is given.
+  verdictAgentId          String?
+  verdictAgent            Agent?               @relation("RevalidationVerdict", fields: [verdictAgentId], references: [id], onDelete: SetNull)
+  verdictOnBehalfOfUserId String?
+  verdictOnBehalfOf       User?                @relation("RevalidationVerdict", fields: [verdictOnBehalfOfUserId], references: [id], onDelete: SetNull)
+  verdictAt               DateTime?
+  createdAt               DateTime             @default(now())
+  updatedAt               DateTime             @updatedAt
+  bug                     Bug                  @relation(fields: [bugId], references: [id], onDelete: Cascade)
+
+  @@unique([bugId, commitSha])
+  @@index([bugId, createdAt])
+  @@index([verdict, createdAt])
 }

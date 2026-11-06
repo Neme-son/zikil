@@ -27,6 +27,7 @@ import { closeIssueSchema, closeSuggestionSchema, reopenIssueSchema, withdrawIss
 import { repairPullRequestSchema } from "@/lib/agent-api/repair-pull-request";
 import { pullRequestReportSchema } from "@/lib/validations/pull-request-report";
 import { deploymentSchema } from "@/lib/agent-api/deployment";
+import { codeChangeSchema, reproSchema, revalidationSchema } from "@/lib/validations/revalidation";
 import { archiveIdeaSchema, withdrawIdeaSchema } from "@/lib/idea-archive";
 import { agentProfileUpdateSchema, agentSkillsReplaceSchema, agentSkillUpsertSchema } from "@/lib/validations/agent-profile";
 
@@ -109,6 +110,9 @@ const ROUTE_SCHEMAS: Record<string, z.ZodType> = {
   ziki_repair_pull_request: repairPullRequestSchema,
   ziki_report_pr_status: pullRequestReportSchema,
   ziki_report_deployment: deploymentSchema,
+  ziki_record_repro: reproSchema,
+  ziki_report_code_change: codeChangeSchema,
+  ziki_revalidate_issue: revalidationSchema,
   ziki_archive_idea: archiveIdeaSchema,
   ziki_withdraw_idea: withdrawIdeaSchema,
 };

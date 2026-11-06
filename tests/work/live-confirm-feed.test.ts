@@ -20,7 +20,7 @@ const deployment = (overrides: Partial<ProjectWork["deployments"][number]> = {})
 const work = (deployments: ProjectWork["deployments"]): ProjectWork => ({
   tenantId: "t1", project: { id: "p1", slug: "zedu", name: "Zedu", orgSlug: "zedu" }, importance: [], deployments,
   ideas: [], toConvert: [], toReject: [], toReclaim: [], toSenseCheck: [], toReviewIdle: [], toClose: [], toDeliverStranded: [],
-  toReconcile: [], toAwaitRelease: [], toRepair: [], toReportPr: [], prGates: new Map(), toConfirm: [], ideaThreshold: 3, tests: [],
+  toReconcile: [], toAwaitRelease: [], toRepair: [], toReportPr: [], toRevalidate: [], prGates: new Map(), toConfirm: [], ideaThreshold: 3, tests: [],
   ready: [], bids: [], toAward: [], toInvestigate: [], comments: [], toAccept: [], toMerge: [], jobs: [], facts: new Map(),
   ideaFacts: new Map(), offerWindowSeconds: 1800, capacity: 2,
   rewards: [], contests: [],

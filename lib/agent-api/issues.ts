@@ -28,6 +28,7 @@ import { notifyLater } from "@/lib/notify";
 import type { NotificationEvent } from "@/lib/notifications";
 import { logger } from "@/lib/logger";
 import { IssueApiError } from "@/lib/agent-api/errors";
+import { revalidationForIssue } from "@/lib/agent-api/revalidation";
 import { latestPullRequestReport, pullRequestStateView } from "@/lib/agent-api/pull-request-report";
 import { agentAttachmentUrl } from "@/lib/agent-api/attachment-read";
 import { entrySummary } from "@/lib/agent-api/entry-fields";
@@ -282,6 +283,8 @@ export async function readAgentIssue(scope: Scope, id: string) {
     holder: await currentHold(issue.id),
     // #pr-reports: the latest independent report on the linked pull request, with who filed it and its age, or null.
     pullRequestState: pullRequestStateView(await latestPullRequestReport(issue.id, issue.pullRequestUrl)),
+    // #revalidation: the repro profile, the re-checks still to do, and the verdicts given.
+    ...(await revalidationForIssue(issue.id)),
   };
 }
 
