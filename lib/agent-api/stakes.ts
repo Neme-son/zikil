@@ -132,7 +132,7 @@ async function heldNow(tx: Tx, bugId: string, offerWindowSeconds: number, now: n
   const claim = await tx.issueClaim.findFirst({
     where: {
       bugId, releasedAt: null,
-      OR: [{ status: "active" }, { status: "offered", offeredAt: { gt: new Date(now - offerWindowSeconds * 1000) } }],
+      OR: [{ status: "active" }, { status: "planning" }, { status: "offered", offeredAt: { gt: new Date(now - offerWindowSeconds * 1000) } }],
     },
     select: { id: true },
   });
@@ -149,7 +149,7 @@ async function lockBug(tx: Tx, scope: Scope, ref: string) {
   await tx.$queryRaw`SELECT "id" FROM "Bug" WHERE "id" = ${found.id} FOR UPDATE`;
   const bug = await tx.bug.findUniqueOrThrow({
     where: { id: found.id },
-    select: { id: true, number: true, title: true, organisationId: true, projectId: true, substatus: true, assigneeId: true, assignee: { select: { name: true } } },
+    select: { id: true, number: true, title: true, organisationId: true, projectId: true, substatus: true, difficulty: true, assigneeId: true, assignee: { select: { name: true } } },
   });
   return bug;
 }
@@ -170,6 +170,8 @@ export async function stakeIssue(agent: AgentContext, scope: Scope, ref: string,
     const workflow = await workflowFor(bug.projectId, tx);
     await settleLocked(tx, bug.id, now);
     if (!TAKEABLE.has(bug.substatus)) refuse(409, "not_stakeable", "Only an Open issue nobody holds can be staked.");
+    // #plan-review: a complex issue is won by a bid and an approved plan, never by a stake.
+    if (bug.difficulty === "complex") refuse(409, "not_stakeable", "A complex issue can't be staked: bid on it, and its award goes through plan review.", { reason: "complex" });
     if (await heldNow(tx, bug.id, workflow.offerWindowSeconds, now)) refuse(409, "issue_held", "This issue is already offered or held; it can't be staked.");
 
     const live = await tx.issueStake.findMany({ where: { bugId: bug.id, status: { in: ON_ISSUE } }, orderBy: { createdAt: "asc" }, select: stakeView });
@@ -292,6 +294,14 @@ export async function stakeIdea(agent: AgentContext, scope: Scope, ref: string, 
  * its waiting stakes move to the new issue. One starts its 10-minute window,
  * two start a contest; either way the first refresh is due 5 minutes from now.
  */
+/** #plan-review: an idea converted as a complex issue can't be staked, so its waiting stakes end (resolution `complex`). */
+export async function dropIdeaStakes(tx: Tx, ideaId: string, at: Date) {
+  const now = at.getTime();
+  await expireIdeaStakes(tx, ideaId, now);
+  const waiting = await tx.issueStake.findMany({ where: { ideaId, status: "waiting" }, select: { id: true } });
+  for (const stake of waiting) await endStake(tx, stake.id, "lost", "complex", at);
+}
+
 export async function moveIdeaStakesToIssue(tx: Tx, ideaId: string, bug: { id: string; number: number; organisationId: string; projectId: string }, at: Date) {
   const now = at.getTime();
   await expireIdeaStakes(tx, ideaId, now);

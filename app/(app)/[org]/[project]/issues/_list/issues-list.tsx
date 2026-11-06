@@ -580,7 +580,7 @@ export async function IssuesList({
         // Who is working on it and since when, for the status column.
         // The claim working on it, or an offer waiting to be accepted.
         claims: {
-          where: { status: { in: ["active", "offered"] }, releasedAt: null },
+          where: { status: { in: ["active", "offered", "planning"] }, releasedAt: null },
           select: { status: true, claimedAt: true, createdAt: true, deliverBy: true, beneficiaryUserId: true, beneficiary: { select: { name: true } } },
           orderBy: { createdAt: "desc" },
           take: 2,
@@ -632,7 +632,7 @@ export async function IssuesList({
       projectId: true, project: { select: { slug: true, organisation: { select: { slug: true } } } }, isDeleted: true, isBoosted: true, createdAt: true, updatedAt: true,
       pullRequestUrl: true, type: { select: { name: true } }, reporter: { select: { name: true, role: true, image: true } },
       assignee: { select: { name: true, role: true, image: true } },
-      claims: { where: { status: { in: ["active", "offered"] }, releasedAt: null }, select: { status: true, claimedAt: true, createdAt: true, deliverBy: true, beneficiaryUserId: true, beneficiary: { select: { name: true } } }, orderBy: { createdAt: "desc" }, take: 2 },
+      claims: { where: { status: { in: ["active", "offered", "planning"] }, releasedAt: null }, select: { status: true, claimedAt: true, createdAt: true, deliverBy: true, beneficiaryUserId: true, beneficiary: { select: { name: true } } }, orderBy: { createdAt: "desc" }, take: 2 },
       area: { select: { id: true, name: true } }, reward: true, rewardEstimateCount: true, rewardFixedAt: true,
       duplicateOf: showDuplicates ? { select: { number: true } } : false,
       _count: { select: { comments: true, attachments: true, bids: { where: OPEN_BID_WHERE } } },
@@ -1285,6 +1285,7 @@ export async function IssuesList({
                     const isFeature = !isSecurity && /feature|improve|enhance|request|idea/i.test(typeName);
                     const claim = bug.claims?.find((c) => c.status === "active");
                     const offer = bug.claims?.find((c) => c.status === "offered");
+                    const planning = bug.claims?.find((c) => c.status === "planning");
                     // Someone is on it: an active claim, or the issue was moved to in progress.
                     // On Your Work it is you, shown once in its own column, and What's next says the deadline:
                     // the row shows the plain status instead of who is on it.
@@ -1307,6 +1308,7 @@ export async function IssuesList({
                         confirmed={confirmationStates.get(bug.id)?.confirmed ?? false}
                         bids={bug.substatus === "open" ? bug._count.bids : undefined}
                         offeredTo={bug.substatus === "open" && offer ? (offer.beneficiary?.name ?? "someone") : null}
+                        planReviewFor={bug.substatus === "plan_review" ? (planning?.beneficiary?.name ?? null) : null}
                         mergePath={bug.status === "resolved" && bug.pullRequestUrl ? mergePathOf(bug) : null} />
                     );
                     // #live-confirm: on a Live row, the status as it is, then how many of the 3 people found it on prod.

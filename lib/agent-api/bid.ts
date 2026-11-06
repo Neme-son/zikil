@@ -17,6 +17,9 @@ import { OPEN_BID_WHERE } from "@/lib/open-bids";
 import { weightedTally, type ThresholdDecision } from "@/lib/governance";
 import { assertUnderCapacity } from "@/lib/agent-api/capacity";
 import { hasLiveStake, settleLocked } from "@/lib/agent-api/stakes";
+import { needsPlanReview } from "@/lib/difficulty";
+import { moveTo } from "@/lib/issue-substatus";
+import { statusChangedSummary } from "@/lib/activity-log";
 
 /**
  * Bids (#issue-bids). Under Open an issue's entries are bids: one per agent,
@@ -74,6 +77,8 @@ async function competingClaim(tx: Tx, bugId: string) {
   const { offerWindowSeconds } = await workflowFor(current.bug.projectId, tx);
   if (current.status === "offered" && isOfferExpired(current.offeredAt, Date.now(), offerWindowSeconds * 1000)) return { expired: current };
   if (current.status === "offered") throw new IssueApiError(409, "This issue has a pending offer.");
+  // #plan-review: a planning claim holds the issue until its plan sweeper releases it.
+  if (current.status === "planning") throw new IssueApiError(409, "This issue is awarded and its plan is under review.");
   if (current.status === "active") throw new IssueApiError(409, "This issue is already being worked.");
   return null;
 }
@@ -372,7 +377,17 @@ export async function awardBid(agent: AgentContext, bidId: string) {
   }
 }
 
-export type AwardResult = { bidId: string; claimId: string; bugId: string; bugTitle: string; beneficiaryUserId: string };
+export type AwardResult = {
+  bidId: string;
+  claimId: string;
+  bugId: string;
+  bugTitle: string;
+  beneficiaryUserId: string;
+  /** #plan-review: a complex issue's award opens plan review (`planning`) instead of an offer (`offered`). */
+  status: "offered" | "planning";
+  /** When plan review runs out, on a planning award. */
+  planBy?: string;
+};
 
 /**
  * Awards an open bid as an offer, in the caller's transaction, with its issue
@@ -395,7 +410,7 @@ export async function awardInTransaction(
     include: {
       beneficiary: { select: { name: true } },
       agent: { select: { pausedAt: true } },
-      bug: { select: { id: true, title: true, substatus: true, assigneeId: true, organisationId: true, projectId: true, reporterId: true, voteCount: true, assignee: { select: { name: true } } } },
+      bug: { select: { id: true, title: true, substatus: true, difficulty: true, assigneeId: true, organisationId: true, projectId: true, reporterId: true, voteCount: true, assignee: { select: { name: true } } } },
     },
   });
   if (!fresh || fresh.withdrawnAt || fresh.awardedAt) throw new IssueApiError(409, "This bid is no longer open.");
@@ -449,17 +464,21 @@ export async function awardInTransaction(
     });
   }
 
+  // #plan-review: on a complex issue the award opens plan review instead of
+  // an offer. The claim is held (`planning`), the issue moves to In progress ·
+  // Plan review, and the agent writes its plan for its owner to approve.
+  const planning = needsPlanReview(fresh.bug.difficulty);
+  const { offerWindowSeconds, planReviewSeconds } = workflow;
   // The award is an offer: the agent accepts it (POST /api/v1/offers/{id}/accept)
   // before it has the task. Until then the issue stays Open, the other bids
   // stay open, and no second award or offer is possible (competingClaim).
-  const { offerWindowSeconds } = workflow;
   const claim = await tx.issueClaim.create({
     data: {
       bugId: fresh.bugId,
       beneficiaryUserId: fresh.beneficiaryUserId,
       agentId: fresh.agentId,
       // Picking a bid is not dispatching: whoever awarded it stays independent to review the fix.
-      status: "offered",
+      status: planning ? "planning" : "offered",
       offeredAt: now,
     },
   });
@@ -468,6 +487,23 @@ export async function awardInTransaction(
     data: { awardedAt: now, claimId: claim.id },
   });
   if (marked.count !== 1) throw new IssueApiError(409, "This bid is no longer open.");
+  if (planning) {
+    const planBy = new Date(now.getTime() + planReviewSeconds * 1000);
+    await tx.bug.update({ where: { id: fresh.bugId }, data: moveTo("plan_review") });
+    await tx.bugActivity.create({ data: { bugId: fresh.bugId, actorId: by.userId, type: "status_changed", summary: statusChangedSummary(fresh.bug.substatus, "plan_review"), metadata: { field: "status", from: fresh.bug.substatus, to: "plan_review", via: "award", claimId: claim.id } } });
+    await publish(tx, {
+      organisationId: fresh.bug.organisationId,
+      type: "issue.bid_awarded",
+      actorAgentId: fresh.agentId,
+      bugId: fresh.bugId,
+      payload: {
+        bidId: fresh.id, claimId: claim.id, issueId: fresh.bugId, projectId: fresh.bug.projectId, beneficiaryUserId: fresh.beneficiaryUserId,
+        awardedByAgentId: by.agentId, offered: false, planning: true, planBy: planBy.toISOString(),
+        ...(decision ?? {}),
+      },
+    });
+    return { bidId: fresh.id, claimId: claim.id, bugId: fresh.bugId, bugTitle: fresh.bug.title, beneficiaryUserId: fresh.beneficiaryUserId, status: "planning", planBy: planBy.toISOString() };
+  }
   await publish(tx, {
     organisationId: fresh.bug.organisationId,
     type: "claim.offered",
@@ -493,11 +529,12 @@ export async function awardInTransaction(
       ...(decision ?? {}),
     },
   });
-  return { bidId: fresh.id, claimId: claim.id, bugId: fresh.bugId, bugTitle: fresh.bug.title, beneficiaryUserId: fresh.beneficiaryUserId };
+  return { bidId: fresh.id, claimId: claim.id, bugId: fresh.bugId, bugTitle: fresh.bug.title, beneficiaryUserId: fresh.beneficiaryUserId, status: "offered" };
 }
 
-/** After an award commits: tell the agent's owner, and lapse the offer if nobody accepts it in time. */
+/** After an award commits: tell the agent's owner, and lapse the offer if nobody accepts it in time. A planning award (#plan-review) is swept by the plan window sweeper instead. */
 export function afterAward(result: AwardResult): void {
+  if (result.status === "planning") return;
   notifyClaimOffered({ id: result.claimId, bugId: result.bugId, bugTitle: result.bugTitle, beneficiaryUserId: result.beneficiaryUserId });
   scheduleOfferExpiry(result.claimId);
 }
