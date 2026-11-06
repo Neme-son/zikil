@@ -81,7 +81,7 @@ export async function selectOrganisationAction(formData: FormData): Promise<void
   await enterOrganisation(organisation.id);
 }
 
-/** Create a organisation owned by the person and enter it, on its Projects page to create the first project. */
+/** Create an organisation owned by the person, with its Web project, and enter it. */
 export async function createOrganisationAction(
   _previous: OrganisationFormResult | undefined,
   formData: FormData,
