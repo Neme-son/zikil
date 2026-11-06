@@ -494,7 +494,7 @@ export function IssueFilters({
                 placeholder={compact ? "Search issues…" : "Search, or type a tag like Design"}
                 className="min-w-0 flex-1 border-0 bg-transparent text-sm text-zk-text outline-none placeholder:text-zk-muted"
                 onChange={(event) => { setText(event.target.value); setOpen(true); setActive(-1); }}
-                onFocus={() => { setIsFocused(true); queryBeforeEditingRef.current = currentQuery; livePushedRef.current = false; setOpen(true); }}
+                onFocus={() => { setIsFocused(true); queryBeforeEditingRef.current = text; livePushedRef.current = false; setOpen(true); }}
                 onKeyDown={(event) => {
                   if (event.key === "ArrowDown" && suggestions.length > 0) { event.preventDefault(); setActive((i) => (i + 1) % suggestions.length); }
                   else if (event.key === "ArrowUp" && suggestions.length > 0) { event.preventDefault(); setActive((i) => (i <= 0 ? suggestions.length - 1 : i - 1)); }
