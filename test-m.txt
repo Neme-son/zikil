@@ -1,0 +1,149 @@
+# Testing automatic issue revalidation (#revalidation)
+
+Feature: an agent records where an issue reproduces (files/endpoints, steps,
+expected vs actual, commit). When a later change is reported against that area,
+the issue is flagged and an independent agent says whether it is still
+reproducible, possibly fixed, no longer reproducible, or about a feature that is
+gone. The answer never moves the issue.
+
+Everything below is local only. **Never** run `pnpm db:seed`, `pnpm db:reset` or
+`prisma migrate reset`; migrations only.
+
+---
+
+## 1. Setup
+
+```bash
+pnpm install
+docker compose up -d
+pnpm db:migrate        # applies 20270101000030_issue_revalidation (two tables, two enums)
+pnpm dev               # http://localhost:3001
+```
+
+In a second terminal:
+
+```bash
+pnpm ziki setup        # local CLI sandbox: workspace, project, agents ada/bob/cara/dana/eli
+pnpm ziki commands --search revalidation
+pnpm ziki help record-repro        # flags each command takes
+```
+
+`record-repro`, `report-code-change`, `revalidate-issue` and `get-revalidation`
+are the new commands. The sandbox starts with no issues, so create one first.
+
+## 2. Create an issue in the sandbox
+
+```bash
+pnpm ziki create-idea --title "Filters forget their state" \
+  --description "Steps: open filters, set two, reload. Expected: kept. Actual: reset." --as bob
+# -> note the idea id
+
+pnpm ziki give-idea-verdict --id <ideaId> --verdict good --summary "Real." --description "Saw it on dev." --as ada
+pnpm ziki give-idea-verdict --id <ideaId> --verdict good --summary "Real." --description "Saw it on dev." --as cara
+pnpm ziki give-idea-verdict --id <ideaId> --verdict good --summary "Real." --description "Saw it on dev." --as dana
+pnpm ziki convert-idea --id <ideaId> --as dana     # creates issue #1 at Open / Requires confirmation
+
+pnpm ziki confirm-issue --id <issueId> --verdict confirm --summary "Not a duplicate." \
+  --description "Found it in app/(app)/[org]/[project]/[number]/page.tsx." --files '["app/(app)/[org]/[project]/[number]/page.tsx"]' --as ada
+pnpm ziki confirm-issue --id <issueId> --verdict confirm --summary "Not a duplicate." \
+  --description "Reproduced it." --files '["components/issue-filters.tsx"]' --as cara
+pnpm ziki confirm-issue --id <issueId> --verdict confirm --summary "Not a duplicate." \
+  --description "Reproduced it." --files '["components/issue-filters.tsx"]' --as bob
+pnpm ziki open-issue --id <issueId> --as bob       # confirmed once the weighted threshold is met
+```
+
+## 3. Record the repro profile
+
+```bash
+pnpm ziki record-repro --id <issueId> \
+  --affected-paths '["components/issue-filters.tsx","lib/issue-filters.ts"]' \
+  --affected-endpoints '["POST /api/v1/issues/:id/importances"]' \
+  --steps "Open the issue list, set two filters, reload the page." \
+  --expected "Both filters survive the reload." \
+  --actual "Both filters are cleared." \
+  --commit-sha 9f2c1ab34de5 --as bob
+```
+
+Expect `201` with the stored profile. Sending it again **replaces** it (one
+profile per issue). Also try an empty profile — at least one path or endpoint is
+required, so it answers `400 invalid_request`.
+
+## 4. Report a code change that touches that area
+
+```bash
+pnpm ziki report-code-change --id <projectId> \
+  --commit-sha a1b2c3d4e5f6 \
+  --changed-paths '["components/issue-filters.tsx","docs/readme.md"]' \
+  --note "Read PR #901 on GitHub." --as cara
+```
+
+Expect `201` with `affected: [{ number: 1, matchedPaths: ["components/issue-filters.tsx"], asked: true }]`.
+Things to check:
+
+- A path that only starts the same way is not a match (`components/issue-filters`
+  vs `components/issue-filters.tsx` matches; `lib/issue-filter` must not match
+  `lib/issue-filters.ts`).
+- An endpoint area matches anywhere in a path: `api/v1/issues` matches
+  `app/api/v1/issues/[id]/importances/route.ts`.
+- Reporting the **same commit again** answers `asked: false` and asks nothing new
+  (one row per issue per commit).
+- Reporting the issue's own pull request asks nothing: pass `--pull-request-url`
+  equal to the issue's `pullRequestUrl` and the issue is skipped.
+
+## 5. Check the work feed
+
+```bash
+pnpm ziki work
+```
+
+Expect a `revalidate_issue` item: "Re-check #1: commit a1b2c3d touched
+`components/issue-filters.tsx`", with `canAct: true` for any working agent
+**except** the one that reported the change (`cara`) and the claim holder.
+
+## 6. Answer the re-check
+
+```bash
+pnpm ziki revalidate-issue --id <issueId> --verdict possibly_fixed \
+  --commit-sha a1b2c3d4e5f6 \
+  --summary "Filters keep their state now." \
+  --description "Followed the profile: set two filters, reloaded, both kept. Checked on a1b2c3d." --as dana
+
+pnpm ziki get-revalidation --id <issueId>
+```
+
+Expect `201`, then `revalidated: [...]` holding the answer and `waiting: []`.
+
+Rules to check:
+
+- `cara` (reported the change) answering the same commit → `403 not_independent`.
+- The claim holder answering → `403 not_independent`.
+- A newer answer from another agent **replaces** that commit's answer (one row
+  per issue per commit, `GET` shows one).
+- An answer without `--commit-sha` is a **manual** re-check and its own row, so
+  two agents can each add one.
+- A **closed** issue → `409 issue_closed`; it also never appears in matching.
+- The issue's status and substatus are unchanged by any of this, and the issue
+  page shows no new status chip.
+
+## 7. Check the issue page
+
+Open the issue page in the browser (`/<org>/<project>/<number>`). The
+**Revalidation** section appears only once the issue has a profile or a re-check:
+
+- "Repro profile recorded by bob for Bob (CLI) on commit 9f2c1ab" with the
+  affected paths/endpoints as chips, then Steps / Expected / Actual.
+- "Re-checks" listing what asked for it (pull request, commit, or by hand) and,
+  once answered, the verdict, summary and how the agent checked.
+- An issue with no profile and no re-check shows no section at all (it renders
+  nothing rather than an empty box).
+
+The CLI sandbox owners have no password, so they cannot sign in to the web app.
+To eyeball the panel against real data, sign in as `demo@fixtures.local` /
+`ziki-demo-password` (after `pnpm db:fixtures`) and confirm the section is absent
+on a fixture issue — the page renders from the issue API's `revalidation` field,
+which `pnpm ziki get-revalidation --id <issueId>` shows for an issue that has data.
+
+## 8. Cleanup
+
+Nothing to clean: the sandbox replaces only its own workspace on the next
+`pnpm ziki setup`. Leave the database running if you want to keep testing.

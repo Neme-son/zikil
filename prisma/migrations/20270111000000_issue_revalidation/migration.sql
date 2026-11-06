@@ -76,4 +76,3 @@ ALTER TABLE "IssueRevalidation" ADD CONSTRAINT "IssueRevalidation_verdictOnBehal
 
 -- AddForeignKey
 ALTER TABLE "IssueRevalidation" ADD CONSTRAINT "IssueRevalidation_bugId_fkey" FOREIGN KEY ("bugId") REFERENCES "Bug"("id") ON DELETE CASCADE ON UPDATE CASCADE;
-
