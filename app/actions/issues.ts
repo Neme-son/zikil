@@ -1250,7 +1250,7 @@ export async function editPullRequestUrlAction(
       project: { select: { repoUrl: true } },
       claims: {
         where: { releasedAt: null, status: { in: ["active", "offered"] } },
-        select: { beneficiaryUserId: true, agent: { select: { ownerUserId: true } } },
+        select: { status: true, beneficiaryUserId: true, agent: { select: { ownerUserId: true } } },
       },
       deliveries: {
         select: { beneficiaryUserId: true, pullRequestUrl: true, agent: { select: { ownerUserId: true } } },
@@ -1266,16 +1266,34 @@ export async function editPullRequestUrlAction(
     return { error: "A resolved or closed issue's pull request link can't be replaced." };
   }
 
-  const isClaimHolder = existing.claims.some(
+  const activeClaim = existing.claims.find(
+    (c) => c.status === "active" || c.status === "offered",
+  );
+  const holdsActiveClaim = existing.claims.some(
     (c) => c.beneficiaryUserId === userId || c.agent.ownerUserId === userId,
   );
-  const isDeliverer = existing.deliveries.some(
-    (d) => d.beneficiaryUserId === userId || d.agent.ownerUserId === userId,
+  const currentDelivery = existing.pullRequestUrl
+    ? existing.deliveries.find(
+        (d) => d.pullRequestUrl === existing.pullRequestUrl,
+      )
+    : null;
+  const deliveredCurrent = Boolean(
+    currentDelivery &&
+      (currentDelivery.beneficiaryUserId === userId ||
+        currentDelivery.agent.ownerUserId === userId),
   );
+  const isAssignee = Boolean(existing.assigneeId && existing.assigneeId === userId);
+
+  // An actor owns the current contribution if they hold the active claim, or,
+  // when no active claim exists, if they are the current assignee or delivered
+  // the currently linked pull request. A former deliverer whose delivery was
+  // for an earlier pull request or who lost their claim is refused once another
+  // contributor owns the work.
+  const isCurrentContributor =
+    holdsActiveClaim || (!activeClaim && (isAssignee || deliveredCurrent));
+
   const mayEditPullRequest =
-    existing.assigneeId === userId ||
-    isClaimHolder ||
-    isDeliverer ||
+    isCurrentContributor ||
     canEditTicket({
       actorId: userId,
       actorRole: user.role,
@@ -1357,13 +1375,27 @@ export async function editPullRequestUrlAction(
     if (changed.count !== 1) return false;
 
     if (previousPullRequestUrl) {
-      await tx.delivery.updateMany({
-        where: { bugId, pullRequestUrl: previousPullRequestUrl },
-        data: {
-          pullRequestUrl: nextPullRequestUrl,
-          ...(samePullRequest ? {} : { headSha: nextHeadSha }),
-        },
-      });
+      if (samePullRequest) {
+        await tx.delivery.updateMany({
+          where: { bugId, pullRequestUrl: previousPullRequestUrl },
+          data: { pullRequestUrl: nextPullRequestUrl },
+        });
+      } else if (isCurrentContributor) {
+        await tx.delivery.updateMany({
+          where: {
+            bugId,
+            pullRequestUrl: previousPullRequestUrl,
+            OR: [
+              { beneficiaryUserId: userId },
+              { agent: { ownerUserId: userId } },
+            ],
+          },
+          data: {
+            pullRequestUrl: nextPullRequestUrl,
+            headSha: nextHeadSha,
+          },
+        });
+      }
     }
 
     await publishWebEvent(tx, {

@@ -111,22 +111,33 @@ export async function repairPullRequestLink(
   });
   if (!bug) return fail(404, "not_found", "No such issue in this project.");
 
+  const activeClaim = bug.claims?.find(
+    (c) => !c.releasedAt && (c.status === "active" || c.status === "offered"),
+  );
+  const holdsActiveClaim = Boolean(
+    activeClaim &&
+      (activeClaim.agentId === agent.agentId ||
+        activeClaim.beneficiaryUserId === agent.ownerId ||
+        activeClaim.agent?.ownerUserId === agent.ownerId),
+  );
+  const currentDelivery = bug.pullRequestUrl
+    ? bug.deliveries?.find((d) => d.pullRequestUrl === bug.pullRequestUrl)
+    : null;
+  const deliveredCurrent = Boolean(
+    currentDelivery &&
+      (currentDelivery.agentId === agent.agentId ||
+        currentDelivery.beneficiaryUserId === agent.ownerId ||
+        currentDelivery.agent?.ownerUserId === agent.ownerId),
+  );
+  const isAssignee = Boolean(bug.assigneeId && bug.assigneeId === agent.ownerId);
+
+  // An actor owns the current contribution if they hold the active claim, or,
+  // when no active claim exists, if they are the current assignee or delivered
+  // the currently linked pull request. A former deliverer whose delivery was
+  // for an earlier pull request or who lost their claim is refused once another
+  // contributor owns the work.
   const isContributor =
-    bug.assigneeId === agent.ownerId ||
-    Boolean(
-      bug.claims?.some(
-        (c) =>
-          !c.releasedAt &&
-          (c.status === "active" || c.status === "offered") &&
-          (c.agentId === agent.agentId || c.beneficiaryUserId === agent.ownerId || c.agent?.ownerUserId === agent.ownerId),
-      ),
-    ) ||
-    Boolean(
-      bug.deliveries?.some(
-        (d) =>
-          d.agentId === agent.agentId || d.beneficiaryUserId === agent.ownerId || d.agent?.ownerUserId === agent.ownerId,
-      ),
-    );
+    holdsActiveClaim || (!activeClaim && (isAssignee || deliveredCurrent));
 
   if (!isContributor) {
     if (!hasLevel(agent.level, "manager")) {
@@ -198,7 +209,15 @@ export async function repairPullRequestLink(
     } else if (isContributor && tx.delivery) {
       counts.deliveries = (
         await tx.delivery.updateMany({
-          where: { bugId: bug.id, pullRequestUrl: previous },
+          where: {
+            bugId: bug.id,
+            pullRequestUrl: previous,
+            OR: [
+              { agentId: agent.agentId },
+              { beneficiaryUserId: agent.ownerId },
+              { agent: { ownerUserId: agent.ownerId } },
+            ],
+          },
           data: { pullRequestUrl: next, headSha },
         })
       ).count;

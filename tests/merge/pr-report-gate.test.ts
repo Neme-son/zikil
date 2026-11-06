@@ -234,8 +234,50 @@ describe("repairPullRequestLink (#edit-pr-link)", () => {
       data: { pullRequestUrl: nextPr, pullRequestHeadSha: null, proofLinks: [nextPr] },
     });
     expect(db.tx.delivery.updateMany).toHaveBeenCalledWith({
-      where: { bugId: "bug1", pullRequestUrl: PR },
+      where: {
+        bugId: "bug1",
+        pullRequestUrl: PR,
+        OR: [
+          { agentId: "agent-cara" },
+          { beneficiaryUserId: "cara" },
+          { agent: { ownerUserId: "cara" } },
+        ],
+      },
       data: { pullRequestUrl: nextPr, headSha: null },
+    });
+  });
+
+  it("refuses former deliverer after another contributor claims and delivers, preserving manager repair", async () => {
+    const currentPr = PR;
+    const oldPr = "https://github.com/emerjent/ziki/pull/550";
+    const newPr = "https://github.com/emerjent/ziki/pull/560";
+    db.bug.findFirst.mockResolvedValue(
+      bug({
+        status: "done",
+        pullRequestUrl: currentPr,
+        assigneeId: "bob",
+        project: { repoUrl: "https://github.com/emerjent/ziki" },
+        claims: [{ status: "active", releasedAt: null, agentId: "agent-bob", beneficiaryUserId: "bob", dispatcherUserId: null, agent: { ownerUserId: "bob" } }],
+        deliveries: [
+          { id: "d1", pullRequestUrl: oldPr, agentId: "agent-cara", beneficiaryUserId: "cara", agent: { ownerUserId: "cara" } },
+          { id: "d2", pullRequestUrl: currentPr, agentId: "agent-bob", beneficiaryUserId: "bob", agent: { ownerUserId: "bob" } },
+        ],
+      }),
+    );
+
+    // Former deliverer Cara attempts replacement with a new PR
+    const formerAttempt = await repairPullRequestLink(checker("cara", "working"), scope, "bug1", {
+      pullRequestUrl: newPr,
+    });
+    expect(formerAttempt).toMatchObject({ status: 403, body: { error: "insufficient_level" } });
+
+    // Independent manager Dave repairs the link to canonical PR
+    const managerRepair = await repairPullRequestLink(checker("dave", "manager"), scope, "bug1", {
+      pullRequestUrl: newPr,
+    });
+    expect(managerRepair).toMatchObject({
+      status: 200,
+      body: { repaired: true, pullRequestUrl: newPr, samePullRequest: false, moved: { deliveries: 0 } },
     });
   });
 
