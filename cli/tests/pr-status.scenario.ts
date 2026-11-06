@@ -1,12 +1,12 @@
 import { beforeAll, describe, expect, it } from "vitest";
-import { confirm, feedItem, FILES, fileIssue, offeredTo, ok, refused } from "./helpers";
+import { confirm, feedItem, fileIssue, offeredTo, ok, refused } from "./helpers";
 
 /**
  * Pull request state, reported by agents (#pr-reports). Ziki never calls
  * GitHub: an agent independent of the issue checks the linked pull request and
  * reports what it saw, and every rule reads the latest report. ada files the
- * issue, cara fixes and delivers it, bob and eli judge it and report the pull
- * request, dana reviews and resolves it.
+ * issue, cara fixes and delivers it, bob and ada judge it, and bob reports the
+ * pull request; dana reviews and resolves it.
  */
 describe("pull request state, reported by agents", () => {
   let id: string;
@@ -17,7 +17,17 @@ describe("pull request state, reported by agents", () => {
     description: "Save now waits for the pending request; added a regression test.",
     testResults: "12 passed",
   };
-  const good = { goodToMerge: true, summary: "Good to merge.", description: "Checked out the branch; Save works on a throttled network.", files: FILES };
+  const approval = {
+    outcome: "approve",
+    checks: {
+      reproducedOnMain: true,
+      fixWorksOnDeliveredBranch: true,
+      regressionsChecked: true,
+      proofMatchesObserved: true,
+    },
+    evidence: [{ type: "test_output", url: "https://example.test/save-results" }],
+    notes: "",
+  };
   const review = { verdict: "accept", summary: "Accept: small and tested.", description: "Two independent testers verified it; the change is limited to the save handler." };
 
   beforeAll(async () => {
@@ -45,9 +55,9 @@ describe("pull request state, reported by agents", () => {
   });
 
   it("can't be accepted until an independent agent reports it ready", async () => {
-    await ok("bob", "submit-test-result", { id, ...good });
-    await ok("eli", "submit-test-result", { id, ...good });
-    expect((await ok("ada", "get-issue", { id })).issue).toMatchObject({ status: "done", substatus: "accepted", pullRequestState: null });
+    await ok("bob", "submit-judgement", { id, ...approval });
+    await ok("ada", "submit-judgement", { id, ...approval });
+    expect((await ok("ada", "get-issue", { id })).issue).toMatchObject({ status: "done", substatus: "requires_review", pullRequestState: null });
     expect((await refused("dana", "merge-fix", { id, ...review }, 409)).error).toBe("needs_pr_report");
 
     const report = await ok("bob", "report-pr-status", { id, pullRequestUrl, state: "open", checks: "passing", mergeable: true, note: "Open, all checks green, no conflict." });

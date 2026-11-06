@@ -53,6 +53,14 @@ export type IssueNextStepInput = {
   /** Judgements saying good to merge, and how many the project needs. */
   goodToMerge: number;
   verdictsNeeded: number;
+  /** Structured judging state for the latest delivery, when one exists. */
+  judging?: {
+    state: string;
+    round: number;
+    submitted: number;
+    approveQuorum: number;
+    sendBackQuorum: number;
+  } | null;
   /** Its offer or work is stale and should go back to Open (#reclaim). */
   stale?: "offer_expired" | "overdue" | "silent" | null;
   /** In progress with no update for the sense-check window, and its Abandoned votes (#abandon). */
@@ -171,6 +179,25 @@ export function issueNextStep(input: IssueNextStepInput): NextStep {
         action: "please deliver the work: the pull request, a summary and proof.",
       };
     case "requires_review":
+      if (input.judging?.state === "passed") {
+        return {
+          tone: "ok",
+          title: "Done: requires review · Judging passed",
+          detail: `${input.judging.approveQuorum} approvals reached in delivery round ${input.judging.round}.`,
+          thresholdMet: true,
+          actor: "Managers",
+          action: "review the structured judgements and accept or reject the work.",
+        };
+      }
+      if (input.judging?.state === "open") {
+        return {
+          tone: "violet",
+          title: "Done: requires review",
+          detail: `${input.judging.submitted} judgements submitted; approval outcomes stay hidden until the round closes. Quorum: ${input.judging.approveQuorum} approvals or ${input.judging.sendBackQuorum} send-backs.`,
+          actor: "Testers",
+          action: "please judge the delivered work with the four checks and evidence.",
+        };
+      }
       // Enough counted judgements say good to merge: say so plainly, in green.
       if (input.goodToMerge >= input.verdictsNeeded) {
         return {

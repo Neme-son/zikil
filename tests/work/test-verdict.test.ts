@@ -1,4 +1,13 @@
 import { afterSendBack, judgementCounts } from "@/lib/marketing/track";
+import {
+  consolidateJudgingFeedback,
+  countJudgingVotes,
+  judgingIneligibility,
+  judgingStatus,
+  resolveJudgingQuorum,
+  validateJudgingSubmission,
+  type JudgingChecks,
+} from "@/lib/judging/rules";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 /** Judging delivered work (#434, #529, #727, #owner-agents): the agent holding the claim can't judge its own work, anyone else can; one verdict per agent; good to merge needs a ready pull request; weighted judgements move the issue. */
@@ -14,13 +23,35 @@ type Row = {
   changedAt?: Date | null;
 };
 
-const state = vi.hoisted(() => ({ verdicts: [] as Row[] }));
+type JudgingRow = {
+  id: string;
+  bugId: string;
+  deliveryId: string;
+  deliveryRound: number;
+  agentId: string;
+  ownerId: string;
+  approved: boolean;
+  checks: Record<string, boolean>;
+  evidence: Array<{ type: string; url: string; caption?: string }>;
+  notes: string;
+  createdAt: Date;
+};
+
+const state = vi.hoisted(() => ({
+  verdicts: [] as Row[],
+  judgingVerdicts: [] as JudgingRow[],
+  judgingEvents: [] as Array<Record<string, unknown>>,
+}));
 
 const db = vi.hoisted(() => ({
-  bug: { findFirst: vi.fn() },
-  delivery: { findFirst: vi.fn(), findMany: vi.fn() },
+  bug: { findFirst: vi.fn(), update: vi.fn() },
+  delivery: { findFirst: vi.fn(), findMany: vi.fn(), update: vi.fn() },
+  issueClaim: { findMany: vi.fn(), updateMany: vi.fn() },
   membership: { findUnique: vi.fn() },
   testVerdict: { findFirst: vi.fn(), create: vi.fn(), update: vi.fn() },
+  judgingVerdict: { findMany: vi.fn(), create: vi.fn() },
+  judgingEvent: { findMany: vi.fn(), create: vi.fn() },
+  projectWorkflow: { findUnique: vi.fn() },
   pullRequestReport: { findFirst: vi.fn() },
   agentAuditEvent: { create: vi.fn() },
   comment: { create: vi.fn() },
@@ -69,6 +100,8 @@ function report(overrides: Record<string, unknown> = {}) {
 }
 
 import { submitTestVerdict } from "@/lib/agent-api/test-verdict";
+import { getJudgingView, submitJudgingVerdict } from "@/lib/judging/service";
+import type { AgentContext } from "@/lib/agents/require-agent";
 import { reviewJobSubmission } from "@/lib/jobs/review";
 
 /** An issue Ada filed herself, with no agent and no claim. */
@@ -101,6 +134,8 @@ const notGood = (description: string) => ({ goodToMerge: false, summary: "Not go
 beforeEach(() => {
   vi.clearAllMocks();
   state.verdicts = [];
+  state.judgingVerdicts = [];
+  state.judgingEvents = [];
   db.$transaction.mockImplementation((fn: (tx: unknown) => unknown) => fn(db));
   db.bug.findFirst.mockResolvedValue(bugRow());
   db.delivery.findFirst.mockResolvedValue(null);
@@ -126,7 +161,82 @@ beforeEach(() => {
     Object.assign(row, data);
     return row;
   });
+  db.judgingVerdict.findMany.mockImplementation(async () => state.judgingVerdicts.map((row) => ({
+    ...row,
+    agent: { name: row.agentId },
+    owner: { name: row.ownerId },
+  })));
+  db.judgingVerdict.create.mockImplementation(async ({ data }: { data: Omit<JudgingRow, "id" | "createdAt"> }) => {
+    const row = { id: `jv${state.judgingVerdicts.length + 1}`, createdAt: new Date(), ...data };
+    state.judgingVerdicts.push(row);
+    return { id: row.id, createdAt: row.createdAt };
+  });
+  db.judgingEvent.findMany.mockImplementation(async () => state.judgingEvents.map((event) => ({
+    ...event,
+    agent: { name: String(event.agentId) },
+    owner: { name: String(event.ownerId) },
+  })));
+  db.judgingEvent.create.mockImplementation(async ({ data }: { data: Record<string, unknown> }) => {
+    const event = { id: `je${state.judgingEvents.length + 1}`, createdAt: new Date(), ...data };
+    state.judgingEvents.push(event);
+    return event;
+  });
+  db.projectWorkflow.findUnique.mockResolvedValue({ judgePassQuorum: 2, judgeRejectQuorum: 2 });
+  db.bug.update.mockImplementation(async ({ data }: { data: Record<string, unknown> }) => {
+    Object.assign(judgeIssue, data);
+    return judgeIssue;
+  });
+  db.delivery.update.mockImplementation(async ({ data }: { data: Record<string, unknown> }) => {
+    Object.assign(judgeIssue.deliveries[0], data);
+    return judgeIssue.deliveries[0];
+  });
+  db.issueClaim.findMany.mockResolvedValue([]);
+  db.issueClaim.updateMany.mockResolvedValue({ count: 0 });
 });
+
+const judgeIssue = {
+  id: "bug1",
+  number: 42,
+  tenantId: "tenant_zedu",
+  projectId: "project1",
+  title: "A fix",
+  summary: "The save button fails.",
+  description: "Save does not finish.",
+  proofLinks: [],
+  status: "done",
+  substatus: "requires_review",
+  judgingFeedback: null,
+  deliveries: [{
+    id: "delivery1",
+    judgingState: "open",
+    judgingRound: 1,
+    pullRequestUrl: PR,
+    summary: "Fixed save.",
+    description: "Waits for the pending request.",
+    screenshots: [],
+    testResults: "2 passed",
+    deliverableUrls: [],
+    agentId: "solver-agent",
+    agent: { name: "Solver", ownerUserId: "solver-owner" },
+    beneficiary: { name: "Solver owner" },
+  }],
+  claims: [{
+    agentId: "solver-agent",
+    agent: { name: "Solver", ownerUserId: "solver-owner", owner: { name: "Solver owner" } },
+  }],
+};
+
+function judgeAgent(agentId: string, ownerId: string, level: "working" | "manager" | "merger" = "working"): AgentContext {
+  return {
+    agentId,
+    name: agentId,
+    ownerId,
+    tenantId: "tenant_zedu",
+    level,
+    burst: false,
+    keyId: `key-${agentId}`,
+  };
+}
 
 describe("submitTestVerdict: who may verdict (#434)", () => {
 
@@ -556,3 +666,211 @@ describe("sending marketing work back", () => {
     expect(judgementCounts("product", { updatedAt: after, pullRequestUrl: "other" }, { updatedAt: delivered, pullRequestUrl: pr })).toBe(false);
   });
 });
+
+describe("structured judging rules", () => {
+  const checks: JudgingChecks = {
+    reproducedOnMain: true,
+    fixWorksOnDeliveredBranch: true,
+    regressionsChecked: true,
+    proofMatchesObserved: true,
+  };
+  const evidence = [{ type: "test_output" as const, url: "https://example.test/results/42" }];
+
+  it("requires every approval check and evidence, and useful feedback for a send-back", () => {
+    expect(validateJudgingSubmission({ outcome: "approve", checks, evidence })).toMatchObject({ success: true });
+    expect(validateJudgingSubmission({ outcome: "approve", checks, evidence: [] })).toMatchObject({
+      success: false,
+      errors: expect.arrayContaining(["Add at least one evidence link before approving."]),
+    });
+    expect(validateJudgingSubmission({
+      outcome: "approve",
+      checks: { ...checks, regressionsChecked: false },
+      evidence,
+    })).toMatchObject({
+      success: false,
+      errors: expect.arrayContaining(["Tick “Nearby behaviour checked for regressions” before approving."]),
+    });
+    expect(validateJudgingSubmission({ outcome: "send_back", checks, notes: "Needs work." })).toMatchObject({
+      success: false,
+      errors: expect.arrayContaining(["Add at least 20 characters of notes explaining what needs to change."]),
+    });
+  });
+
+  describe("Judge Workbench service", () => {
+    const approval = {
+      outcome: "approve",
+      checks: {
+        reproducedOnMain: true,
+        fixWorksOnDeliveredBranch: true,
+        regressionsChecked: true,
+        proofMatchesObserved: true,
+      },
+      evidence: [{ type: "test_output", url: "https://example.test/results/42" }],
+      notes: "",
+    };
+
+    beforeEach(() => {
+      Object.assign(judgeIssue, { status: "done", substatus: "requires_review", judgingFeedback: null });
+      Object.assign(judgeIssue.deliveries[0], { judgingState: "open", judgingRound: 1 });
+      db.bug.findFirst.mockResolvedValue(judgeIssue as never);
+      db.projectWorkflow.findUnique.mockResolvedValue({ judgePassQuorum: 2, judgeRejectQuorum: 2 });
+    });
+
+    it("keeps other judges' verdicts, counts, and outcomes blind until the caller judges", async () => {
+      state.judgingVerdicts.push({
+        id: "jv1",
+        bugId: "bug1",
+        deliveryId: "delivery1",
+        deliveryRound: 1,
+        agentId: "judge-1",
+        ownerId: "owner-1",
+        approved: true,
+        checks: approval.checks,
+        evidence: approval.evidence,
+        notes: "",
+        createdAt: new Date("2026-11-04T10:00:00Z"),
+      });
+      state.judgingEvents.push({
+        id: "je1",
+        type: "verdict_submitted",
+        outcome: "approve",
+        deliveryRound: 1,
+        createdAt: new Date("2026-11-04T10:00:00Z"),
+        agentId: "judge-1",
+        ownerId: "owner-1",
+      });
+
+      const result = await getJudgingView(judgeAgent("judge-2", "owner-2"), "bug1");
+
+      expect(result).toMatchObject({
+        status: 200,
+        view: {
+          verdictsSubmitted: 1,
+          canJudge: true,
+          history: [{ type: "verdict_submitted", outcome: null }],
+        },
+      });
+      if (result.status !== 200) throw new Error("Expected judging view.");
+      expect(result.view).not.toHaveProperty("verdicts");
+      expect(result.view).not.toHaveProperty("counts");
+    });
+
+    it("passes the delivery at the configured approval quorum and returns the revealed workbench", async () => {
+      db.projectWorkflow.findUnique.mockResolvedValue({ judgePassQuorum: 1, judgeRejectQuorum: 2 });
+
+      const result = await submitJudgingVerdict(judgeAgent("judge-1", "owner-1"), "bug1", approval);
+
+      expect(result).toMatchObject({
+        status: 201,
+        view: {
+          delivery: { state: "passed", round: 1 },
+          issue: { status: "done", substatus: "requires_review" },
+          counts: { approvals: 1, approveQuorum: 1 },
+          verdicts: [{ outcome: "approve", agentName: "judge-1" }],
+          canJudge: false,
+          reason: "judging_closed",
+        },
+      });
+      expect(db.$queryRaw).toHaveBeenCalled();
+      expect(db.delivery.update).toHaveBeenCalledWith({
+        where: { id: "delivery1" },
+        data: { judgingState: "passed" },
+      });
+    });
+
+    it("sends a delivery back at the rejection quorum, saves consolidated feedback, and releases the claim", async () => {
+      state.judgingVerdicts.push({
+        id: "jv1",
+        bugId: "bug1",
+        deliveryId: "delivery1",
+        deliveryRound: 1,
+        agentId: "judge-1",
+        ownerId: "owner-1",
+        approved: false,
+        checks: { ...approval.checks, fixWorksOnDeliveredBranch: false },
+        evidence: [],
+        notes: "The delivered change still fails when retrying the save.",
+        createdAt: new Date("2026-11-04T10:00:00Z"),
+      });
+      db.issueClaim.findMany.mockResolvedValue([{ id: "claim1", agentId: "solver-agent", beneficiaryUserId: "solver-owner" }]);
+      const sendBack = {
+        outcome: "send_back",
+        checks: { ...approval.checks, fixWorksOnDeliveredBranch: false },
+        evidence: [],
+        notes: "The delivered change still fails when retrying the save.",
+      };
+
+      const result = await submitJudgingVerdict(judgeAgent("judge-2", "owner-2"), "bug1", sendBack);
+
+      expect(result).toMatchObject({
+        status: 201,
+        view: {
+          delivery: { state: "rejected" },
+          issue: { status: "open", substatus: "open" },
+          feedback: {
+            checkFailures: { fixWorksOnDeliveredBranch: 2 },
+            notes: [{ ownerName: "owner-1" }, { ownerName: "owner-2" }],
+          },
+        },
+      });
+      expect(db.issueClaim.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+        where: { bugId: "bug1", status: "active", releasedAt: null },
+        data: expect.objectContaining({ status: "released", releaseReason: "judged_not_good" }),
+      }));
+    });
+  });
+
+  it("rejects malformed or unsafe evidence URLs", () => {
+    for (const url of ["", "file:///tmp/report", "javascript:alert(1)", "https://x".padEnd(2049, "x")]) {
+      expect(validateJudgingSubmission({ outcome: "approve", checks, evidence: [{ type: "link", url }] }).success).toBe(false);
+    }
+    expect(validateJudgingSubmission({ outcome: "approve", checks, evidence, extra: true }).success).toBe(false);
+  });
+
+  it("enforces tester, owner, claim-holder, and once-per-owner eligibility", () => {
+    const eligible = {
+      role: "tester",
+      agentId: "tester-1",
+      ownerId: "owner-1",
+      claimHolderAgentId: "solver",
+      claimHolderOwnerId: "solver-owner",
+      judgedAgentIds: [],
+      judgedOwnerIds: [],
+      closed: false,
+    };
+    expect(judgingIneligibility(eligible)).toBeNull();
+    expect(judgingIneligibility({ ...eligible, role: "manager" })).toBe("not_tester");
+    expect(judgingIneligibility({ ...eligible, agentId: "solver" })).toBe("own_work");
+    expect(judgingIneligibility({ ...eligible, ownerId: "solver-owner" })).toBe("same_owner");
+    expect(judgingIneligibility({ ...eligible, judgedOwnerIds: ["owner-1"] })).toBe("already_judged");
+    expect(judgingIneligibility({ ...eligible, closed: true })).toBe("judging_closed");
+  });
+
+  it("replays one vote per owner until the first quorum wins", () => {
+    const votes = [
+      { ownerId: "a", outcome: "approve" as const },
+      { ownerId: "a", outcome: "send_back" as const },
+      { ownerId: "b", outcome: "send_back" as const },
+      { ownerId: "c", outcome: "approve" as const },
+    ];
+    expect(countJudgingVotes(votes)).toEqual({ submitted: 3, approvals: 2, sendBacks: 1 });
+    expect(resolveJudgingQuorum(votes, { approve: 2, send_back: 2 })).toEqual({
+      outcome: "approve",
+      approvals: 2,
+      sendBacks: 1,
+    });
+    expect(resolveJudgingQuorum(votes.slice(0, 3), { approve: 2, send_back: 2 })).toBeNull();
+  });
+
+  it("maps approval and rejection outcomes and consolidates only send-back feedback", () => {
+    expect(judgingStatus("approve")).toEqual({ status: "done", substatus: "requires_review", deliveryState: "passed" });
+    expect(judgingStatus("send_back")).toEqual({ status: "open", substatus: "open", deliveryState: "rejected" });
+    expect(consolidateJudgingFeedback([
+      { outcome: "approve", agentName: "Ada", ownerName: "A", checks, notes: "" },
+      { outcome: "send_back", agentName: "Bob", ownerName: "B", checks: { ...checks, fixWorksOnDeliveredBranch: false }, notes: "The fix still fails on retry." },
+    ])).toEqual({
+      checkFailures: { reproducedOnMain: 0, fixWorksOnDeliveredBranch: 1, regressionsChecked: 0, proofMatchesObserved: 0 },
+      notes: [{ agentName: "Bob", ownerName: "B", notes: "The fix still fails on retry." }],
+    });
+    });
+  });

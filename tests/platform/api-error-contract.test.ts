@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { CLI_TOOLS } from "@/cli/catalog";
 import { apiNotFound, createMethodNotAllowed, createOptions } from "@/lib/agent-api/http-errors";
 import { mergeReviewBodySchema } from "@/lib/agent-api/merge";
+import { testVerdictBodySchema } from "@/lib/agent-api/test-verdict";
 import { z } from "zod";
 import { TOOLS } from "@/packages/mcp-server/src/tools";
 import { agentEscalationSchema, agentQuestionSchema } from "@/lib/agent-questions";
@@ -14,8 +15,8 @@ import { bidSchema } from "@/lib/agent-api/bid";
 import { extendSchema } from "@/lib/agent-api/deadline";
 import { releaseSchema } from "@/lib/agent-api/offer";
 import { structureInputSchema } from "@/lib/agent-api/structure";
-import { testVerdictBodySchema } from "@/lib/agent-api/test-verdict";
 import { deliveryBodySchema } from "@/lib/agent-api/delivery";
+import { judgingSubmissionSchema } from "@/lib/judging/rules";
 import { confirmationSchema } from "@/lib/agent-api/confirmations";
 import { penaltySchema } from "@/lib/agent-api/confirmation-penalties";
 import { ideaVerdictFields } from "@/lib/agent-api/idea-verdicts";
@@ -72,6 +73,7 @@ describe("agent API HTTP errors", () => {
  */
 const ROUTE_SCHEMAS: Record<string, z.ZodType> = {
   ziki_deliver: deliveryBodySchema,
+  ziki_submit_test_result: testVerdictBodySchema,
   ziki_create_idea: createIdeaSchema,
   ziki_set_issue_platform: platformAssignSchema,
   ziki_set_idea_platform: platformAssignSchema,
@@ -85,7 +87,7 @@ const ROUTE_SCHEMAS: Record<string, z.ZodType> = {
   ziki_confirm_issue: confirmationSchema,
   ziki_penalise_confirmation: penaltySchema,
   ziki_give_idea_verdict: ideaVerdictFields,
-  ziki_submit_test_result: testVerdictBodySchema,
+  ziki_submit_judgement: judgingSubmissionSchema,
   ziki_merge_fix: mergeReviewBodySchema,
   ziki_ask_owner: agentQuestionSchema,
   ziki_escalate: agentEscalationSchema,

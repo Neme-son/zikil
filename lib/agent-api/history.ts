@@ -21,6 +21,7 @@ export const HISTORY_KINDS = [
   "confirmation",
   "bid",
   "delivery",
+  "judgement",
   "test_verdict",
   "merge_review",
   "comment",
@@ -168,7 +169,9 @@ export function issueEntryEdit(
   if (!step || step.kind !== kind) return null;
   if (PER_AGENT.has(kind) && entry.agentId !== callerAgentId) return null;
   if (kind === "bid" && entry.bidState !== "open") return null;
-  const path = step.route.slice(step.route.indexOf(" ") + 1);
+  const path = kind === "test_verdict"
+    ? `/api/v1/issues/${encodeURIComponent(issue.id)}/test-results`
+    : step.route.slice(step.route.indexOf(" ") + 1);
   return { method: "POST", path: `${path}?projectId=${encodeURIComponent(issue.projectId)}`, cli: ENTRY_CLI[kind](issue.id) };
 }
 
@@ -215,6 +218,7 @@ export type HistoryItem =
   | (EntryBase & { kind: "confirmation"; verdict: string; duplicateOfId: string | null })
   | (EntryBase & { kind: "bid"; status: BidState })
   | (EntryBase & { kind: "delivery"; pullRequestUrl: string | null })
+  | (EntryBase & { kind: "judgement"; outcome: "approve" | "send_back"; deliveryRound: number; checks: Prisma.JsonValue; evidence: Prisma.JsonValue; notes: string })
   | (EntryBase & { kind: "test_verdict"; goodToMerge: boolean; pullRequestUrl: string | null; headSha: string | null })
   | (EntryBase & { kind: "merge_review"; verdict: string; pullRequestUrl: string | null })
   | (ItemBase & { kind: "comment"; body: string; parentId: string | null; editedAt: Date | null; issue: HistoryIssueRef });
@@ -326,6 +330,24 @@ export async function listOwnerHistory(agent: AgentContext, options: HistoryOpti
       kind: "delivery", id: row.id, createdAt: row.createdAt, updatedAt: row.updatedAt,
       summary: row.summary, description: row.description, pullRequestUrl: row.pullRequestUrl,
       agent: row.agent, issue: issueRef(row.bug), edit: issueEntryEdit("delivery", row.bug, { agentId: row.agentId }, agent.agentId),
+    }))));
+  }
+
+  if (wants("judgement")) {
+    reads.push(prisma.judgingVerdict.findMany({
+      where: { ownerId, bug, ...historyAfter(cursor, "judgement") },
+      orderBy: newestFirst, take,
+      select: { id: true, createdAt: true, deliveryRound: true, approved: true, checks: true, evidence: true, notes: true, agent: agentSelect, bug: issueSelect },
+    }).then((rows) => rows.map((row): HistoryItem => ({
+      kind: "judgement", id: row.id, createdAt: row.createdAt, updatedAt: row.createdAt,
+      summary: row.approved ? "Approved" : "Sent back",
+      description: row.notes,
+      outcome: row.approved ? "approve" : "send_back",
+      deliveryRound: row.deliveryRound,
+      checks: row.checks,
+      evidence: row.evidence,
+      notes: row.notes,
+      agent: row.agent, issue: issueRef(row.bug), edit: null,
     }))));
   }
 

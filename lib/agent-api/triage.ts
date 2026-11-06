@@ -6,8 +6,7 @@ import { hasLevel, requireLevel } from "@/lib/agents/levels";
 import { reviewerConflict, ReviewerNotIndependentError } from "@/lib/agents/independence";
 import { IssueApiError } from "@/lib/agent-api/errors";
 import { cursorOrderBy, cursorWhere, decodeCursor, MAX_PAGE_SIZE, toPage, type IssueCursor } from "@/lib/agent-api/create-policy";
-import { deliveredClaim } from "@/lib/agent-api/merge-verdicts";
-import { countJudgements, judgedBugSelect, judgementSelect, type Judgement } from "@/lib/agent-api/tested-status";
+import { judgedBugSelect } from "@/lib/agent-api/tested-status";
 import { strandedDelivery, type StrandedDelivery } from "@/lib/agent-api/stranded-delivery";
 import { idleInProgress } from "@/lib/agent-api/idle";
 import { staleHold, type StaleHold } from "@/lib/agent-api/stale-hold";
@@ -31,7 +30,7 @@ import { issuePath } from "@/lib/issue-ref";
  * The manager's triage view (#triage): one read that says, for every issue in
  * the project that is moving, where it stands and what the caller may do next.
  *
- * A manager on production had to open each issue, its test verdicts and its
+ * A manager on production had to open each issue, its judgements and its
  * pull request on GitHub separately to decide what to do. This puts them in
  * one list: every issue In progress, Delivered, Done or Ready to Merge, and
  * every Open issue with open bids, each with
@@ -43,7 +42,7 @@ import { issuePath } from "@/lib/issue-ref";
  *   the issue (#pr-reports: state, the branch it was merged into, whether the
  *   default branch contains it, checks, conflicts), with who reported it and
  *   how long ago, and what the gate (lib/agent-api/pr-gate.ts) makes of it;
- * - its judgements on the linked pull request (the Delivered step's count);
+ * - the latest delivery's judging round and, once it closes, its outcome counts;
  * - its open bids;
  * - `nextActions`: what the caller may do now, under the same rules the write
  *   routes enforce, each with `canAct` and, when blocked, why.
@@ -106,8 +105,15 @@ export type TriageItem = {
   issue: { id: string; number: number; title: string; status: string; substatus: string; url: string };
   holder: TriageHolder;
   pullRequest: TriagePullRequest;
-  /** Judgements on the linked pull request; null with no pull request. */
-  judgements: { good: number; notGood: number; needed: number; goodAtHead: number | null; headSha: string | null } | null;
+  /** The latest delivery's structured judging round; outcomes stay hidden until it closes. */
+  judging: {
+    round: number;
+    state: "open" | "passed" | "rejected";
+    verdictsSubmitted: number;
+    counts: { approvals: number; sendBacks: number } | null;
+    approveQuorum: number;
+    sendBackQuorum: number;
+  } | null;
   /** Open bids on an Open issue; null otherwise. */
   bids: { open: number } | null;
   nextActions: TriageAction[];
@@ -159,7 +165,7 @@ export type TriageFacts = {
   /** The project's awardThreshold: a bid whose weighted votes reach it may be awarded by any agent (#bid-votes). */
   awardThreshold: number;
   pullRequest: TriagePullRequest;
-  judgements: TriageItem["judgements"];
+  judging: TriageItem["judging"];
   /** Open bids, most voted first: the bid id, its weighted votes and the owners it is from. */
   bids: { id: string; votes: number; ownerIds: string[] }[];
   hold: IssueHold | null;
@@ -167,8 +173,6 @@ export type TriageFacts = {
   /** Idle In progress work: whether a claim holds it, and its holder's owners. */
   idle: { held: boolean; holderOwners: string[]; idleHours: number } | null;
   stale: StaleHold["kind"] | null;
-  /** The caller's owner already judged the linked pull request. */
-  judgedByCaller: boolean;
 };
 
 const STALE_WHY: Record<StaleHold["kind"], string> = {
@@ -196,9 +200,6 @@ export function nextActions(caller: TriageCaller, facts: TriageFacts): TriageAct
   };
   const repoName = facts.repo ? `${facts.repo.owner}/${facts.repo.repo}` : "the project's repository";
   const ref = parsePullRequestUrl(pr.url);
-  // Why a pull request can't be judged or accepted as linked.
-  const linkProblem = prGateNow.broken ? prGateNow.reason : pr.linkState === "missing" ? "No pull request is linked." : null;
-
   // 1. A link to repair, or a pull request the author must replace.
   if (bug.substatus !== "open" && prGateNow.broken) {
     const number = ref ? `#${ref.number}` : "That number";
@@ -248,18 +249,13 @@ export function nextActions(caller: TriageCaller, facts: TriageFacts): TriageAct
       break;
     }
     case "requires_review": {
-      const judged = facts.judgedByCaller ? "Your owner already judged this pull request." : null;
-      push("submit_test_result", route("test-results"), "working", gate("working", [linkProblem, judged]));
+      push("review_judging", route("merge"), "manager", gate("manager"),
+        "The judging quorum passed. Review the structured judgements; acceptance is still subject to the pull-request gate.");
       break;
     }
     case "accepted": {
-      const j = facts.judgements;
-      const short = j && j.good < j.needed ? `${j.good} of ${j.needed} good-to-merge judgements on the linked pull request.` : null;
-      const head = j && j.goodAtHead !== null && j.goodAtHead < j.needed
-        ? `Only ${j.goodAtHead} of ${j.needed} judgements are on the current head${j.headSha ? ` (${j.headSha.slice(0, 7)})` : ""}; later commits weren't judged.`
-        : undefined;
       const role: AgentLevel = facts.thresholdOnly ? "working" : "manager";
-      push("accept_fix", route("merge"), role, gate(role, [prGateNow.canAccept ? null : prGateNow.reason, short]), head);
+      push("accept_fix", route("merge"), role, gate(role, [prGateNow.canAccept ? null : prGateNow.reason]));
       break;
     }
     case "ready_to_merge":
@@ -368,9 +364,9 @@ export async function triageQueue(
 
   const items = await Promise.all(page.items.map(async (bug): Promise<TriageItem> => {
     const pullRequest = pullRequestFacts(bug.pullRequestUrl, repo, reports.get(bug.id) ?? null, bug.pullRequestHeadSha ?? null, now);
-    const [hold, judged, bids, stranded, idle, stale] = await Promise.all([
+    const [hold, judging, bids, stranded, idle, stale] = await Promise.all([
       currentHold(bug.id),
-      bug.pullRequestUrl ? judgementsOn(bug, pullRequest.headSha, workflow.verdictsNeeded, caller.ownerId) : Promise.resolve(null),
+      judgingOn(bug, workflow.judgePassQuorum, workflow.judgeRejectQuorum),
       bug.substatus === "open" ? openBidsOn(bug.id, workflow.managerVoteWeight) : Promise.resolve([]),
       bug.status === "in_progress" ? strandedDelivery(bug.id, prisma, new Date(now)) : Promise.resolve(null),
       bug.status === "in_progress" ? idleInProgress(bug.id, prisma, now) : Promise.resolve(null),
@@ -383,7 +379,7 @@ export async function triageQueue(
       thresholdOnly,
       awardThreshold: workflow.awardThreshold,
       pullRequest,
-      judgements: judged?.counts ?? null,
+      judging,
       bids,
       hold,
       stranded,
@@ -395,13 +391,12 @@ export async function triageQueue(
         }
         : null,
       stale: stale?.kind ?? null,
-      judgedByCaller: judged?.byCaller ?? false,
     };
     return {
       issue: { id: bug.id, number: bug.number, title: bug.title, status: bug.status, substatus: bug.substatus, url: absoluteUrl(issuePath(project.slug, bug.number)) },
       holder: holderOf(bug, hold),
       pullRequest,
-      judgements: facts.judgements,
+      judging: facts.judging,
       bids: bug.substatus === "open" ? { open: bids.length } : null,
       nextActions: nextActions(caller, facts),
     };
@@ -426,27 +421,40 @@ export function holderOf(
   };
 }
 
-/** The Delivered step's count on the linked pull request, the good ones at `headSha`, and whether the caller's owner judged it. */
-async function judgementsOn(
+/** Keeps approval outcomes blind while the latest delivery round is still open. */
+async function judgingOn(
   bug: Prisma.BugGetPayload<{ select: typeof triageBugSelect }>,
-  headSha: string | null,
-  needed: number,
-  callerOwnerId: string,
-): Promise<{ counts: NonNullable<TriageItem["judgements"]>; byCaller: boolean }> {
-  const verdicts: Judgement[] = await prisma.testVerdict.findMany({
-    where: { bugId: bug.id, pullRequestUrl: bug.pullRequestUrl! },
-    orderBy: [{ createdAt: "asc" }, { id: "asc" }],
-    select: judgementSelect,
+  approveQuorum: number,
+  sendBackQuorum: number,
+): Promise<TriageItem["judging"]> {
+  const delivery = await prisma.delivery.findFirst({
+    where: { bugId: bug.id },
+    orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
+    select: { id: true, judgingRound: true, judgingState: true },
   });
-  // With no claim, whoever the deliveries on this pull request credit can't judge it (tested-status.ts).
-  const credited = deliveredClaim(bug)
-    ? []
-    : (await prisma.delivery.findMany({ where: { bugId: bug.id, pullRequestUrl: bug.pullRequestUrl! }, select: { beneficiaryUserId: true } }))
-      .map((delivery) => delivery.beneficiaryUserId);
-  const { good, notGood } = countJudgements(verdicts, bug, credited);
-  const goodAtHead = headSha ? countJudgements(verdicts.filter((v) => v.headSha === headSha), bug, credited).good : null;
-  const byCaller = verdicts.some((v) => v.agent.ownerUserId === callerOwnerId || v.onBehalfOfUserId === callerOwnerId);
-  return { counts: { good, notGood, needed, goodAtHead, headSha }, byCaller };
+  if (!delivery) return null;
+  if (delivery.judgingState !== "open" && delivery.judgingState !== "passed" && delivery.judgingState !== "rejected") {
+    throw new Error(`Unknown judging state "${delivery.judgingState}" for delivery ${delivery.id}.`);
+  }
+
+  const verdicts = await prisma.judgingVerdict.findMany({
+    where: { deliveryId: delivery.id, deliveryRound: delivery.judgingRound },
+    select: { ownerId: true, approved: true },
+  });
+  const reveal = delivery.judgingState !== "open" || bug.status !== "done" || bug.substatus !== "requires_review";
+  return {
+    round: delivery.judgingRound,
+    state: delivery.judgingState,
+    verdictsSubmitted: verdicts.length,
+    counts: reveal
+      ? {
+          approvals: new Set(verdicts.filter((verdict) => verdict.approved).map((verdict) => verdict.ownerId)).size,
+          sendBacks: new Set(verdicts.filter((verdict) => !verdict.approved).map((verdict) => verdict.ownerId)).size,
+        }
+      : null,
+    approveQuorum,
+    sendBackQuorum,
+  };
 }
 
 /** Open bids on an issue, most weighted votes first, then oldest. */

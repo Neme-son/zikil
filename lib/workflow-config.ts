@@ -20,6 +20,8 @@ export const GOVERNANCE_LABELS: Record<ProjectGovernanceValue, string> = {
 export type ProjectWorkflowValues = {
   confirmationsNeeded: number;
   verdictsNeeded: number;
+  judgePassQuorum: number;
+  judgeRejectQuorum: number;
   offerWindowSeconds: number;
   heartbeatMinutes: number;
   deliveryMinutes: number;
@@ -45,6 +47,8 @@ export const DEFAULT_PROJECT_WORKFLOW: Readonly<ProjectWorkflowValues> = Object.
   // Good-to-merge judgements weighing 3 accept a fix: three working agents, or
   // a manager or merger agent (2) and a working agent (1). Nobody decides alone.
   verdictsNeeded: 3,
+  judgePassQuorum: 2,
+  judgeRejectQuorum: 2,
   // A claim offer lasts 30 minutes.
   offerWindowSeconds: 1800,
   // A claim with no heartbeat for 4 hours is released.
@@ -90,6 +94,8 @@ export const DEFAULT_PROJECT_WORKFLOW: Readonly<ProjectWorkflowValues> = Object.
 export const WORKFLOW_LIMITS = {
   confirmationsNeeded: { min: 1, max: 5 },
   verdictsNeeded: { min: 1, max: 5 },
+  judgePassQuorum: { min: 1, max: 5 },
+  judgeRejectQuorum: { min: 1, max: 5 },
   offerWindowSeconds: { min: 30, max: 3600 },
   heartbeatMinutes: { min: 1, max: 1440 },
   deliveryMinutes: { min: 1, max: 10080 },
@@ -119,6 +125,8 @@ const boundedInt = (field: keyof typeof WORKFLOW_LIMITS, label: string) => {
 export const workflowSettingsSchema = z.object({
   confirmationsNeeded: boundedInt("confirmationsNeeded", "Confirmations needed"),
   verdictsNeeded: boundedInt("verdictsNeeded", "Merge verdicts needed"),
+  judgePassQuorum: boundedInt("judgePassQuorum", "Judging approval quorum"),
+  judgeRejectQuorum: boundedInt("judgeRejectQuorum", "Judging rejection quorum"),
   offerWindowSeconds: boundedInt("offerWindowSeconds", "Offer window"),
   heartbeatMinutes: boundedInt("heartbeatMinutes", "Heartbeat window"),
   deliveryMinutes: boundedInt("deliveryMinutes", "Delivery window"),
@@ -151,6 +159,8 @@ export function workflowValues(
   return {
     confirmationsNeeded: row?.confirmationsNeeded ?? DEFAULT_PROJECT_WORKFLOW.confirmationsNeeded,
     verdictsNeeded: row?.verdictsNeeded ?? DEFAULT_PROJECT_WORKFLOW.verdictsNeeded,
+    judgePassQuorum: row?.judgePassQuorum ?? DEFAULT_PROJECT_WORKFLOW.judgePassQuorum,
+    judgeRejectQuorum: row?.judgeRejectQuorum ?? DEFAULT_PROJECT_WORKFLOW.judgeRejectQuorum,
     offerWindowSeconds: row?.offerWindowSeconds ?? DEFAULT_PROJECT_WORKFLOW.offerWindowSeconds,
     heartbeatMinutes: row?.heartbeatMinutes ?? DEFAULT_PROJECT_WORKFLOW.heartbeatMinutes,
     deliveryMinutes: row?.deliveryMinutes ?? DEFAULT_PROJECT_WORKFLOW.deliveryMinutes,

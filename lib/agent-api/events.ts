@@ -74,6 +74,7 @@ export const AGENT_EVENT_TYPES = [
   "issue.deleted",
   "issue.delivered",
   "issue.importance",
+  "issue.judging_verdict",
   "issue.pull_request_reported",
   "issue.reopened",
   "issue.restored",

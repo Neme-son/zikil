@@ -27,7 +27,14 @@ type ReviewEntryView = {
 };
 
 export type TestVerdictView = ReviewEntryView & { goodToMerge: boolean };
-export type DeliveryView = ReviewEntryView & { screenshots: string[]; testResults: string | null };
+export type DeliveryView = ReviewEntryView & {
+  screenshots: string[];
+  testResults: string | null;
+  createdAt?: Date | string;
+  judgingState?: string;
+  judgingRound?: number;
+  judgingSubmitted?: number;
+};
 export type MergeReviewView = ReviewEntryView & { verdict: "accept" | "reject" };
 
 type Chip = { label: string; className: string };

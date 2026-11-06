@@ -29,6 +29,8 @@ const FIELDS: Array<{
   },
   { name: "confirmationsNeeded", label: "Confirmations needed", hint: "Independent accepts that confirm an issue." },
   { name: "verdictsNeeded", label: "Merge verdicts needed", hint: "Independent good-to-merge verdicts before a fix can be accepted." },
+  { name: "judgePassQuorum", label: "Judging approvals needed", hint: "Independent tester approvals needed to pass a delivery." },
+  { name: "judgeRejectQuorum", label: "Judging send-backs needed", hint: "Independent tester send-backs needed to reject a delivery." },
   { name: "offerWindowSeconds", label: "Offer window (seconds)", hint: "How long an agent has to accept a claim offer." },
   { name: "heartbeatMinutes", label: "Heartbeat window (minutes)", hint: "Silence before a claim is released." },
   { name: "deliveryMinutes", label: "Delivery window (minutes)", hint: "Base time to link a fix; high and critical keep at least 60 minutes." },

@@ -15,7 +15,40 @@ import type { WorkTrack } from "@prisma/client";
  */
 export type MergeQueueStatus = "accepted" | "merge";
 
-const queueWhere = (queue: MergeQueueStatus) => (queue === "accepted" ? { substatus: "accepted" as const } : { status: "merge" as const });
+const queueWhere = (queue: MergeQueueStatus) => (queue === "accepted"
+  ? {
+      OR: [
+        { substatus: "accepted" as const },
+        { substatus: "requires_review" as const, deliveries: { some: { judgingState: "passed" } } },
+      ],
+    }
+  : { status: "merge" as const });
+
+function passedWorkbenchVotes(delivery: {
+  judgingState: string;
+  judgingRound: number;
+  judgingVerdicts: Array<{ ownerId: string; deliveryRound: number }>;
+} | undefined): number | null {
+  if (!delivery || delivery.judgingState !== "passed") return null;
+  return new Set(
+    delivery.judgingVerdicts
+      .filter((verdict) => verdict.deliveryRound === delivery.judgingRound)
+      .map((verdict) => verdict.ownerId),
+  ).size;
+}
+
+const judgingDeliverySelect = {
+  orderBy: [{ updatedAt: "desc" as const }, { id: "desc" as const }],
+  take: 1,
+  select: {
+    judgingState: true,
+    judgingRound: true,
+    judgingVerdicts: {
+      where: { approved: true },
+      select: { ownerId: true, deliveryRound: true },
+    },
+  },
+};
 
 export type ReadyToMergeIssue = {
   id: string;
@@ -59,13 +92,14 @@ export async function findReadyToMergeIssues(
         projectId,
         ...trackFilter(track),
         isDeleted: false,
-        substatus: "accepted",
+        ...queueWhere(status),
       },
       orderBy: [{ createdAt: "asc" }, { id: "asc" }],
       select: {
         id: true,
         number: true,
         title: true,
+        substatus: true,
         projectId: true,
         pullRequestUrl: true,
         pullRequestHeadSha: true,
@@ -97,14 +131,18 @@ export async function findReadyToMergeIssues(
             agent: { select: { id: true, ownerUserId: true, level: true } },
           },
         },
+        deliveries: judgingDeliverySelect,
       },
     });
 
     const ready: ReadyToMergeIssue[] = [];
     for (const bug of candidates) {
       const claim = deliveredClaim(bug);
-      const { weight } = countedMergeVerdicts(bug.testVerdicts, claim, bug);
-      if (weight < verdictsNeeded) continue;
+      const delivery = bug.deliveries[0];
+      const judgedCount = passedWorkbenchVotes(delivery);
+      const weight = judgedCount ?? countedMergeVerdicts(bug.testVerdicts, claim, bug).weight;
+      if (status === "accepted" && bug.substatus === "accepted" && judgedCount === null && weight < verdictsNeeded) continue;
+      if (status === "accepted" && bug.substatus === "requires_review" && judgedCount === null) continue;
       if (reviewerConflict({ id: agent.agentId, ownerUserId: agent.ownerId }, bug)) continue;
 
       ready.push({
@@ -149,6 +187,7 @@ export async function findReadyToMergeIssues(
       id: true,
       number: true,
       title: true,
+      substatus: true,
       projectId: true,
       pullRequestUrl: true,
       pullRequestHeadSha: true,
@@ -180,6 +219,7 @@ export async function findReadyToMergeIssues(
           agent: { select: { id: true, ownerUserId: true, level: true } },
         },
       },
+      deliveries: judgingDeliverySelect,
     },
   });
 
@@ -188,9 +228,12 @@ export async function findReadyToMergeIssues(
     const claim = deliveredClaim(bug);
     // The same verdict rule as the merge gate (merge.ts), on the linked PR only.
     const onLinkedPr = bug.testVerdicts.filter((verdict) => verdict.pullRequestUrl === bug.pullRequestUrl);
-    const { weight } = countedMergeVerdicts(onLinkedPr, claim, bug);
+    const delivery = bug.deliveries[0];
+    const judgedCount = passedWorkbenchVotes(delivery);
+    const weight = judgedCount ?? countedMergeVerdicts(onLinkedPr, claim, bug).weight;
 
-    if (status === "accepted" && weight < verdictsNeeded) continue;
+    if (status === "accepted" && bug.substatus === "accepted" && judgedCount === null && weight < verdictsNeeded) continue;
+    if (status === "accepted" && bug.substatus === "requires_review" && judgedCount === null) continue;
 
     if (reviewerConflict({ id: agent.agentId, ownerUserId: agent.ownerId }, bug)) continue;
 

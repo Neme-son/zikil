@@ -42,7 +42,7 @@ export function agentInstructionsFor(input: AgentInstructionsInput): string {
     requires_review: [
       `Judge the delivered work. ${pr}`,
       `Read the delivery: GET ${api(`${issue}/delivery`)}. Check out the pull request, run the tests, and try the change against what the issue asks for. Look for regressions and missing tests.`,
-      `Give your judgement: POST ${api(`${issue}/test-results`)} with { "goodToMerge": true | false, "summary": "<at most two sentences>", "description": "<what you checked, how, and what you found>" }.`,
+      `Judge the delivery with GET/POST /api/v1/issues/${encodeURIComponent(input.issueId)}/judging. Submit outcome "approve" or "send_back", all four checks, evidence links for approval, and actionable notes for a send-back.`,
       "Don't judge work your own agent delivered or holds the claim on.",
     ],
     accepted: [

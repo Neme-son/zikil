@@ -35,7 +35,7 @@ export async function ziki(...args: string[]): Promise<CliResult> {
  * scenarios together can reach it. A real agent waits for the reset the 429
  * names, and so does this, once and for at most 65 seconds.
  */
-async function asAgent(agent: Agent, command: string, flags: Record<string, string | number | boolean | string[]>): Promise<CliResult> {
+async function asAgent(agent: Agent, command: string, flags: Record<string, unknown>): Promise<CliResult> {
   const result = await ziki(command, ...toArgs(flags), "--as", agent);
   const body = result.json?.body;
   if (result.code !== 1 || result.json?.status !== 429 || body?.budget !== "write") return result;
@@ -44,7 +44,7 @@ async function asAgent(agent: Agent, command: string, flags: Record<string, stri
   return ziki(command, ...toArgs(flags), "--as", agent);
 }
 
-export async function ok(agent: Agent, command: string, flags: Record<string, string | number | boolean | string[]> = {}): Promise<Json> {
+export async function ok(agent: Agent, command: string, flags: Record<string, unknown> = {}): Promise<Json> {
   const result = await asAgent(agent, command, flags);
   expect(result.code, `${command} as ${agent} failed:\n${result.err}\n${result.out}`).toBe(0);
   return result.json;
@@ -54,7 +54,7 @@ export async function ok(agent: Agent, command: string, flags: Record<string, st
 export async function refused(
   agent: Agent,
   command: string,
-  flags: Record<string, string | number | boolean | string[]>,
+  flags: Record<string, unknown>,
   status: number,
 ): Promise<Json> {
   const result = await asAgent(agent, command, flags);
@@ -63,11 +63,19 @@ export async function refused(
   return result.json.body;
 }
 
-function toArgs(flags: Record<string, string | number | boolean | string[]>): string[] {
+function toArgs(flags: Record<string, unknown>): string[] {
   return Object.entries(flags).flatMap(([key, value]) => [
     `--${key.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`)}`,
-    Array.isArray(value) ? value.join(",") : String(value),
+    serializeFlag(value),
   ]);
+}
+
+function serializeFlag(value: unknown): string {
+  if (Array.isArray(value)) {
+    return value.every((item) => typeof item === "string") ? value.join(",") : JSON.stringify(value) ?? "null";
+  }
+  if (value !== null && typeof value === "object") return JSON.stringify(value) ?? "null";
+  return String(value);
 }
 
 let counter = 0;

@@ -128,17 +128,61 @@ describe("buildRequest", () => {
     expect(buildRequest(tool("ziki_withdraw_bid"), { id: "i" }, { projectId: null }).body).toBeUndefined();
   });
 
-  it("sends the tested commit with a test result, and rejects a malformed one before calling the API", () => {
-    const withSha = buildRequest(tool("ziki_submit_test_result"), { id: "i", goodToMerge: true, summary: "Good.", description: "Tested.", files: [{ path: "lib/x.ts", lines: "4" }], headSha: "a1b2c3d4e5f6" }, { projectId: "p" });
-    expect(withSha.body).toEqual({ goodToMerge: true, summary: "Good.", description: "Tested.", files: [{ path: "lib/x.ts", lines: "4" }], headSha: "a1b2c3d4e5f6" });
-    const without = buildRequest(tool("ziki_submit_test_result"), { id: "i", goodToMerge: true, summary: "Good.", description: "Tested.", files: [{ path: "lib/x.ts", lines: "4" }] }, { projectId: "p" });
-    expect(without.body).toEqual({ goodToMerge: true, summary: "Good.", description: "Tested.", files: [{ path: "lib/x.ts", lines: "4" }] });
-    // A bare verdict is refused before the API is called (#review-entries).
-    expect(() => buildRequest(tool("ziki_submit_test_result"), { id: "i", goodToMerge: true }, { projectId: "p" })).toThrow();
+  it("routes structured judgement through the versioned API and rejects malformed checks before calling it", () => {
+    const input = {
+      id: "i",
+      outcome: "approve",
+      checks: {
+        reproducedOnMain: true,
+        fixWorksOnDeliveredBranch: true,
+        regressionsChecked: true,
+        proofMatchesObserved: true,
+      },
+      evidence: [{ type: "test_output", url: "https://example.test/results/42" }],
+    };
+    const request = buildRequest(tool("ziki_submit_judgement"), input, { projectId: "p" });
+    expect(request).toMatchObject({
+      method: "POST",
+      path: "/api/v1/issues/i/judging",
+      body: {
+        outcome: "approve",
+        checks: input.checks,
+        evidence: input.evidence,
+      },
+    });
+    expect(buildRequest(tool("ziki_get_judging"), { id: "i" }, { projectId: "p" })).toMatchObject({
+      method: "GET",
+      path: "/api/v1/issues/i/judging",
+    });
+    expect(() => buildRequest(tool("ziki_submit_judgement"), { ...input, checks: {} }, { projectId: "p" })).toThrow();
+    expect(() => buildRequest(tool("ziki_submit_judgement"), { ...input, outcome: "maybe" }, { projectId: "p" })).toThrow();
+    expect(() => buildRequest(tool("ziki_submit_judgement"), { ...input, evidence: [{ type: "link", url: "file:///tmp/x" }] }, { projectId: "p" })).toThrow();
     expect(() => buildRequest(tool("ziki_merge_fix"), { id: "i", verdict: "accept" }, { projectId: "p" })).toThrow();
-    for (const bad of ["not-a-sha", "abc12", "g1b2c3d4e5f6", "a".repeat(65)]) {
-      expect(() => buildRequest(tool("ziki_submit_test_result"), { id: "i", goodToMerge: true, summary: "Good.", description: "Tested.", files: [{ path: "lib/x.ts", lines: "4" }], headSha: bad }, { projectId: "p" })).toThrow();
-    }
+  });
+
+  it("keeps the legacy test-results MCP tools on their original versioned route", () => {
+    const body = {
+      id: "i",
+      goodToMerge: true,
+      summary: "The fix works.",
+      description: "Tested the changed flow and it works.",
+      files: [{ path: "src/save.ts", lines: "12-20" }],
+    };
+    expect(buildRequest(tool("ziki_submit_test_result"), body, { projectId: "p" })).toMatchObject({
+      method: "POST",
+      path: "/api/v1/issues/i/test-results",
+      query: { projectId: "p" },
+      body: {
+        goodToMerge: true,
+        summary: body.summary,
+        description: body.description,
+        files: body.files,
+      },
+    });
+    expect(buildRequest(tool("ziki_list_test_verdicts"), { id: "i" }, { projectId: "p" })).toMatchObject({
+      method: "GET",
+      path: "/api/v1/issues/i/test-results",
+    });
   });
 
   it("rejects input the route would reject", () => {

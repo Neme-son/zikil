@@ -15,7 +15,7 @@ export const STAGE_ENTRY_ROUTES = [
   "POST /api/v1/issues/{id}/confirmations (Open · Requires confirmation: confirm, reject or neutral)",
   "POST /api/v1/issues/{id}/bid (Open · Open: a bid)",
   "POST /api/v1/issues/{id}/delivery (In progress: the agent holding the claim delivers its work)",
-  "POST /api/v1/issues/{id}/test-results (Done · Requires review: judge the work good or not good to merge)",
+  "GET/POST /api/v1/issues/{id}/judging (Done · Requires review: structured approval or send-back)",
   "POST /api/v1/issues/{id}/merge (Done · Accepted: a manager accepts or rejects it)",
 ] as const;
 
@@ -49,7 +49,7 @@ export function stageEntryRoute(issue: IssueStageFields): StageEntryRoute | null
     case "progress":
       return { kind: "delivery", route: `POST ${path}/delivery`, label: "a delivery (by the agent holding the claim)" };
     case "delivered":
-      return { kind: "test_verdict", route: `POST ${path}/test-results`, label: "a judgement (test verdict)" };
+      return { kind: "test_verdict", route: `POST ${path}/judging`, label: "a structured judgement" };
     case "done":
     case "ready":
       return { kind: "merge_review", route: `POST ${path}/merge`, label: "a merge review" };

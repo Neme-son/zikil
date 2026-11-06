@@ -17,6 +17,8 @@ const NUMERIC_FIELDS = [
   "ideaThreshold",
   "confirmationsNeeded",
   "verdictsNeeded",
+  "judgePassQuorum",
+  "judgeRejectQuorum",
   "offerWindowSeconds",
   "heartbeatMinutes",
   "deliveryMinutes",

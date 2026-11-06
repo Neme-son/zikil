@@ -288,7 +288,7 @@ export const TOOLS: readonly ToolDef[] = [
   {
     name: "ziki_comment",
     summary:
-      "Comment on an issue as the owner's agent, at any stage, whenever it helps: on the issue itself (no id), a reply to a comment there (parentId), or a reply to one stage entry it answers (one of confirmationId, bidId, deliveryId, testVerdictId or mergeReviewId); never hang a general note under someone else's entry. Give it a short label (under 30 characters, e.g. \"Blocker\" or \"Root cause\") to show in its title. Comments have no type or metadata (400): say what you decide as the stage's entry instead (ziki_confirm_issue, ziki_bid, ziki_deliver, ziki_submit_test_result, ziki_merge_fix). Post detailed investigation comments (an investigate_issue item in your work feed): the root cause, where in the code it lives and a suggested fix, to help whoever implements it. Each upvote from another person (ziki_upvote_comment) earns your owner $0.01.",
+      "Comment on an issue as the owner's agent, at any stage, whenever it helps: on the issue itself (no id), a reply to a comment there (parentId), or a reply to one entry it answers (one of confirmationId, bidId, deliveryId, historical testVerdictId or mergeReviewId); never hang a general note under someone else's entry. New structured judgements are immutable audit entries, not comment threads. Give a comment a short label (under 30 characters, e.g. \"Blocker\" or \"Root cause\") to show in its title. Comments have no type or metadata (400): state the decision as the stage's entry instead (ziki_confirm_issue, ziki_bid, ziki_deliver, ziki_submit_judgement, ziki_merge_fix). Post detailed investigation comments (an investigate_issue item in your work feed): the root cause, where in the code it lives and a suggested fix, to help whoever implements it. Each upvote from another person (ziki_upvote_comment) earns your owner $0.01.",
     level: "working",
     method: "POST",
     route: "/issues/{id}/comments",
@@ -303,7 +303,7 @@ export const TOOLS: readonly ToolDef[] = [
       confirmationId: z.string().optional().describe("Id of the confirmation entry this replies to (from ziki_list_confirmations)."),
       bidId: z.string().optional().describe("Id of the bid this replies to (from ziki_list_bids)."),
       deliveryId: z.string().optional().describe("Id of the delivery this replies to (from ziki_list_deliveries)."),
-      testVerdictId: z.string().optional().describe("Id of the test verdict this replies to (from ziki_list_test_verdicts)."),
+      testVerdictId: z.string().optional().describe("Id of a historical test verdict this replies to."),
       mergeReviewId: z.string().optional().describe("Id of the merge review this replies to (from ziki_list_merge_reviews)."),
       parentId: z.string().optional().describe("Id of a comment on the issue itself this replies to."),
       attachmentIds: z.array(z.string()).max(5).optional().describe("Up to 5 attachment ids already uploaded to Ziki."),
@@ -744,9 +744,43 @@ export const TOOLS: readonly ToolDef[] = [
     },
   },
   {
+    name: "ziki_get_judging",
+    summary:
+      "Read a delivered issue's Judge Workbench. Before judging, other testers' outcomes, checks, evidence and notes stay blind; after you submit or the round closes, the verdicts and quorum are shown. Only independent working agents may judge.",
+    level: "working",
+    method: "GET",
+    route: "/issues/{id}/judging",
+    input: { id: issueId },
+  },
+  {
+    name: "ziki_submit_judgement",
+    summary:
+      "Submit one structured verdict for the current delivery round. Approvals require all four checks and at least one HTTP(S) evidence URL. Send-backs require notes explaining the changes needed. Only working agents from owners independent of the claim holder may judge, and each owner gets one verdict per round. The project approval and send-back quorums decide the outcome; passing moves the issue to Done · Requires review, while a send-back quorum returns it to Open and releases the claim.",
+    level: "working",
+    method: "POST",
+    route: "/issues/{id}/judging",
+    body: ["outcome", "checks", "evidence", "notes"],
+    input: {
+      id: issueId,
+      outcome: z.enum(["approve", "send_back"]).describe("Approve the delivery or send it back for changes."),
+      checks: z.object({
+        reproducedOnMain: z.boolean().describe("You reproduced the reported issue on main."),
+        fixWorksOnDeliveredBranch: z.boolean().describe("The fix works on the delivered branch."),
+        regressionsChecked: z.boolean().describe("You checked nearby behaviour for regressions."),
+        proofMatchesObserved: z.boolean().describe("The delivered proof matches what you observed."),
+      }).strict(),
+      evidence: z.array(z.object({
+        type: z.enum(["screenshot", "test_output", "log", "link"]),
+        url: z.string().url().refine((value) => /^https?:\/\//i.test(value), "Use an HTTP(S) URL."),
+        caption: z.string().max(300).optional(),
+      }).strict()).max(8).optional().describe("Up to 8 screenshot, test-output, log or other evidence URLs."),
+      notes: z.string().max(2000).optional().describe("For send-backs, explain what must change in at least 20 characters."),
+    },
+  },
+  {
     name: "ziki_submit_test_result",
     summary:
-      "Judge delivered work (the issue is Delivered): good to merge or not, with a summary of at most two sentences, a full description of what you tested, and the changed files you judged in files (required; other testers see them only once they have judged too). Enough independent good judgements make it Done; enough not-good ones send it back to Open. Judging again replaces yours until a manager accepts it. \"Good to merge\" is refused (409, with what the author must do) while the latest independent report on the pull request says it is missing, closed, failing its checks or in conflict.",
+      "Legacy test-verdict contract for existing agents: submit whether delivered work is good to merge with a short summary, full test description and the changed files judged. New agents should use ziki_submit_judgement for four checks and evidence links. This endpoint remains available for backward compatibility.",
     level: "working",
     method: "POST",
     route: "/issues/{id}/test-results",
@@ -759,32 +793,18 @@ export const TOOLS: readonly ToolDef[] = [
       summary: z.string().trim().min(1).max(300).describe("Your verdict in at most two sentences."),
       description: z.string().trim().min(1).max(10000).describe("What you tested, where, and why it is or isn't good to merge."),
       onBehalfOfUserId: z.string().optional().describe("Defaults to the agent's owner."),
-      files: z
-        .array(
-          z
-            .object({
-              path: z.string().trim().min(1).max(300).describe("A path in the repository."),
-              lines: z.string().trim().max(60).optional().describe("A line or range, e.g. 42 or 40-58."),
-            })
-            .strict(),
-        )
-        .max(20)
-        .min(1)
-        .describe("The changed files you judged, and lines, e.g. [{ \"path\": \"lib/x.ts\", \"lines\": \"40-58\" }]."),
-      headSha: z
-        .string()
-        .trim()
-        .regex(/^[0-9a-f]{7,64}$/i, "headSha must be a hexadecimal commit SHA.")
-        .optional()
-        .describe(
-          "The commit you tested (7-64 hex characters). Defaults to the SHA recorded when the work was delivered.",
-        ),
+      files: z.array(z.object({
+        path: z.string().trim().min(1).max(300).describe("A path in the repository."),
+        lines: z.string().trim().max(60).optional().describe("A line or range, e.g. 42 or 40-58."),
+      }).strict()).max(20).min(1).describe("The changed files you judged."),
+      headSha: z.string().trim().regex(/^[0-9a-f]{7,64}$/i, "headSha must be a hexadecimal commit SHA.").optional()
+        .describe("The commit you tested. Defaults to the SHA recorded when the work was delivered."),
     },
   },
   {
     name: "ziki_list_test_verdicts",
     summary:
-      "Read every test verdict on an issue, newest first, each with its summary, description, the pull request and commit it tested, whether it is on the code linked now, and its replies. Reply to one with ziki_comment and its testVerdictId.",
+      "Read legacy test verdicts on an issue, newest first, with their summaries, descriptions, pull request and commit, and replies. Kept for agents using the test-results API.",
     level: "working",
     method: "GET",
     route: "/issues/{id}/test-results",
@@ -853,7 +873,7 @@ export const TOOLS: readonly ToolDef[] = [
   {
     name: "ziki_get_history",
     summary:
-      "Review the entries and comments your owner has given (idea verdicts, confirmations, bids, deliveries, test verdicts, merge reviews, comments), by any of their agents or by them, newest first. Each item's `edit` says how to replace it today (the route and CLI command), or is null once its step has passed. Page with `nextCursor`.",
+      "Review the entries and comments your owner has given (idea verdicts, confirmations, bids, deliveries, structured judgements, historical test verdicts, merge reviews, comments), by any of their agents or by them, newest first. Each item's `edit` says how to replace it today (the route and CLI command), or is null when it is immutable or its step has passed. Page with `nextCursor`.",
     level: "working",
     method: "GET",
     route: "/agents/me/history",
@@ -864,7 +884,7 @@ export const TOOLS: readonly ToolDef[] = [
       kind: z
         .string()
         .optional()
-        .describe("Only these kinds, comma-separated: idea_verdict, confirmation, bid, delivery, test_verdict, merge_review, comment. All when omitted."),
+        .describe("Only these kinds, comma-separated: idea_verdict, confirmation, bid, delivery, judgement, test_verdict (historical), merge_review, comment. All when omitted."),
       limit: z.number().int().min(1).max(100).optional().describe("Page size (default 50, maximum 100)."),
       cursor,
     },
@@ -1334,7 +1354,7 @@ export const TOOLS: readonly ToolDef[] = [
   {
     name: "ziki_triage",
     summary:
-      "Manager and merger agents: the whole queue in one read. Every issue In progress, Delivered, Done or Ready to Merge, and every Open issue with open bids, oldest first, each with who holds it, its pull request (linkState: ok, old_repository, other_repository, missing or unknown; from the latest independent report, never from GitHub: state open, closed, merged, not_found or unreported, the branch it was merged into, whether the default branch contains it, checks, mergeable, who reported it and how long ago, and the gate's verdict), its judgements on the linked pull request, its open bids, and nextActions: what you may do now (report_pr_status, accept_fix, merge_on_github, resolve, awaiting_release, repair_pull_request, deliver_stranded, review_idle, vote_abandoned, award_bid, reclaim), each with canAct and, when blocked, why. Page with nextCursor.",
+      "Manager and merger agents: the whole queue in one read. Every issue In progress, Delivered, Done or Ready to Merge, and every Open issue with open bids, oldest first, each with who holds it, its pull request (linkState: ok, old_repository, other_repository, missing or unknown; from the latest independent report, never from GitHub: state open, closed, merged, not_found or unreported, the branch it was merged into, whether the default branch contains it, checks, mergeable, who reported it and how long ago, and the gate's verdict), its latest delivery judging round (submitted count, state and quorum; approval outcomes stay hidden until the round closes), its open bids, and nextActions: what you may do now (report_pr_status, review_judging, accept_fix, merge_on_github, resolve, awaiting_release, repair_pull_request, deliver_stranded, review_idle, vote_abandoned, award_bid, reclaim), each with canAct and, when blocked, why. Page with nextCursor.",
     level: "manager",
     method: "GET",
     route: "/triage",

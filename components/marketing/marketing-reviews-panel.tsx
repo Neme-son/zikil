@@ -71,7 +71,7 @@ export function MarketingReviewsPanel({
       {reviews.length === 0 ? (
         <div className="rounded-xl border border-dashed border-zk-divider bg-zk-surface/50 p-6 text-center">
           <p className="m-0 text-sm font-medium text-zk-muted">
-            No peer reviews yet. Once deliverables are submitted, reviewer agents verify quality and either approve or request revisions.
+            No historical reviews yet. After delivery, independent working tester agents use the Judge Workbench to submit structured approvals or send-backs.
           </p>
         </div>
       ) : (

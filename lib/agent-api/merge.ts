@@ -286,6 +286,9 @@ async function reviewFix(
   // manager's review: there is no merge step for a threshold-only vote to
   // decide.
   const marketing = bug.track === "marketing";
+  const workbenchPassed = bug.substatus === "requires_review"
+    ? await hasPassedWorkbenchRound(prisma, bug.id)
+    : false;
 
   // #vote-governance: a merge review is a manager's decision, or in a
   // threshold-only project one weighted vote among any independent agents'.
@@ -308,7 +311,7 @@ async function reviewFix(
     return { status: 403, error: "not_independent", message: new ReviewerNotIndependentError(conflict).message };
   }
 
-  if (marketing && bug.substatus !== "accepted") {
+  if (marketing && bug.substatus !== "accepted" && !workbenchPassed) {
     return {
       status: 409,
       error: "not_ready",
@@ -342,7 +345,7 @@ async function reviewFix(
     // D1: a manager accepts Done · Accepted marketing work straight to Live ·
     // Published. No confirmation, redesign or pull request gate, and no
     // deployment reports to wait for, so the points are paid here.
-    if (bug.substatus !== "accepted") {
+    if (bug.substatus !== "accepted" && !workbenchPassed) {
       return {
         status: 409,
         error: "not_ready",
@@ -352,7 +355,7 @@ async function reviewFix(
     }
     const { reviewers, weight } = await countedMarketingReviewers(bug, claim, credited);
     const { verdictsNeeded } = workflow;
-    if (weight < verdictsNeeded) {
+    if (weight < verdictsNeeded && !workbenchPassed) {
       return {
         status: 409,
         error: "not_ready",
@@ -375,7 +378,10 @@ async function reviewFix(
           message: "This issue's fix has already been accepted.",
         };
       }
-      if (current.substatus !== "accepted") {
+      const currentWorkbenchPassed = current.substatus === "requires_review"
+        ? await hasPassedWorkbenchRound(tx, bug.id)
+        : false;
+      if (current.substatus !== "accepted" && !currentWorkbenchPassed) {
         return {
           status: 409,
           error: "not_ready",
@@ -425,7 +431,7 @@ async function reviewFix(
   const { reviewers, weight, acceptedHeadSha } = await countedReviewers(bug, claim, credited);
 
   const { verdictsNeeded } = workflow;
-  if (weight < verdictsNeeded) {
+  if (weight < verdictsNeeded && !workbenchPassed) {
     return {
       status: 409 as const,
       error: "not_ready" as const,
@@ -612,6 +618,15 @@ export async function countedReviewers(
     ? verdicts
     : verdicts.filter((v) => !credited.includes(v.agent.ownerUserId) && !credited.includes(v.onBehalfOfUserId));
   return countedMergeVerdicts(countable, claim, bug, bug.pullRequestHeadSha ?? null);
+}
+
+async function hasPassedWorkbenchRound(db: Prisma.TransactionClient | typeof prisma, bugId: string): Promise<boolean> {
+  const delivery = await db.delivery.findFirst({
+    where: { bugId },
+    orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
+    select: { judgingState: true },
+  });
+  return delivery?.judgingState === "passed";
 }
 
 /**
@@ -1027,7 +1042,10 @@ async function rejectFix(agent: AgentContext, bug: LoadedBug, review: MergeRevie
           message: "This issue's fix has already been merged, so it can't be rejected.",
         };
       }
-      if (current.substatus !== "accepted") {
+      const currentWorkbenchPassed = current.substatus === "requires_review"
+        ? await hasPassedWorkbenchRound(tx, bug.id)
+        : false;
+      if (current.substatus !== "accepted" && !currentWorkbenchPassed) {
         return {
           status: 409,
           error: "not_ready",

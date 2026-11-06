@@ -8,7 +8,6 @@ import { reviewerConflict, type ReviewedBug } from "@/lib/agents/independence";
 import type { AgentLevel, WorkTrack } from "@prisma/client";
 import { findClaimableIssues } from "@/lib/agent-api/contributor";
 import { findReadyToMergeIssues } from "@/lib/agent-api/merger";
-import { verdictClass, type VerdictClass } from "@/lib/agent-api/merge-verdicts";
 import { findReviewableIssues } from "@/lib/agent-api/reviewer";
 import { openIssueConfirmations, type ConfirmationState } from "@/lib/issue-stage";
 import { REVIEW_OFFER_TTL_MS } from "@/lib/agent-api/review-offer";
@@ -219,8 +218,6 @@ type IssueFacts = ReviewedBug & {
   confirmerOwners: string[];
   /** The agents that delivered the linked pull request: they can't report on it (#owner-agents). */
   deliveryAgentIds: string[];
-  /** Who judged which pull request, and with which class: a person judges once per class (#owner-agents). */
-  testerOwners: { ownerUserId: string; verdictClass: VerdictClass; pullRequestUrl: string | null }[];
 };
 
 /** Who filed an idea and who already gave it a verdict (#idea-table). */
@@ -265,7 +262,13 @@ export type ProjectWork = {
   /** Converted issues still being confirmed. */
   toConfirm: (IssueRef & { confirmations: number; needed: number; confirmed: boolean })[];
   ideaThreshold: number;
-  tests: (IssueRef & { pullRequestUrl: string | null })[];
+  tests: (IssueRef & {
+    pullRequestUrl: string | null;
+    claimHolderAgentId: string;
+    claimHolderOwnerId: string;
+    judgedAgentIds: string[];
+    judgedOwnerIds: string[];
+  })[];
   /** `importance` is the issue's importance (#importance). */
   ready: (IssueRef & { importance: number })[];
   /** Open bids on Open issues, for other agents to vote on (#bid-votes). */
@@ -448,7 +451,16 @@ async function buildProjectWork(tenantId: string, project: { id: string; slug: s
     prGates,
     toConfirm,
     ideaThreshold: workflow.ideaThreshold,
-    tests: tests.map((t) => ({ id: t.id, number: t.number, title: t.title, pullRequestUrl: t.pullRequestUrl ?? null })),
+    tests: tests.map((t) => ({
+      id: t.id,
+      number: t.number,
+      title: t.title,
+      pullRequestUrl: t.pullRequestUrl ?? null,
+      claimHolderAgentId: t.claimHolderAgentId,
+      claimHolderOwnerId: t.claimHolderOwnerId,
+      judgedAgentIds: t.judgedAgentIds,
+      judgedOwnerIds: t.judgedOwnerIds,
+    })),
     ready: ready.map((r) => ({ id: r.id, number: r.number, title: r.title, importance: r.voteCount })),
     bids,
     toAward,
@@ -930,7 +942,6 @@ async function loadFacts(ids: string[]): Promise<Map<string, IssueFacts>> {
       deliveries: { select: { pullRequestUrl: true, agentId: true } },
       confirmations: { where: { undoneAt: null }, select: { updatedAt: true, onBehalfOfUserId: true, weightClass: true } },
       revisions: { orderBy: { editedAt: "desc" }, take: 1, select: { editedAt: true } },
-      testVerdicts: { select: { pullRequestUrl: true, agent: { select: { ownerUserId: true, level: true } } } },
     },
   });
   return new Map(
@@ -948,7 +959,6 @@ async function loadFacts(ids: string[]): Promise<Map<string, IssueFacts>> {
         confirmerOwners: bug.confirmations
           .filter((c) => !bug.revisions[0] || c.updatedAt > bug.revisions[0].editedAt)
           .map((c) => `${c.onBehalfOfUserId}:${c.weightClass}`),
-        testerOwners: bug.testVerdicts.map((v) => ({ ownerUserId: v.agent.ownerUserId, verdictClass: verdictClass(v.agent.level), pullRequestUrl: v.pullRequestUrl })),
         deliveryAgentIds: bug.deliveries.filter((d) => d.pullRequestUrl === bug.pullRequestUrl).map((d) => d.agentId),
       },
     ]),
@@ -1218,20 +1228,25 @@ export function itemsFor(agent: AgentContext, work: ProjectWork, mine: AgentWork
 
   // 4. Fixes to test, then issues to take.
   for (const test of work.tests) {
-    if (!independent(test.id)) continue;
-    const facts = work.facts.get(test.id);
-    // One judgement per person per class (#owner-agents): the owner's agent of the other class may still judge.
-    const mine = verdictClass(agent.level);
-    if (facts?.testerOwners.some((v) => v.ownerUserId === owner && v.verdictClass === mine && v.pullRequestUrl === test.pullRequestUrl)) continue;
+    if (agent.level !== "working") continue;
+    if (
+      test.claimHolderAgentId === agent.agentId ||
+      test.claimHolderOwnerId === owner ||
+      test.judgedAgentIds.includes(agent.agentId) ||
+      test.judgedOwnerIds.includes(owner)
+    ) continue;
     items.push({
       kind: "test_fix",
       key: `test_fix:${test.id}:${test.pullRequestUrl ?? ""}`,
       title: `Judge the delivered work for #${test.number}`,
-      detail: "Check out the delivered pull request, test it, and judge whether it is good to merge: a summary of at most two sentences and a full description of what you tested. Enough good judgements make it Done; enough not-good ones send it back to Open.",
+      detail: "Review the delivered work against main, verify the fix and nearby behaviour, then submit all four checks with evidence. Only independent working agents may judge; the configured approval or send-back quorum decides the round.",
       minimumRole: "working",
       canAct: true,
       issue: issueRef(test),
-      actions: [{ name: "submit_test_result", minimumRole: "working", method: "POST", path: apiPath(test.id, "test-results", pid), cli: `submit-test-result --id ${test.id} --good-to-merge true|false --summary <your verdict> --description <what you tested and why>` }],
+      actions: [
+        { name: "get_judging", minimumRole: "working", method: "GET", path: `/api/v1/issues/${test.id}/judging`, cli: `get-judging --id ${test.id}` },
+        { name: "submit_judgement", minimumRole: "working", method: "POST", path: `/api/v1/issues/${test.id}/judging`, cli: `submit-judgement --id ${test.id} --outcome approve|send_back --checks <four checks> --evidence <URLs> --notes <why>` },
+      ],
     });
   }
   // Pull requests to check on GitHub and report (#pr-reports): Ziki never asks
@@ -1533,7 +1548,6 @@ export function itemsFor(agent: AgentContext, work: ProjectWork, mine: AgentWork
       ...gate,
       issue: issueRef(issue),
       actions: [
-        { name: "list_test_verdicts", minimumRole: "working", method: "GET", path: apiPath(issue.id, "test-results", pid), cli: `list-test-verdicts --id ${issue.id}` },
         {
           name: "deliver",
           minimumRole: "manager",
@@ -1615,12 +1629,12 @@ export function itemsFor(agent: AgentContext, work: ProjectWork, mine: AgentWork
         kind: "accept_fix",
         key: `accept_fix:${fix.id}`,
         title: `Review the fix for #${fix.number}: accept or reject`,
-        detail: `Tested and Done. Read the test verdicts, then give your merge review, accept or reject, with a summary of at most two sentences and a full description (a reject's is the feedback the author acts on). Accepts ${fix.reviews?.accepts ?? 0} of ${threshold}, rejects ${fix.reviews?.rejects ?? 0} of ${threshold}; ${weightNote}. The review that reaches ${threshold} decides it.`,
+        detail: `The approval quorum passed. Read the structured judgements, then give your merge review, accept or reject, with a summary of at most two sentences and a full description (a reject's is the feedback the author acts on). Accepts ${fix.reviews?.accepts ?? 0} of ${threshold}, rejects ${fix.reviews?.rejects ?? 0} of ${threshold}; ${weightNote}. The review that reaches ${threshold} decides it.`,
         minimumRole: "working",
         ...(roleGate("working", fix.id).canAct ? blocked ?? { canAct: true } : roleGate("working", fix.id)),
         issue: issueRef(fix),
         actions: [
-          { name: "list_test_verdicts", minimumRole: "working", method: "GET", path: apiPath(fix.id, "test-results", pid), cli: `list-test-verdicts --id ${fix.id}` },
+          { name: "get_judging", minimumRole: "working", method: "GET", path: `/api/v1/issues/${fix.id}/judging`, cli: `get-judging --id ${fix.id}` },
           { name: "merge_fix", minimumRole: "working", method: "POST", path: apiPath(fix.id, "merge", pid), cli: `merge-fix --id ${fix.id} --verdict accept|reject --summary <your review> --description <why, or what to change>` },
         ],
       });
@@ -1630,12 +1644,12 @@ export function itemsFor(agent: AgentContext, work: ProjectWork, mine: AgentWork
       kind: "accept_fix",
       key: `accept_fix:${fix.id}`,
       title: `Review and accept the fix for #${fix.number}`,
-      detail: "Tested and waiting for a manager: read the test verdicts, then give your merge review — accept it for merging or reject it — with a summary of at most two sentences and a full description (a reject's is the feedback the author acts on).",
+      detail: "The approval quorum passed and the issue is waiting for manager review: read the structured judgements, then accept it for merging or reject it with a summary and full description.",
       minimumRole: "manager",
       ...(roleGate("manager", fix.id).canAct ? blocked ?? { canAct: true } : roleGate("manager", fix.id)),
       issue: issueRef(fix),
       actions: [
-        { name: "list_test_verdicts", minimumRole: "working", method: "GET", path: apiPath(fix.id, "test-results", pid), cli: `list-test-verdicts --id ${fix.id}` },
+        { name: "get_judging", minimumRole: "working", method: "GET", path: `/api/v1/issues/${fix.id}/judging`, cli: `get-judging --id ${fix.id}` },
         { name: "merge_fix", minimumRole: "manager", method: "POST", path: apiPath(fix.id, "merge", pid), cli: `merge-fix --id ${fix.id} --verdict accept|reject --summary <your review> --description <why, or what to change>` },
       ],
     });

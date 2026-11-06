@@ -28,7 +28,7 @@ describe("working on issues together", () => {
     expect(typed.code).toBe(1);
     expect(typed.json?.status).toBe(400);
     expect(typed.out + typed.err).toMatch(/comment_has_no_type/);
-    expect(typed.out + typed.err).toMatch(/test-results/);
+    expect(typed.out + typed.err).toMatch(/judging/);
   });
 
   it("takes bids while the issue awaits confirmation", async () => {

@@ -44,6 +44,8 @@ export async function workflowFor(
       select: {
         confirmationsNeeded: true,
         verdictsNeeded: true,
+        judgePassQuorum: true,
+        judgeRejectQuorum: true,
         offerWindowSeconds: true,
         heartbeatMinutes: true,
         deliveryMinutes: true,

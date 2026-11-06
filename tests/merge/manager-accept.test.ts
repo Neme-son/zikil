@@ -262,6 +262,18 @@ describe("acceptFix: the gate (#434)", () => {
 
 describe("acceptFix: a successful accept (#434)", () => {
 
+  it("accepts a workbench-passed delivery without requiring legacy test verdicts", async () => {
+    confirmWith("rob", "sam");
+    db.bug.findFirst.mockResolvedValue(bugRow({ status: "done", substatus: "requires_review" }));
+    db.delivery.findFirst.mockResolvedValue({ judgingState: "passed" });
+
+    const result = await acceptFix(merger("m1", "mo", "manager"), "bug1");
+
+    expect(result).toMatchObject({ status: 200, accepted: true, readyToMerge: true });
+    expect(db.testVerdict.findMany).toHaveBeenCalled();
+    expect(db.pointEntry.createMany).not.toHaveBeenCalled();
+  });
+
   it("a manager accepts the fix and marks it ready to merge without resolving or awarding points", async () => {
     confirmWith("rob", "sam");
     verdict("r1", "rob");

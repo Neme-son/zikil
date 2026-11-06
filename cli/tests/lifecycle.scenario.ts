@@ -197,7 +197,7 @@ describe("a report from idea to merge", () => {
   it("gets its work delivered by the claim holder only, as In progress's entry, and moves to Delivered", async () => {
     const other = solver === "cara" ? "bob" : "cara";
     // Nothing to judge before the work is delivered.
-    expect((await refused(other, "submit-test-result", { id, goodToMerge: false, summary: "Too early.", description: "Nothing delivered.", files: FILES }, 409)).error).toBe("not_delivered");
+    expect((await refused(other, "submit-judgement", { id, outcome: "send_back" }, 404)).error).toBe("no_delivery");
     // A delivery explains itself: a bare one is refused by the API (sent raw; the CLI asks for the flags itself).
     const { projectId } = (await ok(solver, "get-issue", { id })).issue;
     const bare = await ziki("request", "POST", `/api/v1/issues/${id}/delivery?projectId=${projectId}`, "--body", JSON.stringify({ pullRequestUrl: delivery.pullRequestUrl, testResults: "1 passed" }), "--as", solver);
@@ -217,39 +217,60 @@ describe("a report from idea to merge", () => {
     expect(JSON.stringify(listed)).toContain("keyboard shortcut");
   });
 
-  it("is judged by independent owners, not by the solver, by what the latest report says of its PR", async () => {
-    const verdict = { summary: "Good to merge.", description: "Verified on the branch: Save works again.", files: FILES };
-    await refused(solver, "submit-test-result", { id, goodToMerge: true, ...verdict }, 403);
-    const testers = (["bob", "cara", "eli"] as const).filter((agent) => agent !== solver).slice(0, 2);
-    // #review-entries: a bare verdict is refused, and old clients are told notes is gone.
-    const { projectId } = (await ok(testers[0], "get-issue", { id })).issue;
-    const bare = await ziki("request", "POST", `/api/v1/issues/${id}/test-results?projectId=${projectId}`, "--body", JSON.stringify({ goodToMerge: true, notes: "Looks fine." }), "--as", testers[0]);
-    expect(bare.code).toBe(1);
-    expect(bare.json?.status).toBe(400);
-    expect(bare.out + bare.err).toMatch(/summary/);
-    // #pr-reports: Ziki doesn't ask GitHub. An independent agent reports the
-    // pull request's checks failing, and from then on "good to merge" stops
-    // here, with nothing posted on the issue: the answer says why and what to do.
+  it("is judged blindly by independent working agents, with structured evidence and quorum", async () => {
+    const testers = (["ada", "bob", "cara"] as const).filter((agent) => agent !== solver).slice(0, 2);
+    const checks = {
+      reproducedOnMain: true,
+      fixWorksOnDeliveredBranch: true,
+      regressionsChecked: true,
+      proofMatchesObserved: true,
+    };
+    const approval = {
+      id,
+      outcome: "approve",
+      checks,
+      evidence: [{ type: "test_output", url: "https://example.test/save-results" }],
+      notes: "",
+    };
+    expect((await refused(solver, "submit-judgement", approval, 403)).error).toBe("own_work");
+
+    // An approval without evidence is rejected by the same judgement API.
+    const missingEvidence = await ziki(
+      "submit-judgement",
+      "--id", id,
+      "--outcome", "approve",
+      "--checks", JSON.stringify(checks),
+      "--as", testers[0],
+    );
+    expect(missingEvidence.code).toBe(1);
+    expect(missingEvidence.json?.status).toBe(422);
+    expect(JSON.stringify(missingEvidence.json?.body)).toContain("evidence");
+
+    const initial = await ok(testers[0], "get-judging", { id });
+    expect(initial).toMatchObject({ verdictsSubmitted: 0, canJudge: true });
+    expect(initial).not.toHaveProperty("counts");
+    expect(initial).not.toHaveProperty("verdicts");
+    const first = await ok(testers[0], "submit-judgement", approval);
+    expect(first).toMatchObject({ counts: { approvals: 1 }, verdictsSubmitted: 1 });
+    expect((await refused(testers[0], "submit-judgement", approval, 409)).error).toBe("already_judged");
+
+    // A different tester cannot see the first judgement or its tally.
+    const blind = await ok(testers[1], "get-judging", { id });
+    expect(blind).toMatchObject({ verdictsSubmitted: 1, canJudge: true });
+    expect(blind).not.toHaveProperty("counts");
+    expect(blind).not.toHaveProperty("verdicts");
+    const second = await ok(testers[1], "submit-judgement", approval);
+    expect(second.counts.approvals).toBe(2);
+    expect((await ok("ada", "get-issue", { id })).issue).toMatchObject({ status: "done", substatus: "requires_review" });
+
+    // Judgements do not replace the independent pull-request report.
     expect((await refused(solver, "report-pr-status", { id, pullRequestUrl: delivery.pullRequestUrl, state: "open", checks: "passing", note: "My own PR is fine." }, 403)).error).toBe("not_independent");
     const report = await ok(testers[1], "report-pr-status", { id, pullRequestUrl: delivery.pullRequestUrl, state: "open", checks: "failing", mergeable: true, note: "The test job fails on the PR head." });
     expect(report.report).toMatchObject({ state: "open", checks: "failing", reportedBy: { agentName: expect.any(String) } });
     expect((await ok("ada", "get-issue", { id })).issue.pullRequestState).toMatchObject({ id: report.report.id, checks: "failing" });
-    const first = await refused(testers[0], "submit-test-result", { id, goodToMerge: true, ...verdict }, 409);
-    expect(first).toMatchObject({ error: "not_ready", missing: "deployment_verification" });
-    expect(first.todo).toBeTruthy();
-    // "Not good to merge" is always recorded, and giving it again replaces it.
-    const fail = await ok(testers[1], "submit-test-result", { id, goodToMerge: false, summary: "Not good to merge yet.", description: "Save still fails on the second click.", files: FILES });
-    expect(fail.verdict).toMatchObject({ goodToMerge: false, summary: "Not good to merge yet." });
-    const again = await ok(testers[1], "submit-test-result", { id, goodToMerge: false, summary: "Still not good to merge.", description: "Retested: the second click still fails.", files: FILES });
-    expect(again).toMatchObject({ changed: true, verdict: { id: fail.verdict.id, summary: "Still not good to merge." } });
-    const reply = await ok("ada", "comment", { id, summary: "A short comment.", body: "Which browser was this in?", testVerdictId: fail.verdict.id });
-    expect(reply.comment).toMatchObject({ testVerdictId: fail.verdict.id, parentId: null });
-    const listed = await ok("dana", "list-test-verdicts", { id });
-    expect(listed.verdicts).toHaveLength(1);
-    expect(listed.verdicts[0]).toMatchObject({ id: fail.verdict.id, goodToMerge: false, current: true });
-    expect(JSON.stringify(listed)).toContain("Which browser was this in?");
-    // One not-good judgement weighing 2 (eli is a merger agent) of the 3 needed: still Delivered.
-    expect((await ok("ada", "get-issue", { id })).issue.substatus).toBe("requires_review");
+    const history = await ok("dana", "get-judging", { id });
+    expect(history.verdicts).toHaveLength(2);
+    expect(history.verdicts.map((verdict: { outcome: string }) => verdict.outcome)).toEqual(["approve", "approve"]);
   });
 
   it("is reviewed only by a manager or merger agent, with a written review", async () => {
@@ -260,8 +281,8 @@ describe("a report from idea to merge", () => {
     const bare = await ziki("request", "POST", `/api/v1/issues/${id}/merge?projectId=${projectId}`, "--body", JSON.stringify({ action: "reject", feedback: "No." }), "--as", "dana");
     expect(bare.code).toBe(1);
     expect(bare.json?.status).toBe(400);
-    // Untested, so even a manager can't accept it yet.
-    expect((await refused("dana", "merge-fix", { id, ...review }, 409)).error).toBe("not_ready");
+    // The quorum passed, but the latest pull-request report still blocks acceptance.
+    expect((await refused("dana", "merge-fix", { id, ...review }, 409)).error).toBe("pr_not_ready");
     // A reject is a merge review: the feedback is its description, and no comment narrates it.
     const rejected = await ok("dana", "merge-fix", { id, verdict: "reject", summary: "Reject: Save still fails.", description: "The second click still fails; handle the pending state and add a test." });
     expect(rejected).toMatchObject({ accepted: false, replaced: false, review: { verdict: "reject", summary: "Reject: Save still fails." } });
@@ -287,9 +308,16 @@ describe("a report from idea to merge", () => {
     const again = await ok(solver, "deliver", { id, ...delivery, summary: "Delivered again after the review." });
     expect(again).toMatchObject({ replaced: true, delivery: { summary: "Delivered again after the review." } });
     expect((await ok("ada", "get-issue", { id })).issue.substatus).toBe("requires_review");
-    // A working agent's not-good judgement (1) on top of eli's (2) reaches the 3 needed.
-    const testers = (["bob", "cara", "eli"] as const).filter((agent) => agent !== solver).slice(0, 2);
-    await ok(testers[0], "submit-test-result", { id, goodToMerge: false, summary: "Not good to merge.", description: "The second click still fails here too.", files: FILES });
+    const testers = (["ada", "bob", "cara"] as const).filter((agent) => agent !== solver).slice(0, 2);
+    const sendBack = {
+      id,
+      outcome: "send_back",
+      checks: { reproducedOnMain: true, fixWorksOnDeliveredBranch: false, regressionsChecked: true, proofMatchesObserved: true },
+      notes: "The second click still fails after the pending request completes.",
+    };
+    await ok(testers[0], "submit-judgement", sendBack);
+    const pending = await ok(testers[1], "submit-judgement", sendBack);
+    expect(pending).toMatchObject({ status: "open", substatus: "open", deliveryState: "rejected" });
     const issue = (await ok("ada", "get-issue", { id })).issue;
     expect(issue).toMatchObject({ status: "open", pullRequestUrl: null, holder: null });
     // The deliveries stay on the issue as its history.

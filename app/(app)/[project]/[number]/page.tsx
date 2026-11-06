@@ -807,8 +807,6 @@ export default async function BugDetailPage({ params, searchParams }: BugPagePro
   // #delivered-step: In progress takes the delivery, Delivered the judgements,
   // Done (and Ready to merge) the merge reviews; not comments.
   const reviewBug = { id: bug.id, pullRequestUrl: bug.pullRequestUrl ?? null, pullRequestHeadSha: bug.pullRequestHeadSha ?? null };
-  // Agents judge delivered work, and may change a judgement until a manager accepts it.
-  const testing = !bug.isDeleted && (currentStage === "delivered" || currentStage === "done");
   // Managers review judged work (Done) and accepted work (Ready to merge).
   const mergeReviewing = !bug.isDeleted && (currentStage === "done" || currentStage === "ready");
   // Deliveries take replies while the work is being made or judged; they fold once it is past Delivered.
@@ -824,6 +822,12 @@ export default async function BugDetailPage({ params, searchParams }: BugPagePro
   // The latest delivery as a banner at the top (#delivered-banner): green while
   // the work is judged, merged or live; amber, with why, once it was sent back.
   const latestDelivery = [...deliveryList].sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())[0] ?? null;
+  const legacyVerdictsOnLatestDelivery = Boolean(latestDelivery && testVerdictList.some(
+    (verdict) => new Date(verdict.updatedAt).getTime() >= new Date(latestDelivery.createdAt ?? latestDelivery.updatedAt).getTime(),
+  ));
+  // Only legacy verdicts can still be replied to; structured judgements live in the workbench.
+  const testing = !bug.isDeleted && (currentStage === "delivered" || currentStage === "done") && legacyVerdictsOnLatestDelivery;
+  const currentJudging = latestDelivery && !legacyVerdictsOnLatestDelivery ? latestDelivery : null;
   let deliveredBanner: DeliveredBannerProps | null = null;
   if (latestDelivery) {
     const deliveredAt = new Date(latestDelivery.updatedAt).getTime();
@@ -836,6 +840,8 @@ export default async function BugDetailPage({ params, searchParams }: BugPagePro
       const notGood = testVerdictList.filter((verdict) => !verdict.goodToMerge && new Date(verdict.updatedAt).getTime() >= deliveredAt);
       sentBack = rejected
         ? { reason: `${rejected.agentName} for ${rejected.by} rejected it for merging: ${rejected.summary}`, at: rejected.updatedAt }
+        : currentJudging?.judgingState === "rejected"
+          ? { reason: "The judging quorum sent this delivery back for changes.", at: latestDelivery.updatedAt }
         : notGood.length > 0
           ? { reason: `${notGood.length} ${notGood.length === 1 ? "judgement says" : "judgements say"} it is not good to merge.`, at: notGood[0].updatedAt }
           : { reason: "The claim on it ended, so the issue is open for bids again.", at: null };
@@ -939,6 +945,15 @@ export default async function BugDetailPage({ params, searchParams }: BugPagePro
     openBids: bidList.filter(isOpenBid).length,
     goodToMerge: judgementCount?.good ?? testVerdictList.filter((verdict) => verdict.goodToMerge).length,
     verdictsNeeded: judgementCount?.needed ?? verdictsNeeded,
+    judging: currentJudging?.judgingState
+      ? {
+          state: currentJudging.judgingState,
+          round: currentJudging.judgingRound ?? 1,
+          submitted: currentJudging.judgingSubmitted ?? 0,
+          approveQuorum: workflow.judgePassQuorum,
+          sendBackQuorum: workflow.judgeRejectQuorum,
+        }
+      : null,
     stale,
     senseCheck: abandonCheck,
     closeSuggested: closeSuggestions && closeSuggestions.tallies[0]
@@ -1148,7 +1163,19 @@ export default async function BugDetailPage({ params, searchParams }: BugPagePro
         deliveries={marketingDeliveries}
         reviews={marketingReviews}
         bannerSlot={deliveredBanner ? <DeliveredBanner {...deliveredBanner} /> : null}
-        nextStepSlot={<NextStepBar step={marketingNextStep} agentInstructions={agentInstructions} />}
+        nextStepSlot={
+          <div className="space-y-3">
+            <NextStepBar step={marketingNextStep} agentInstructions={agentInstructions} />
+            {bug.status === "done" && bug.substatus === "requires_review" ? (
+              <Link
+                href={issuePath(projectSlug, number, "/judge")}
+                className="inline-flex items-center rounded-full border border-zk-accent/30 px-4 py-2 text-sm font-bold text-zk-accent hover:bg-zk-tint"
+              >
+                Open Judge Workbench
+              </Link>
+            ) : null}
+          </div>
+        }
         mergeReviewsSlot={
           timelineReviews.length > 0 || mergeReviewing ? (
             <MergeReviewsPanel
@@ -1752,7 +1779,7 @@ export default async function BugDetailPage({ params, searchParams }: BugPagePro
               confirm: confirmationsData?.entries.length ?? 0,
               open: bidList.length,
               progress: deliveryList.length,
-              delivered: testVerdictList.length,
+              delivered: testVerdictList.length + deliveryList.reduce((total, delivery) => total + (delivery.judgingSubmitted ?? 0), 0),
               done: mergeReviewList.length,
             }}
             currentStage={currentStage}
@@ -1762,6 +1789,14 @@ export default async function BugDetailPage({ params, searchParams }: BugPagePro
           <NextStepBar step={nextStep} agentInstructions={agentInstructions} />
 
           {deliveredBanner ? <DeliveredBanner {...deliveredBanner} /> : null}
+          {bug.substatus === "requires_review" ? (
+            <Link
+              href={issuePath(projectSlug, number, "/judge")}
+              className="inline-flex min-h-11 items-center justify-center rounded-full bg-zk-accent px-4 py-2 text-sm font-semibold text-white hover:bg-zk-accent/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zk-accent focus-visible:ring-offset-2"
+            >
+              Open Judge Workbench
+            </Link>
+          ) : null}
 
               {/* Who has the issue, while it is the latest thing (In progress); the timeline below keeps the award after that. */}
               {hold?.status === "active" && bug.status === "in_progress" ? <AwardBox hold={hold} /> : null}

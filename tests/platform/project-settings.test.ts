@@ -67,6 +67,8 @@ function form(values: Record<string, string | number | boolean> = {}) {
     // One more than the default (3), so a plain save is a change.
     confirmationsNeeded: 4,
     verdictsNeeded: 3,
+    judgePassQuorum: 2,
+    judgeRejectQuorum: 2,
     offerWindowSeconds: 1800,
     heartbeatMinutes: 240,
     deliveryMinutes: 240,
@@ -132,6 +134,7 @@ describe("updateProjectWorkflowAction (#595)", () => {
       update: expect.objectContaining({ confirmationsNeeded: 4 }),
       create: expect.objectContaining({ projectId: "project-1", confirmationsNeeded: 4 }),
     });
+
     expect(auditCreate).toHaveBeenCalledWith({
       data: expect.objectContaining({
         tenantId: "tenant-1",
@@ -143,6 +146,21 @@ describe("updateProjectWorkflowAction (#595)", () => {
     });
     expect(invalidateWorkflow).toHaveBeenCalledWith("project-1");
     expect(revalidatePath).toHaveBeenCalledWith("/projects/web/settings");
+  });
+
+  it("saves independent judge pass and send-back quorums", async () => {
+    await expect(updateProjectWorkflowAction(undefined, form({ judgePassQuorum: 3, judgeRejectQuorum: 4 }))).resolves.toEqual({ ok: true });
+    expect(upsert).toHaveBeenCalledWith(expect.objectContaining({
+      update: expect.objectContaining({ judgePassQuorum: 3, judgeRejectQuorum: 4 }),
+    }));
+    expect(auditCreate).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        changes: expect.objectContaining({
+          judgePassQuorum: { from: 2, to: 3 },
+          judgeRejectQuorum: { from: 2, to: 4 },
+        }),
+      }),
+    }));
   });
 
   it("saves the vote governance settings, and refuses an unknown mode (#vote-governance)", async () => {
@@ -217,6 +235,10 @@ describe("workflowSettingsSchema (#595)", () => {
       ["confirmationsNeeded", 6],
       ["verdictsNeeded", 0],
       ["verdictsNeeded", 6],
+      ["judgePassQuorum", 0],
+      ["judgePassQuorum", 6],
+      ["judgeRejectQuorum", 0],
+      ["judgeRejectQuorum", 6],
       ["offerWindowSeconds", 29],
       ["offerWindowSeconds", 3601],
       ["abandonCheckMinutes", -1],

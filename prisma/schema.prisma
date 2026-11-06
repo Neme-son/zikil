@@ -271,6 +271,8 @@ model User {
   deliveries                Delivery[]              @relation("DeliveryBeneficiary")
   confirmations             IssueConfirmation[]
   testVerdicts              TestVerdict[]
+  judgingVerdicts           JudgingVerdict[]         @relation("JudgingVerdictOwner")
+  judgingEvents             JudgingEvent[]           @relation("JudgingEventOwner")
   mergeReviews              MergeReview[]           @relation("MergeReviewOnBehalfOf")
   pullRequestReports        PullRequestReport[]     @relation("PullRequestReportOnBehalfOf")
   reviewOffers              ReviewOffer[]
@@ -406,6 +408,8 @@ model Bug {
   /// Head commit of that pull request when it was linked (#489). Acceptance
   /// and the merge gate bind to this exact commit, not just the PR number.
   pullRequestHeadSha        String?
+  /// Consolidated feedback from the last rejected judging round.
+  judgingFeedback           Json?
   createdAt                 DateTime                @default(now())
   updatedAt                 DateTime                @updatedAt
   reporter                  User                    @relation("BugReporter", fields: [reporterId], references: [id])
@@ -443,6 +447,8 @@ model Bug {
   /// The idea this issue was converted from (#idea-table). Every issue starts as one.
   idea                      Idea?
   testVerdicts              TestVerdict[]
+  judgingVerdicts           JudgingVerdict[]
+  judgingEvents             JudgingEvent[]
   mergeReviews              MergeReview[]
   pullRequestReports        PullRequestReport[]
   reviewOffers              ReviewOffer[]
@@ -818,6 +824,10 @@ model ProjectWorkflow {
   projectId              String            @id
   confirmationsNeeded    Int               @default(3)
   verdictsNeeded         Int               @default(3)
+  /// Independent approvals required to pass a structured judging round.
+  judgePassQuorum        Int               @default(2)
+  /// Independent send-backs required to reject a structured judging round.
+  judgeRejectQuorum      Int               @default(2)
   offerWindowSeconds     Int               @default(1800)
   heartbeatMinutes       Int               @default(240)
   deliveryMinutes        Int               @default(240)
@@ -1043,6 +1053,8 @@ model Agent {
   deliveries           Delivery[]
   confirmations        IssueConfirmation[]
   testVerdicts         TestVerdict[]
+  judgingVerdicts      JudgingVerdict[]
+  judgingEvents        JudgingEvent[]
   mergeReviews         MergeReview[]
   pullRequestReports   PullRequestReport[]
   reviewOffers         ReviewOffer[]
@@ -1374,6 +1386,10 @@ model Delivery {
   screenshots       String[]  @default([])
   /// Test output or a verification summary.
   testResults       String?
+  /// Structured judging lifecycle for this delivery.
+  judgingState      String    @default("open")
+  /// Incremented whenever this delivery is replaced with new work.
+  judgingRound      Int       @default(1)
   createdAt         DateTime  @default(now())
   /// When it was last delivered. Delivering again replaces it.
   updatedAt         DateTime  @updatedAt
@@ -1381,6 +1397,8 @@ model Delivery {
   agent             Agent     @relation(fields: [agentId], references: [id], onDelete: Cascade)
   beneficiary       User      @relation("DeliveryBeneficiary", fields: [beneficiaryUserId], references: [id], onDelete: Cascade)
   replies           Comment[]
+  judgingVerdicts   JudgingVerdict[]
+  judgingEvents     JudgingEvent[]
 
   @@unique([bugId, agentId])
   @@index([bugId, createdAt])
@@ -1657,6 +1675,50 @@ model TestVerdict {
   @@unique([bugId, agentId])
   @@index([bugId])
   @@index([agentId])
+}
+
+/// One structured tester judgement for a delivery round.
+model JudgingVerdict {
+  id            String   @id @default(cuid())
+  bugId         String
+  deliveryId    String
+  deliveryRound Int
+  agentId       String
+  ownerId       String
+  approved      Boolean
+  checks        Json
+  evidence      Json
+  notes         String
+  createdAt     DateTime @default(now())
+  bug           Bug      @relation(fields: [bugId], references: [id], onDelete: Cascade)
+  delivery      Delivery @relation(fields: [deliveryId], references: [id], onDelete: Cascade)
+  agent         Agent    @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  owner         User     @relation("JudgingVerdictOwner", fields: [ownerId], references: [id], onDelete: Cascade)
+
+  @@unique([deliveryId, deliveryRound, agentId])
+  @@unique([deliveryId, deliveryRound, ownerId])
+  @@index([bugId, createdAt])
+  @@index([deliveryId, deliveryRound, createdAt])
+}
+
+/// Immutable record of each submitted verdict and each resolved judging round.
+model JudgingEvent {
+  id            String   @id @default(cuid())
+  bugId         String
+  deliveryId    String
+  deliveryRound Int
+  type          String
+  outcome       String?
+  agentId       String
+  ownerId       String
+  createdAt     DateTime @default(now())
+  bug           Bug      @relation(fields: [bugId], references: [id], onDelete: Cascade)
+  delivery      Delivery @relation(fields: [deliveryId], references: [id], onDelete: Cascade)
+  agent         Agent    @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  owner         User     @relation("JudgingEventOwner", fields: [ownerId], references: [id], onDelete: Cascade)
+
+  @@index([bugId, createdAt])
+  @@index([deliveryId, deliveryRound, createdAt])
 }
 
 /// What a pull request looks like on GitHub, as an agent saw it (#pr-reports).

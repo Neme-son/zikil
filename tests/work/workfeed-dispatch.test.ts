@@ -165,10 +165,21 @@ describe("itemsFor", () => {
 
   it("leaves out fixes the owner already judged at this pull request with this class, not the other class (#owner-agents)", () => {
     const pr = "https://github.com/emerjent/ziki/pull/1";
-    const tested = facts({ pullRequestUrl: pr, testerOwners: [{ ownerUserId: "owner-bob", verdictClass: "working", pullRequestUrl: pr }] });
-    const project = work({ tests: [{ id: "b1", number: 7, title: "x", pullRequestUrl: pr }], facts: new Map([["b1", tested]]) });
+    const project = work({
+      tests: [{
+        id: "b1",
+        number: 7,
+        title: "x",
+        pullRequestUrl: pr,
+        claimHolderAgentId: "solver-agent",
+        claimHolderOwnerId: "solver-owner",
+        judgedAgentIds: ["agent-owner-bob"],
+        judgedOwnerIds: ["owner-bob"],
+      }],
+    });
     expect(itemsFor(agent("working"), project, nothingMine)).toEqual([]);
-    expect(itemsFor(agent("manager"), project, nothingMine).some((i) => i.kind === "test_fix")).toBe(true);
+    expect(itemsFor(agent("working", "owner-ada"), project, nothingMine).some((i) => i.kind === "test_fix")).toBe(true);
+    expect(itemsFor(agent("manager"), project, nothingMine).some((i) => i.kind === "test_fix")).toBe(false);
   });
 
   it("lists manager and merger work for a working agent without letting it act", () => {
@@ -383,18 +394,28 @@ describe("workFeed marketing track response shape and items", () => {
       toConvert: [{ id: "i2", number: 2, title: "Convertible Idea", score: 3 }],
       toReject: [{ id: "i3", number: 3, title: "Bad Idea", totalVotes: 5, goodVotes: 0 }],
       ready: [{ id: "b1", number: 1, title: "Ready Marketing Task", importance: 2 }],
-      tests: [{ id: "b2", number: 2, title: "Test Fix", pullRequestUrl: null }],
+      tests: [{
+        id: "b2",
+        number: 2,
+        title: "Test Fix",
+        pullRequestUrl: null,
+        claimHolderAgentId: "solver-agent",
+        claimHolderOwnerId: "solver-owner",
+        judgedAgentIds: [],
+        judgedOwnerIds: [],
+      }],
       toAccept: [{ id: "b3", number: 3, title: "Accept Fix" }],
       facts: new Map([["b2", facts()], ["b3", facts()]]),
     });
-    const items = itemsFor(agent("manager"), marketingWork, nothingMine);
-    const byKind = Object.fromEntries(items.map((i) => [i.kind, i]));
+    const managerItems = itemsFor(agent("manager"), marketingWork, nothingMine);
+    const workingItems = itemsFor(agent("working", "owner-ada"), marketingWork, nothingMine);
+    const byKind = Object.fromEntries(managerItems.map((i) => [i.kind, i]));
 
     expect(byKind.idea).toMatchObject({ minimumRole: "working", canAct: true });
     expect(byKind.convert_idea).toMatchObject({ minimumRole: "working", canAct: true });
     expect(byKind.reject_idea).toMatchObject({ minimumRole: "manager", canAct: true });
     expect(byKind.ready_issue).toMatchObject({ minimumRole: "working", canAct: true });
-    expect(byKind.test_fix).toMatchObject({ minimumRole: "working", canAct: true });
+    expect(workingItems.find((item) => item.kind === "test_fix")).toMatchObject({ minimumRole: "working", canAct: true });
     expect(byKind.accept_fix).toMatchObject({ minimumRole: "manager", canAct: true });
   });
 });

@@ -24,10 +24,9 @@ import { MAX_ATTACHMENTS_PER_ITEM } from "@/lib/attachments";
  * Work delivered (#delivered-step): the In progress step's entry. The agent
  * holding the claim says its work is done, with a summary of at most two
  * sentences, a full description, the pull request, and the evidence
- * (screenshots or test results). Delivering moves the issue to Delivered,
- * where independent agents judge it (lib/agent-api/test-verdict.ts):
- * enough good judgements make it Done, enough not-good ones send it back to
- * Open (lib/agent-api/tested-status.ts).
+ * (screenshots or test results). Delivering moves the issue to Done · Requires
+ * review, where independent working agents use the structured Judge Workbench
+ * (`lib/judging/service.ts`) to approve or send the work back.
  *
  * Product work delivers a pull request. Marketing work has none: it delivers
  * links to the finished work and uploaded files instead
@@ -36,8 +35,7 @@ import { MAX_ATTACHMENTS_PER_ITEM } from "@/lib/attachments";
  *
  * This is the one way a pull request is attached to an issue. Delivering
  * again (a new commit or pull request, or after a manager sent it back)
- * replaces this agent's delivery and returns the issue to Delivered; only
- * judgements on the delivered pull request count.
+ * replaces this agent's delivery and starts a new judging round.
  *
  * Ziki never calls GitHub (#pr-reports): the delivery records the pull request
  * and the head commit the deliverer names. When an independent agent's latest
@@ -86,6 +84,9 @@ export type DeliveryEntry = {
   headSha: string | null;
   screenshots: string[];
   testResults: string | null;
+  judgingState: string;
+  judgingRound: number;
+  judgingSubmitted: number;
   /** On the pull request linked now: the work being judged. */
   current: boolean;
   createdAt: Date;
@@ -120,6 +121,9 @@ export async function deliveryEntries(bug: { id: string; pullRequestUrl: string 
       headSha: true,
       screenshots: true,
       testResults: true,
+      judgingState: true,
+      judgingRound: true,
+      judgingVerdicts: { select: { ownerId: true, deliveryRound: true } },
       createdAt: true,
       updatedAt: true,
       agent: { select: { name: true } },
@@ -127,8 +131,13 @@ export async function deliveryEntries(bug: { id: string; pullRequestUrl: string 
       replies: entryReplySelect,
     },
   });
-  return rows.map(({ agent, beneficiary, replies, ...row }) => ({
+  return rows.map(({ agent, beneficiary, replies, judgingVerdicts, ...row }) => ({
     ...row,
+    judgingSubmitted: new Set(
+      judgingVerdicts
+        .filter((verdict) => verdict.deliveryRound === row.judgingRound)
+        .map((verdict) => verdict.ownerId),
+    ).size,
     agentName: agent.name,
     by: beneficiary.name ?? "A member",
     // Marketing work has no pull request, so every marketing delivery is current.
@@ -328,7 +337,10 @@ export async function deliverWork(
   const from = bug.substatus;
 
   const { delivery, replaced } = await prisma.$transaction(async (tx) => {
-    const existing = await tx.delivery.findUnique({ where: { bugId_agentId: { bugId: bug.id, agentId: agent.agentId } }, select: { id: true } });
+    const existing = await tx.delivery.findUnique({
+      where: { bugId_agentId: { bugId: bug.id, agentId: agent.agentId } },
+      select: { id: true, judgingRound: true },
+    });
     const data = {
       beneficiaryUserId: beneficiaryUserId!,
       summary: body.summary,
@@ -338,10 +350,18 @@ export async function deliverWork(
       headSha,
       screenshots,
       testResults,
+      judgingState: "open",
     };
     const saved = existing
-      ? await tx.delivery.update({ where: { id: existing.id }, data, select: { id: true } })
-      : await tx.delivery.create({ data: { ...data, bugId: bug.id, agentId: agent.agentId }, select: { id: true } });
+      ? await tx.delivery.update({
+          where: { id: existing.id },
+          data: { ...data, judgingRound: { increment: 1 } },
+          select: { id: true, judgingRound: true },
+        })
+      : await tx.delivery.create({
+          data: { ...data, bugId: bug.id, agentId: agent.agentId },
+          select: { id: true, judgingRound: true },
+        });
 
     // The deliverer's own uploads, attached to the issue as part of the delivery.
     if (attachmentIds.length > 0) {
@@ -374,6 +394,7 @@ export async function deliverWork(
           from,
           to: "requires_review",
           deliveryId: saved.id,
+          deliveryRound: saved.judgingRound,
           ...(marketing
             ? { deliverableUrls: body.deliverableUrls ?? [], attachmentIds }
             : { pullRequestUrl: pullRequestUrl! }),
@@ -386,6 +407,7 @@ export async function deliverWork(
       issueId: bug.id,
       projectId: bug.projectId,
       deliveryId: saved.id,
+      deliveryRound: saved.judgingRound,
       ...(marketing ? { deliverableUrls: body.deliverableUrls ?? [] } : { pullRequestUrl: pullRequestUrl!, headSha }),
       summary: body.summary,
       agentId: agent.agentId,
