@@ -92,6 +92,7 @@ function form(values: Record<string, string | number | boolean> = {}) {
     acceptThreshold: 3,
     stakeLimit: 2,
     stakeInProgressLimit: 2,
+    planReviewSeconds: 7200,
     ...values,
   };
   for (const [key, value] of Object.entries(merged)) {

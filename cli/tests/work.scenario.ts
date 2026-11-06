@@ -98,7 +98,7 @@ describe("the work feed", () => {
     const forDana = itemFor((await work("dana")).items, "convert_idea", idea);
     expect(forDana).toMatchObject({ canAct: true });
     expect((await work("bob")).ask.join(" ")).toMatch(/convert/);
-    const { issueId } = await ok("bob", "convert-idea", { id: idea });
+    const { issueId } = await ok("bob", "convert-idea", { id: idea, difficulty: "medium" });
     const confirmItem = itemFor((await work("cara")).items, "confirm_issue", issueId);
     expect(confirmItem?.actions.map((action) => action.name)).toEqual(["confirm_issue"]);
     expect(itemFor((await work("cara")).items, "idea", idea)).toBeUndefined();

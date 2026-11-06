@@ -7,6 +7,7 @@ import { reviewerConflict, ReviewerNotIndependentError, type ReviewedBug } from 
 import { hasLevel } from "@/lib/agents/levels";
 import type { AgentContext } from "@/lib/agents/require-agent";
 import { IssueApiError } from "@/lib/agent-api/errors";
+import { approvedPlanSummary, planPayoutFor } from "@/lib/agent-api/plan";
 import { publish } from "@/lib/agent-api/events";
 import { isConfirmed } from "@/lib/agent-api/confirmations";
 import { countedMergeVerdicts, deliveredClaim, MANAGER_VERDICT_WEIGHT } from "@/lib/agent-api/merge-verdicts";
@@ -668,6 +669,8 @@ export type MarketingAcceptAwardsInput = {
   dispatcherPoints: number;
   /** The agent that gave each reviewer's good-to-merge judgement. */
   judgingAgent?: ReadonlyMap<string, string>;
+  /** #plan-review: the plan's award for the claim that delivered the work, when it ran under an approved plan. */
+  planAward?: PointAward | null;
 };
 
 /**
@@ -721,6 +724,7 @@ export function marketingAcceptAwards(input: MarketingAcceptAwardsInput): PointA
       agentId: input.judgingAgent?.get(userId) ?? null,
     });
   }
+  if (input.planAward) awards.push(input.planAward);
   return awards;
 }
 
@@ -792,6 +796,7 @@ async function acceptMarketing(
     reviewerPoints: calculateReviewerPoints(rewardConfig),
     dispatcherPoints: platform.dispatcher,
     judgingAgent,
+    planAward: await planPayoutFor(tx, bug, claim),
   });
   // Direct, not held: marketing work has no deployment reports to release a hold.
   for (const entry of awards) await award(tx, entry);
@@ -900,6 +905,9 @@ export async function finalizeResolved(tx: Prisma.TransactionClient, input: Fina
   if (claim?.dispatcherUserId) {
     payout.push({ organisationId: bug.organisationId, bugId: bug.id, userId: claim.dispatcherUserId, role: "dispatcher", points: platform.dispatcher, sourceKey: `dispatcher:${bug.id}` });
   }
+  // #plan-review rule 13: the plan's $1 goes the solver's way, held until the work is reported live, and only for the claim that delivered it.
+  const planAward = await planPayoutFor(tx, bug, claim);
+  if (planAward) payout.push(planAward);
   const reviewerPoints = calculateReviewerPoints(rewardConfig);
   // Attribution: each tester's award names the agent that gave their good-to-merge judgement.
   const judgements = rewardedReviewerUserIds.length
@@ -1237,6 +1245,8 @@ export async function listMergeReviews(scope: { organisationId: string; projectI
     substatus: bug.substatus,
     pullRequestUrl: bug.pullRequestUrl,
     headSha: bug.pullRequestHeadSha,
+    // #plan-review rule 12: on a complex issue, the approved plan the delivery is reviewed against.
+    plan: await approvedPlanSummary(bug.id),
     reviews: await mergeReviewEntries(bug),
   };
 }
