@@ -45,6 +45,7 @@ import { issuePath } from "@/lib/issue-ref";
 import { ideaPath, projectPath, projectRef } from "@/lib/project-paths";
 import { contestsIn, liveStakesOf, STAKE_REFRESH_MS, sweepStakes } from "@/lib/agent-api/stakes";
 import { eventStreamBus, ORGANISATION_WRITE, type StreamEvent } from "@/lib/events/stream-bus";
+import { activeLevels, levelIn } from "@/lib/agents/active-in";
 
 /**
  * One list of everything an agent can do in a project (#work-feed).
@@ -355,14 +356,14 @@ export function projectWork(organisationId: string, project: FeedProject, track:
  * project-wide lists under exactly their own rules. The per-agent filter
  * below applies independence afterwards.
  */
-function neutralCaller(organisationId: string, projectId: string): AgentContext {
-  return { agentId: "work-feed", name: "work-feed", ownerId: "work-feed", organisationId, level: "merger", burst: false, keyId: "work-feed", projectId };
+function neutralCaller(organisationId: string): AgentContext {
+  return { agentId: "work-feed", name: "work-feed", ownerId: "work-feed", organisationId, level: "merger", burst: false, keyId: "work-feed" };
 }
 
 async function buildProjectWork(organisationId: string, project: FeedProject, track: WorkTrack = "product"): Promise<ProjectWork> {
   // #stakes: settle wins, drops and decided contests first, so the feed shows where they stand.
   await sweepStakes({ organisationId, projectId: project.id }).catch(() => null);
-  const caller = neutralCaller(organisationId, project.id);
+  const caller = neutralCaller(organisationId);
   // One read decides every converted issue's stage: which still require
   // confirmation, and for what, and which are ready (#714).
   const isMarketing = track === "marketing";
@@ -734,7 +735,7 @@ async function openBids(organisationId: string, projectId: string, managerVoteWe
       agent: { select: { name: true, ownerUserId: true } },
       beneficiary: { select: { name: true } },
       bug: { select: { id: true, number: true, title: true } },
-      votes: { select: { onBehalfOfUserId: true, agent: { select: { level: true } } } },
+      votes: { select: { onBehalfOfUserId: true, agent: { select: { activations: activeLevels } } } },
     },
   });
   // Each bidder's load, for the award items (#bidder-capacity).
@@ -747,7 +748,7 @@ async function openBids(organisationId: string, projectId: string, managerVoteWe
     ownerIds: [row.beneficiaryUserId, row.agent.ownerUserId],
     by: row.beneficiary.name ?? "A member",
     summary: row.summary,
-    weightedVotes: weightedTally(row.votes.map((vote) => ({ ownerId: vote.onBehalfOfUserId, level: vote.agent?.level })), managerVoteWeight),
+    weightedVotes: weightedTally(row.votes.map((vote) => ({ ownerId: vote.onBehalfOfUserId, level: levelIn(vote.agent, organisationId) })), managerVoteWeight),
     voters: row.votes.map((vote) => vote.onBehalfOfUserId),
     createdAt: row.createdAt,
   }));
@@ -889,6 +890,7 @@ async function loadIdeaFacts(ids: string[]): Promise<Map<string, IdeaFacts>> {
     where: { id: { in: ids } },
     select: {
       id: true,
+      organisationId: true,
       reporterId: true,
       beneficiaryUserId: true,
       createdByAgent: { select: { ownerUserId: true } },
@@ -928,6 +930,7 @@ async function loadFacts(ids: string[]): Promise<Map<string, IssueFacts>> {
     where: { id: { in: ids } },
     select: {
       id: true,
+      organisationId: true,
       reporterId: true,
       beneficiaryUserId: true,
       assigneeId: true,
@@ -938,7 +941,7 @@ async function loadFacts(ids: string[]): Promise<Map<string, IssueFacts>> {
       deliveries: { select: { pullRequestUrl: true, agentId: true } },
       confirmations: { where: { undoneAt: null }, select: { updatedAt: true, onBehalfOfUserId: true, weightClass: true } },
       revisions: { orderBy: { editedAt: "desc" }, take: 1, select: { editedAt: true } },
-      testVerdicts: { select: { pullRequestUrl: true, agent: { select: { ownerUserId: true, level: true } } } },
+      testVerdicts: { select: { pullRequestUrl: true, agent: { select: { ownerUserId: true, activations: activeLevels } } } },
     },
   });
   return new Map(
@@ -956,7 +959,7 @@ async function loadFacts(ids: string[]): Promise<Map<string, IssueFacts>> {
         confirmerOwners: bug.confirmations
           .filter((c) => !bug.revisions[0] || c.updatedAt > bug.revisions[0].editedAt)
           .map((c) => `${c.onBehalfOfUserId}:${c.weightClass}`),
-        testerOwners: bug.testVerdicts.map((v) => ({ ownerUserId: v.agent.ownerUserId, verdictClass: verdictClass(v.agent.level), pullRequestUrl: v.pullRequestUrl })),
+        testerOwners: bug.testVerdicts.map((v) => ({ ownerUserId: v.agent.ownerUserId, verdictClass: verdictClass(levelIn(v.agent, bug.organisationId)), pullRequestUrl: v.pullRequestUrl })),
         deliveryAgentIds: bug.deliveries.filter((d) => d.pullRequestUrl === bug.pullRequestUrl).map((d) => d.agentId),
       },
     ]),

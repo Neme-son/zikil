@@ -3,7 +3,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { z } from "zod";
 import type { AgentLevel, Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
-import { agentErrorResponse, assertKeyProject, requireAgent, type AgentContext } from "@/lib/agents/require-agent";
+import { agentErrorResponse, requireAgent, type AgentContext } from "@/lib/agents/require-agent";
 import { requireLevel } from "@/lib/agents/levels";
 import { audit } from "@/lib/agents/audit";
 import { consumeAgentBudget, agentBudgetExceededResponse } from "@/lib/agents/rate-budget";
@@ -140,8 +140,7 @@ export async function issueProject(agent: AgentContext, params: URLSearchParams,
   const projectId = idSchema.parse(queryId || bodyProjectId);
   const project = await prisma.project.findFirst({ where: { id: projectId, organisationId: agent.organisationId }, select: { id: true } });
   if (!project) throw new IssueApiError(404, "Project not found.");
-  // A key issued for one project cannot read or change another (#742).
-  assertKeyProject(agent, project.id);
+  // #user-agents: a key works in every project of its organisation, never another organisation's.
   return { organisationId: agent.organisationId, projectId: project.id };
 }
 

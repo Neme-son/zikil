@@ -178,6 +178,10 @@ END $$;
   // running it again over any state is safe: the probe always passes.
   "20270110000000_organisations": `SELECT 1;
 `,
+  // One statement that takes its locks first and returns early once done:
+  // it applies whole or not at all, so a failed run is always safe to retry.
+  "20270111000000_user_owned_agents": `SELECT 1;
+`,
 };
 
 /** True when `name` has a probe and the probe finds none of its objects. */

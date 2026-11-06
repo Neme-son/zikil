@@ -139,6 +139,7 @@ import "./issue-detail.css";
 import { stateLabel } from "@/lib/labels";
 import { IssueRewardPanel } from "@/components/issue-reward-panel";
 import { rewardEstimatesFor } from "@/lib/agent-api/reward-estimates";
+import { activeIn, activeLevels, levelIn } from "@/lib/agents/active-in";
 
 type BugPageProps = {
   params: Promise<{ org: string; project: string; number: string }>;
@@ -607,7 +608,7 @@ export default async function BugDetailPage({ params, searchParams }: BugPagePro
                 id: true,
                 createdAt: true,
                 action: true,
-                agent: { select: { name: true, level: true } },
+                agent: { select: { name: true, activations: activeLevels } },
                 payload: true,
               },
             }),
@@ -727,7 +728,7 @@ export default async function BugDetailPage({ params, searchParams }: BugPagePro
           ]);
           if (workedOn > 0 || myOpenBid > 0) return [];
           return prisma.agent.findMany({
-            where: { organisationId: bug.organisationId, ownerUserId: user.id, revokedAt: null },
+            where: { ...activeIn(bug.organisationId), ownerUserId: user.id, revokedAt: null },
             orderBy: { name: "asc" },
             select: { id: true, name: true },
           });
@@ -738,7 +739,7 @@ export default async function BugDetailPage({ params, searchParams }: BugPagePro
   const mentionAgents = canTriage
     ? await loadOptional("mention agents", [], () =>
         prisma.agent.findMany({
-          where: { organisationId: bug.organisationId, revokedAt: null },
+          where: { ...activeIn(bug.organisationId), revokedAt: null },
           orderBy: { name: "asc" },
           select: { id: true, name: true, owner: { select: { name: true } } },
         }),
@@ -884,7 +885,9 @@ export default async function BugDetailPage({ params, searchParams }: BugPagePro
     const [githubStatus, myAgents, latestReport] = await Promise.all([
       loadOptional("GitHub status", null, () => storedGitHubStatus({ id: bug.id, pullRequestUrl })),
       loadOptional("agent levels", [] as { level: "working" | "manager" | "merger" }[], () =>
-        prisma.agent.findMany({ where: { organisationId: bug.organisationId, ownerUserId: user.id, revokedAt: null }, select: { level: true } }),
+        prisma.agent
+          .findMany({ where: { ...activeIn(bug.organisationId), ownerUserId: user.id, revokedAt: null }, select: { activations: activeLevels } })
+          .then((rows) => rows.map((row) => ({ level: levelIn(row, bug.organisationId) }))),
       ),
       loadOptional("latest pull request report", null, () =>
         prisma.pullRequestReport.findFirst({
@@ -919,7 +922,7 @@ export default async function BugDetailPage({ params, searchParams }: BugPagePro
   // Looked up here, not on `hold`: holder is also what agents read through the API.
   const workingAgent = hold?.status === "active"
     ? await loadOptional("working agent", null, () => prisma.agent.findFirst({
-        where: { organisationId: bug.organisationId, claims: { some: { bugId: bug.id, status: "active", releasedAt: null } } },
+        where: { ...activeIn(bug.organisationId), claims: { some: { bugId: bug.id, status: "active", releasedAt: null } } },
         select: { id: true, ownerUserId: true, revokedAt: true, pausedAt: true },
       }))
     : null;

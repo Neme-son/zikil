@@ -1,6 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { activeIn } from "@/lib/agents/active-in";
 import { revalidateIssue } from "@/lib/revalidate-issue";
 import { fieldError, fromZodError } from "@/lib/form-errors";
 import { redirect } from "next/navigation";
@@ -749,7 +750,9 @@ export async function updateBugAction(
         // Create an offered claim for the new assignee's agent, if any.
         if (data.assigneeId && typeof tx.issueClaim?.create === "function") {
           const agent = await tx.agent.findFirst({
-            where: { ownerUserId: data.assigneeId, defaultProjectId: existing.projectId },
+            // #user-agents: their oldest agent active in this organisation.
+            where: { ownerUserId: data.assigneeId, revokedAt: null, ...activeIn(existing.organisationId) },
+            orderBy: { createdAt: "asc" },
             select: { id: true },
           });
           if (agent) {

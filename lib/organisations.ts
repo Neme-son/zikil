@@ -510,11 +510,11 @@ export async function deleteOrganisation(
 
   const counts = await db.organisation.findUnique({
     where: { id: organisation.id },
-    select: { _count: { select: { bugs: true, ideas: true, agents: true, memberships: true } } },
+    select: { _count: { select: { bugs: true, ideas: true, agentActivations: { where: { deactivatedAt: null } }, memberships: true } } },
   });
   if (!counts) return { ok: false, error: "That organisation no longer exists." };
 
-  const { bugs, ideas, agents, memberships } = counts._count;
+  const { bugs, ideas, agentActivations: agents, memberships } = counts._count;
   if (bugs > 0 || ideas > 0 || agents > 0 || memberships > 1) {
     return {
       ok: false,

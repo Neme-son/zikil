@@ -166,7 +166,6 @@ export default async function WorkstreamPage({ params }: { params: Promise<{ org
                     label={group.label}
                     request={sectionRequest(project.name, `${group.label} work`, group.items)}
                     agents={askAgents}
-                    projectId={project.id}
                   />
                 </div>
               ) : null}
