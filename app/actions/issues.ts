@@ -1257,7 +1257,7 @@ export async function editPullRequestUrlAction(
   }
 
   const existing = await prisma.bug.findUnique({
-    where: { id: bugId, ...bugInTenant(await currentTenantIdFor(userId)) },
+    where: { id: bugId, ...bugInOrganisation(await currentOrganisationIdFor(userId)) },
     select: {
       id: true,
       status: true,
@@ -1317,7 +1317,7 @@ export async function editPullRequestUrlAction(
     canEditTicket({
       actorId: userId,
       actorRole: user.role,
-      membershipRole: (await currentTenantAccess(userId, user.role)).membershipRole,
+      membershipRole: (await currentOrganisationAccess(userId, user.role)).membershipRole,
       reporterId: existing.reporterId,
     });
   if (!mayEditPullRequest) {
