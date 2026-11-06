@@ -18,6 +18,12 @@ test.describe("accessibility", () => {
       await page.goto("/login");
       await expectNoA11yViolations(page);
     });
+
+    test("the landing page, with every FAQ answer open", async ({ page }) => {
+      await page.goto("/");
+      for (const question of await page.locator("#faq summary").all()) await question.click();
+      await expectNoA11yViolations(page);
+    });
   });
 
   test.describe("as a user", () => {

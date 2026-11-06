@@ -569,6 +569,44 @@
 .ziki-homepage .path-cta { align-items: center; display: inline-flex; font-size: 14px; font-weight: 700; gap: 6px; margin-top: auto; padding-top: 22px; }
 .ziki-homepage .path-card:hover .path-cta { color: var(--green); }
 
+/* Homepage: why Ziki exists (#landing-faq). A ruled list in one quiet frame: the border does the work. */
+.ziki-homepage .why-section { align-items: center; display: grid; gap: 72px; grid-template-columns: .9fr 1.1fr; padding-bottom: 30px; }
+.ziki-homepage .why-copy h2 { font-size: clamp(34px, 3.9vw, 48px); font-weight: 500; letter-spacing: -.05em; line-height: 1.06; text-wrap: balance; }
+.ziki-homepage .why-copy > p { color: var(--muted); font-size: 16px; line-height: 1.65; margin-top: 22px; max-width: 480px; }
+.ziki-homepage .why-copy .path-cta { margin-top: 26px; padding-top: 0; }
+.ziki-homepage .why-list { border: 1px solid var(--line); border-radius: 18px; list-style: none; margin: 0; padding: 0; }
+.ziki-homepage .why-list li { display: flex; gap: 18px; padding: 24px 26px; }
+.ziki-homepage .why-list li + li { border-top: 1px solid var(--line); }
+.ziki-homepage .why-list .lifecycle-icon { flex: none; height: 40px; margin: 0; width: 40px; }
+.ziki-homepage .why-list h3 { font-size: 17px; line-height: 1.3; margin-top: 2px; }
+.ziki-homepage .why-list p { color: var(--muted); font-size: 15px; line-height: 1.6; margin-top: 6px; }
+
+/* Home page FAQ: the intro's llms.txt link and the links under some answers (#landing-faq). */
+.ziki-homepage .home-faq .section-heading a, .ziki-homepage .home-faq-links a { color: var(--ink); font-weight: 600; text-decoration: underline; text-decoration-color: var(--green); text-decoration-thickness: 2px; text-underline-offset: 4px; }
+.ziki-homepage .home-faq .section-heading p { text-wrap: balance; }
+.ziki-homepage .home-faq-item p:has(+ .home-faq-links) { padding-bottom: 12px; }
+.ziki-homepage .home-faq-item .home-faq-links { display: flex; flex-wrap: wrap; font-size: 14px; gap: 6px 20px; }
+
+/* Small blue text on white uses the button blue, so it passes WCAG AA (5.2:1; --green is 4.04:1): the section and
+   path kickers, a hovered FAQ question and the FAQ's links on hover. Dark mode keeps --green. */
+.ziki-homepage .section-kicker:not(.light), .ziki-homepage .path-kicker, .ziki-homepage .home-faq-item summary:hover,
+.ziki-homepage .home-faq .section-heading a:hover, .ziki-homepage .home-faq-links a:hover, .ziki-homepage .why-copy .path-cta:hover { color: #2864d7; }
+:root[data-theme='dark'] .ziki-homepage .section-kicker:not(.light), :root[data-theme='dark'] .ziki-homepage .path-kicker,
+:root[data-theme='dark'] .ziki-homepage .home-faq-item summary:hover, :root[data-theme='dark'] .ziki-homepage .home-faq .section-heading a:hover,
+:root[data-theme='dark'] .ziki-homepage .home-faq-links a:hover, :root[data-theme='dark'] .ziki-homepage .why-copy .path-cta:hover { color: var(--green); }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) .ziki-homepage .section-kicker:not(.light), :root:not([data-theme='light']) .ziki-homepage .path-kicker,
+  :root:not([data-theme='light']) .ziki-homepage .home-faq-item summary:hover, :root:not([data-theme='light']) .ziki-homepage .home-faq .section-heading a:hover,
+  :root:not([data-theme='light']) .ziki-homepage .home-faq-links a:hover, :root:not([data-theme='light']) .ziki-homepage .why-copy .path-cta:hover { color: var(--green); }
+}
+
+@media (max-width: 900px) {
+  .ziki-homepage .why-section { gap: 40px; grid-template-columns: 1fr; }
+}
+@media (max-width: 720px) {
+  .ziki-homepage .why-list li { gap: 14px; padding: 20px 18px; }
+}
+
 /* How it works: status track */
 .ziki-homepage .status-section { padding-top: 40px; }
 .ziki-homepage .status-track { counter-reset: status; display: grid; gap: 12px; grid-template-columns: repeat(5, 1fr); list-style: none; margin: 0; padding: 0; }

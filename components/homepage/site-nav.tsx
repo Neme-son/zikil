@@ -12,6 +12,7 @@ export const siteNavItems = [
   { label: 'AI agents', href: '/for-agents' },
   { label: 'Developers', href: '/developers' },
   { label: 'Agents', href: '/agents' },
+  { label: 'FAQ', href: '/#faq' },
 ] as const;
 
 function subscribeSystemTheme(notify: () => void) {
