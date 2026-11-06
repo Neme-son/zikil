@@ -26,6 +26,19 @@ function heartbeatCutoff(now: Date, heartbeatMinutes: number): Date {
 }
 
 /**
+ * How long a pause protects the agent's claims (#236). A pause stops the
+ * clocks so an owner can look at what their agent is doing; past this, the
+ * pause was most likely forgotten, and its issues go back to Open for others
+ * rather than stay blocked.
+ */
+export const PAUSE_HOLD_CAP_HOURS = 24;
+
+/** Agents paused at or before this moment have outlasted the cap. */
+export function pauseCapCutoff(now: Date): Date {
+  return new Date(now.getTime() - PAUSE_HOLD_CAP_HOURS * 60 * 60_000);
+}
+
+/**
  * Claims a sweep should inspect: silent ones (no heartbeat for the project's
  * heartbeat window, 15 minutes by default) and
  * overdue ones (#593) whose fix is not linked yet. Both are released and the
@@ -102,7 +115,7 @@ type ReleaseOutcome = {
 async function releaseClaimIfStale(
   claim: StaleClaimRef,
   cutoff: Date,
-  options: { actorUserId?: string | null } = {},
+  options: { actorUserId?: string | null; pauseExpired?: boolean } = {},
 ): Promise<ReleaseOutcome> {
   const organisationId = claim.bug.organisationId;
   const projectId = claim.bug.projectId;
@@ -111,14 +124,21 @@ async function releaseClaimIfStale(
     // Pause/resume and releases serialize on the same agent row. The bug is
     // always locked first by claim transitions; pause/resume never locks it.
     await tx.$queryRaw`SELECT a."id" FROM "Agent" a JOIN "IssueClaim" c ON c."agentId" = a."id" WHERE c."id" = ${claim.id} FOR UPDATE OF a`;
-    // Re-read after locking: a heartbeat or another sweep may have won the race.
-    const fresh = await tx.issueClaim.findFirst({ where: { id: claim.id, status: "active", releasedAt: null,
-      agent: { pausedAt: null }, bug: { projectId, organisationId, isDeleted: false, status: "in_progress" } },
-      include: { bug: { select: { pullRequestUrl: true, project: { select: { ownerWaitCapMinutes: true } } } } } });
     const now = new Date();
+    // Re-read after locking: a heartbeat, a resume or another sweep may have
+    // won the race. A paused agent's claim is only released once its pause
+    // has outlasted the cap (#236).
+    const fresh = await tx.issueClaim.findFirst({ where: { id: claim.id, status: "active", releasedAt: null,
+      agent: { pausedAt: options.pauseExpired ? { lte: pauseCapCutoff(now) } : null },
+      bug: { projectId, organisationId, isDeleted: false, status: "in_progress" } },
+      include: { bug: { select: { pullRequestUrl: true, project: { select: { ownerWaitCapMinutes: true } } } } } });
     if (!fresh) return { released: false, opened: false };
-    let reason: "silence" | "deadline" | "owner_unresponsive";
-    if (fresh.waitingOnOwnerSince) {
+    let reason: "silence" | "deadline" | "owner_unresponsive" | "pause_expired";
+    if (options.pauseExpired) {
+      // A delivered fix stays with its agent: the pause only stops new work.
+      if (fresh.bug?.pullRequestUrl) return { released: false, opened: false };
+      reason = "pause_expired";
+    } else if (fresh.waitingOnOwnerSince) {
       // #606: the clocks are paused while the agent waits on its owner, up to the cap.
       const cap = ownerWaitCapMinutes(fresh.bug?.project?.ownerWaitCapMinutes);
       if (!isOwnerWaitOver(fresh.waitingOnOwnerSince, now, cap)) return { released: false, opened: false };
@@ -209,6 +229,43 @@ async function sweepOwnerWaits(
     } else {
       await remindOwnerIfDue(claim.agentId, claim.bugId, now);
     }
+  }
+  return { released };
+}
+
+/**
+ * Claims held by an agent whose owner paused it more than
+ * PAUSE_HOLD_CAP_HOURS ago (#236) and whose fix isn't linked yet: released
+ * for `pause_expired`, and the issue goes back to Open for bids. When the
+ * owner resumes, the agent keeps working on whatever it still holds.
+ */
+async function sweepExpiredPauses(
+  now: Date,
+  cutoff: Date,
+  scope: { projectId?: string; organisationId?: string } = {},
+  options: { actorUserId?: string | null; limit?: number } = {},
+) {
+  const held = await prisma.issueClaim.findMany({
+    where: {
+      status: "active",
+      releasedAt: null,
+      agent: { pausedAt: { lte: pauseCapCutoff(now) } },
+      bug: {
+        isDeleted: false,
+        status: "in_progress",
+        pullRequestUrl: null,
+        ...(scope.projectId ? { projectId: scope.projectId } : {}),
+        ...(scope.organisationId ? { organisationId: scope.organisationId } : {}),
+      },
+    },
+    select: { id: true, bugId: true, bug: { select: { organisationId: true, projectId: true } } },
+    orderBy: { createdAt: "asc" },
+    ...(options.limit ? { take: options.limit } : {}),
+  });
+  let released = 0;
+  for (const claim of held) {
+    const outcome = await releaseClaimIfStale(claim, cutoff, { actorUserId: options.actorUserId ?? null, pauseExpired: true });
+    if (outcome.released) released++;
   }
   return { released };
 }
@@ -386,7 +443,8 @@ export async function releaseStaleClaims(projectId: string) {
     if (outcome.released) released++;
   }
   const waits = await sweepOwnerWaits(now, cutoff, { projectId, organisationId: project.organisationId }, { actorUserId: admin.id });
-  return { released: released + waits.released };
+  const pauses = await sweepExpiredPauses(now, cutoff, { projectId, organisationId: project.organisationId }, { actorUserId: admin.id });
+  return { released: released + waits.released + pauses.released };
 }
 
 export type ClaimSweepResult = { released: number };
@@ -459,5 +517,11 @@ export async function sweepStaleClaims(limit = 50): Promise<ClaimSweepResult> {
     {},
     { limit },
   );
-  return { released: released + waits.released };
+  const pauses = await sweepExpiredPauses(
+    now,
+    heartbeatCutoff(now, DEFAULT_PROJECT_WORKFLOW.heartbeatMinutes),
+    {},
+    { limit },
+  );
+  return { released: released + waits.released + pauses.released };
 }

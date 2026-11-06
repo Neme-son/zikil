@@ -24,11 +24,11 @@ vi.mock("@/lib/auth-helpers", () => ({ requireSuperAdmin: mocks.admin, requireUs
 vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
 vi.mock("@/lib/agents/rate-budget", async (original) => ({ ...await original<typeof import("@/lib/agents/rate-budget")>(), consumeAgentBudget: mocks.budget }));
 vi.mock("@/lib/notify", () => ({ notifyLater: mocks.notifyLater }));
-import { releaseStaleClaims } from "@/lib/agent-api/availability";
+import { PAUSE_HOLD_CAP_HOURS, releaseStaleClaims } from "@/lib/agent-api/availability";
 import { DEFAULT_PROJECT_WORKFLOW } from "@/lib/workflow-config";
 import { POST } from "@/app/api/v1/issues/[id]/heartbeat/route";
 import { POST as acknowledge } from "@/app/api/v1/issues/[id]/steer/[steerId]/ack/route";
-import { setAgentPaused, sendIssueSteer } from "@/app/actions/agent-steering";
+import { setAgentPaused, setAllAgentsPaused, sendIssueSteer } from "@/app/actions/agent-steering";
 import { agentIssueRequest } from "@/lib/agent-api/issues";
 import { currentHold } from "@/lib/issue-holders";
 import { staleHold } from "@/lib/agent-api/stale-hold";
@@ -55,6 +55,10 @@ beforeEach(() => {
   db.issueClaim.findFirst.mockResolvedValue(claim);
   db.issueClaim.findUnique.mockResolvedValue({ agentId: "agent" });
   db.issueClaim.findMany.mockResolvedValue([{ id: "claim", bugId: "issue", bug: { organisationId: "organisation", projectId: "project" } }]);
+  // The pause-cap sweep (#236) finds nothing unless a test says otherwise.
+  db.issueClaim.findMany.mockImplementation(async (query) => (
+    query?.where?.agent?.pausedAt?.lte ? [] : [{ id: "claim", bugId: "issue", bug: { organisationId: "organisation", projectId: "project" } }]
+  ));
   db.issueClaim.update.mockResolvedValue({ ...claim, lastHeartbeatAt: now });
   db.issueClaim.count.mockResolvedValue(0);
   db.issueClaim.create.mockResolvedValue({ id: "claim-next", bugId: "issue", offeredAt: now });
@@ -301,7 +305,9 @@ describe("owner pause and steering", () => {
     db.issueClaim.findFirst.mockResolvedValue(null);
     expect(await releaseStaleClaims("project")).toEqual({ released: 0 });
     expect(db.issueClaim.findFirst).toHaveBeenCalledWith(expect.objectContaining({ where: expect.objectContaining({ agent: { pausedAt: null } }) }));
-    expect(db.issueClaim.findMany.mock.calls.every(([query]) => query.where.agent?.pausedAt === null)).toBe(true);
+    // Only the pause-cap sweep (#236) looks at paused agents, and only past the cap.
+    expect(db.issueClaim.findMany.mock.calls.every(([query]) =>
+      query.where.agent?.pausedAt === null || query.where.agent?.pausedAt?.lte instanceof Date)).toBe(true);
     expect(db.issueClaim.update).not.toHaveBeenCalled();
   });
 
@@ -364,5 +370,66 @@ describe("owner pause and steering", () => {
     await expect(staleHold("issue", now)).resolves.toBeNull();
     db.issueClaim.findFirst.mockResolvedValue({ ...silent, agent: { pausedAt: null } });
     await expect(staleHold("issue", now)).resolves.toMatchObject({ kind: "silent" });
+  });
+});
+
+describe("Pause all and the 24-hour pause cap (#236)", () => {
+  const capCutoff = new Date(now.getTime() - PAUSE_HOLD_CAP_HOURS * 60 * 60_000);
+  const heldRow = { id: "claim", bugId: "issue", bug: { organisationId: "organisation", projectId: "project" } };
+
+  it("pauses every live agent the owner has that is still working, in one transaction", async () => {
+    db.agent.findMany.mockResolvedValue([{ id: "a1" }, { id: "a2" }]);
+    db.agent.findFirst.mockImplementation(async (query) => ({ id: query.where.id, pausedAt: null }));
+    db.issueClaim.findMany.mockResolvedValue([]);
+    expect(await setAllAgentsPaused(true)).toEqual({ ok: true, changed: 2 });
+    expect(db.$transaction).toHaveBeenCalledTimes(1);
+    expect(db.agent.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: { ownerUserId: "owner", revokedAt: null, pausedAt: null } }));
+    expect(db.agent.update).toHaveBeenCalledWith({ where: { id: "a1" }, data: { pausedAt: now } });
+    expect(db.agent.update).toHaveBeenCalledWith({ where: { id: "a2" }, data: { pausedAt: now } });
+    // Each agent is looked up as the signed-in owner's.
+    expect(db.agent.findFirst.mock.calls.every(([query]) => query.where.ownerUserId === "owner")).toBe(true);
+  });
+
+  it("resumes every paused agent and gives each its paused time back", async () => {
+    const pauseStart = new Date(now.getTime() - 60_000);
+    db.agent.findMany.mockResolvedValue([{ id: "agent" }]);
+    db.agent.findFirst.mockResolvedValue({ id: "agent", pausedAt: pauseStart });
+    const deliverBy = new Date(now.getTime() + 3_600_000);
+    db.issueClaim.findMany.mockResolvedValue([{ ...claim, deliverBy, waitingOnOwnerSince: null }]);
+    expect(await setAllAgentsPaused(false)).toEqual({ ok: true, changed: 1 });
+    expect(db.agent.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: { ownerUserId: "owner", revokedAt: null, pausedAt: { not: null } } }));
+    expect(db.issueClaim.update).toHaveBeenCalledWith({ where: { id: "claim" }, data: expect.objectContaining({
+      deliverBy: new Date(deliverBy.getTime() + 60_000) }) });
+    expect(db.agent.update).toHaveBeenCalledWith({ where: { id: "agent" }, data: { pausedAt: null } });
+  });
+
+  it("changes nothing when no agent needs it", async () => {
+    db.agent.findMany.mockResolvedValue([]);
+    expect(await setAllAgentsPaused(true)).toEqual({ ok: true, changed: 0 });
+    expect(db.agent.update).not.toHaveBeenCalled();
+  });
+
+  it("releases an undelivered claim once its agent's pause outlasts 24 hours", async () => {
+    db.issueClaim.findMany.mockImplementation(async (query) => (query?.where?.agent?.pausedAt?.lte ? [heldRow] : []));
+    db.issueClaim.findFirst.mockResolvedValue({ ...claim, lastHeartbeatAt: now, bug: { pullRequestUrl: null, project: { ownerWaitCapMinutes: null } } });
+    expect(await releaseStaleClaims("project")).toEqual({ released: 1 });
+    expect(db.issueClaim.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: expect.objectContaining({
+      agent: { pausedAt: { lte: capCutoff } }, bug: expect.objectContaining({ pullRequestUrl: null }) }) }));
+    // The re-read after locking checks the cap again, so a resume in between wins.
+    expect(db.issueClaim.findFirst).toHaveBeenCalledWith(expect.objectContaining({ where: expect.objectContaining({
+      agent: { pausedAt: { lte: capCutoff } } }) }));
+    expect(db.issueClaim.update).toHaveBeenCalledWith({ where: { id: "claim" }, data: { status: "released", releasedAt: now, releaseReason: "pause_expired" } });
+    expect(db.bug.updateMany).toHaveBeenCalledWith(expect.objectContaining({ data: { assigneeId: null, status: "open", substatus: "open" } }));
+  });
+
+  it("keeps a paused agent's claim whose fix is already linked, or that a resume won", async () => {
+    db.issueClaim.findMany.mockImplementation(async (query) => (query?.where?.agent?.pausedAt?.lte ? [heldRow] : []));
+    db.issueClaim.findFirst.mockResolvedValueOnce({ ...claim, bug: { pullRequestUrl: "https://github.com/o/r/pull/1", project: { ownerWaitCapMinutes: null } } });
+    expect(await releaseStaleClaims("project")).toEqual({ released: 0 });
+    db.issueClaim.findFirst.mockResolvedValueOnce(null);
+    expect(await releaseStaleClaims("project")).toEqual({ released: 0 });
+    expect(db.issueClaim.update).not.toHaveBeenCalled();
   });
 });

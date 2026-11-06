@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useTransition } from "react";
-import { setAgentPaused } from "@/app/actions/agent-steering";
+import { setAgentPaused, setAllAgentsPaused } from "@/app/actions/agent-steering";
 import Link from "next/link";
 import type { AgentLevel } from "@prisma/client";
 import { AGENT_LEVEL_LABELS } from "@/lib/agents/levels";
@@ -74,6 +74,11 @@ export function ManageAgentsList({
     );
   });
 
+  // Pause all / Resume all (#236): while any live agent is working, the button
+  // stops them all; once every one is paused, it resumes them all.
+  const liveAgents = agents.filter((agent) => !agent.revokedAt);
+  const anyWorking = liveAgents.some((agent) => !agent.pausedAt);
+
   const legacyCount = agents.reduce(
     (count, agent) => count + agent.apiKeys.filter((key) => !key.apiKey).length,
     0,
@@ -104,9 +109,30 @@ export function ManageAgentsList({
             className="h-11 w-full rounded-full border border-zk-border bg-zk-surface px-4 text-sm text-zk-text placeholder:text-zk-muted focus:border-electric-blue focus:outline-none focus:ring-2 focus:ring-electric-blue/20"
           />
         </label>
-        <p data-active-agents className="text-sm text-zk-text2">
-          Active agents: <span className="font-bold text-zk-text tabular-nums">{activeCount}</span> of {maxActive} allowed
-        </p>
+        <div className="flex flex-wrap items-center gap-3">
+          <p data-active-agents className="text-sm text-zk-text2">
+            Active agents: <span className="font-bold text-zk-text tabular-nums">{activeCount}</span> of {maxActive} allowed
+          </p>
+          {liveAgents.length > 1 ? (
+            <button
+              type="button"
+              data-pause-all
+              disabled={pausePending}
+              onClick={() => {
+                if (anyWorking && !window.confirm(
+                  "Pause every one of your agents? They stop working at once and keep what they hold, for up to 24 hours. Resume all starts them again.",
+                )) return;
+                startPauseTransition(async () => {
+                  const result = await setAllAgentsPaused(anyWorking);
+                  if (result.ok) window.location.reload();
+                });
+              }}
+              className={`${anyWorking ? agentsSecondaryBtn : agentsPrimaryBtn} disabled:opacity-50`}
+            >
+              {anyWorking ? "Pause all agents" : "Resume all agents"}
+            </button>
+          ) : null}
+        </div>
       </div>
 
       {visible.length === 0 ? (
