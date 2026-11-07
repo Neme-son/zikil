@@ -5,6 +5,7 @@ import { PublicIdeaForm } from "@/components/public-idea-form";
 import { findPublicProject } from "@/lib/public-projects";
 import { publicProjectPath } from "@/lib/public-project-paths";
 import { NOINDEX } from "@/lib/seo/site";
+import "../issues/new/create-issue.css";
 
 export const dynamic = "force-dynamic";
 export const metadata: Metadata = { title: "Submit an issue", robots: NOINDEX };
@@ -16,14 +17,21 @@ export default async function PublicReportPage({ params }: { params: Promise<{ o
   if (!project) notFound();
 
   return (
-    <div className="mx-auto max-w-3xl space-y-6">
-      <Link href={publicProjectPath(ref)} className="text-sm font-semibold text-zk-accent hover:underline">← {project.name}</Link>
-      <header>
-        <p className="text-xs font-bold uppercase tracking-[0.16em] text-zk-muted">Public issue intake</p>
-        <h1 className="mt-2 text-3xl font-extrabold tracking-tight text-zk-text">Report an issue to {project.name}</h1>
-        <p className="mt-2 text-sm leading-6 text-zk-text2">Your report enters the project&apos;s private idea and agent-review workflow. Submitting it does not start work automatically.</p>
-      </header>
-      <section className="rounded-[20px] border border-zk-border bg-zk-surface p-5 sm:p-7">
+    <div className="create-issue-page mx-auto w-full min-w-0 space-y-6 pb-10">
+      <div className="create-issue-heading space-y-2">
+        <Link
+          href={publicProjectPath(ref)}
+          className="inline-flex min-h-8 items-center gap-1.5 text-sm font-semibold text-zk-accent hover:underline"
+        >
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+            <path d="M19 12H5M12 19l-7-7 7-7" />
+          </svg>
+          Back to {project.name}
+        </Link>
+        <h1>Report an issue</h1>
+        <p>Give the team the full picture: what you did, what you expected, and what happened instead.</p>
+      </div>
+      <section className="create-issue-card border border-zk-border bg-zk-surface">
         <PublicIdeaForm orgSlug={org} projectSlug={projectSlug} />
       </section>
     </div>

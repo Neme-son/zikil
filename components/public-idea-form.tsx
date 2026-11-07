@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import { CharacterCounter } from "@/components/ui/character-counter";
 import type { PublicIdeaMatch } from "@/lib/public-idea-intake";
 
 type FormState = {
@@ -103,87 +104,97 @@ export function PublicIdeaForm({ orgSlug, projectSlug }: { orgSlug: string; proj
   const fieldError = (field: string) => state.fieldErrors[field]?.[0];
 
   return (
-    <form onSubmit={submit} className="space-y-5" noValidate>
+    <form onSubmit={submit} className="create-issue-form" noValidate>
       <div className="absolute left-[-10000px] top-auto h-px w-px overflow-hidden" aria-hidden="true">
         <label htmlFor="public-report-website">Website</label>
         <input id="public-report-website" name="website" tabIndex={-1} autoComplete="off" />
       </div>
 
+      <p className="create-mode-note text-sm text-zk-text2">
+        No account needed. Tell us what happened and Ziki&apos;s agents will structure and triage the report.
+      </p>
+
       {state.error ? <p role="alert" className="rounded-xl bg-zk-bad-bg p-3 text-sm text-zk-bad-fg">{state.error}</p> : null}
 
-      <label htmlFor="public-report-title" className="block space-y-1.5 text-sm font-semibold text-zk-text">
-        Issue title
-        <Input
-          id="public-report-title"
-          name="title"
-          value={title}
-          onChange={(event) => {
-            setTitle(event.target.value);
-            if (event.target.value.trim().length < 8) setSearching(false);
-            setAcknowledgeSimilar(false);
-            setState((current) => ({ ...current, matches: [] }));
-          }}
-          minLength={3}
-          maxLength={200}
-          required
-          aria-describedby={fieldError("title") ? "public-report-title-error" : undefined}
-        />
-        {fieldError("title") ? <span id="public-report-title-error" className="block text-xs text-zk-bad-fg">{fieldError("title")}</span> : null}
-      </label>
+      <div className="create-layout create-layout--single">
+        <div className="create-main create-fields space-y-4">
+          <div>
+            <label htmlFor="public-report-title">Title</label>
+            <Input
+              id="public-report-title"
+              name="title"
+              value={title}
+              placeholder="Short summary of the issue"
+              onChange={(event) => {
+                setTitle(event.target.value);
+                if (event.target.value.trim().length < 8) setSearching(false);
+                setAcknowledgeSimilar(false);
+                setState((current) => ({ ...current, matches: [] }));
+              }}
+              minLength={3}
+              maxLength={200}
+              required
+              aria-describedby={fieldError("title") ? "public-report-title-error" : undefined}
+            />
+            <CharacterCounter length={title.length} max={200} className="mt-1 text-right" />
+            {fieldError("title") ? <span id="public-report-title-error" className="block text-xs text-zk-bad-fg">{fieldError("title")}</span> : null}
+            {searching ? <p role="status" className="mt-2 text-xs text-zk-muted">Checking for similar reports…</p> : null}
+          </div>
 
-      {searching ? <p role="status" className="text-xs text-zk-muted">Checking for similar reports…</p> : null}
-      {state.matches.length > 0 ? (
-        <section aria-labelledby="possible-matches-heading" className="rounded-xl border border-amber-500/40 bg-amber-500/10 p-4">
-          <h2 id="possible-matches-heading" className="text-sm font-bold text-zk-text">Possible existing reports</h2>
-          <p className="mt-1 text-xs text-zk-text2">Check these titles first. Submit anyway only when your report is different.</p>
-          <ul className="mt-3 space-y-2">
-            {state.matches.map((match) => (
-              <li key={`${match.kind}-${match.number}`}>
-                <span className="text-sm font-semibold text-zk-text">
-                  {match.kind === "idea" ? "Idea" : "Issue"} #{match.number}: {match.title}
-                </span>
-              </li>
-            ))}
-          </ul>
-        </section>
-      ) : null}
+          {state.matches.length > 0 ? (
+            <section aria-labelledby="possible-matches-heading" className="rounded-xl border border-amber-500/40 bg-amber-500/10 p-4">
+              <h2 id="possible-matches-heading" className="text-sm font-bold text-zk-text">Possible existing reports</h2>
+              <p className="mt-1 text-xs text-zk-text2">Check these titles first. Submit anyway only when your report is different.</p>
+              <ul className="mt-3 space-y-2">
+                {state.matches.map((match) => (
+                  <li key={`${match.kind}-${match.number}`} className="text-sm font-semibold text-zk-text">
+                    {match.kind === "idea" ? "Idea" : "Issue"} #{match.number}: {match.title}
+                  </li>
+                ))}
+              </ul>
+            </section>
+          ) : null}
 
-      <label htmlFor="public-report-summary" className="block space-y-1.5 text-sm font-semibold text-zk-text">
-        Short summary
-        <Textarea id="public-report-summary" name="summary" minLength={20} maxLength={300} rows={3} required aria-describedby="public-report-summary-hint" />
-        <span id="public-report-summary-hint" className="block text-xs font-normal text-zk-muted">Plain text, up to three lines. Explain what is wrong and where.</span>
-        {fieldError("summary") ? <span className="block text-xs text-zk-bad-fg">{fieldError("summary")}</span> : null}
-      </label>
+          <div>
+            <label htmlFor="public-report-summary">Short summary</label>
+            <Textarea id="public-report-summary" name="summary" minLength={20} maxLength={300} rows={3} required aria-describedby="public-report-summary-hint" placeholder="Explain what is wrong and where" />
+            <span id="public-report-summary-hint" className="mt-1 block text-xs font-normal text-zk-muted">Plain text, up to three lines.</span>
+            {fieldError("summary") ? <span className="block text-xs text-zk-bad-fg">{fieldError("summary")}</span> : null}
+          </div>
 
-      <label htmlFor="public-report-description" className="block space-y-1.5 text-sm font-semibold text-zk-text">
-        Details
-        <Textarea id="public-report-description" name="description" minLength={10} maxLength={2400} rows={7} required />
-        {fieldError("description") ? <span className="block text-xs text-zk-bad-fg">{fieldError("description")}</span> : null}
-      </label>
+          <div className="create-description">
+            <label htmlFor="public-report-description">What happened?</label>
+            <Textarea id="public-report-description" name="description" minLength={10} maxLength={2400} rows={7} required placeholder="Describe what you were doing and what went wrong" />
+            {fieldError("description") ? <span className="block text-xs text-zk-bad-fg">{fieldError("description")}</span> : null}
+          </div>
 
-      <label htmlFor="public-report-steps" className="block space-y-1.5 text-sm font-semibold text-zk-text">
-        Steps to reproduce <span className="font-normal text-zk-muted">(optional)</span>
-        <Textarea id="public-report-steps" name="stepsToReproduce" maxLength={1000} rows={5} />
-      </label>
+          <div>
+            <label htmlFor="public-report-steps">Steps to reproduce <span className="font-normal text-zk-muted">(optional)</span></label>
+            <Textarea id="public-report-steps" name="stepsToReproduce" maxLength={1000} rows={5} placeholder="1. Open…\n2. Select…\n3. Observe…" />
+          </div>
 
-      <div className="grid gap-4 md:grid-cols-2">
-        <label htmlFor="public-report-expected" className="block space-y-1.5 text-sm font-semibold text-zk-text">
-          Expected behaviour <span className="font-normal text-zk-muted">(optional)</span>
-          <Textarea id="public-report-expected" name="expectedBehavior" maxLength={700} rows={4} />
-        </label>
-        <label htmlFor="public-report-actual" className="block space-y-1.5 text-sm font-semibold text-zk-text">
-          Actual behaviour <span className="font-normal text-zk-muted">(optional)</span>
-          <Textarea id="public-report-actual" name="actualBehavior" maxLength={700} rows={4} />
-        </label>
+          <div className="grid gap-4 md:grid-cols-2">
+            <div>
+              <label htmlFor="public-report-expected">Expected behaviour <span className="font-normal text-zk-muted">(optional)</span></label>
+              <Textarea id="public-report-expected" name="expectedBehavior" maxLength={700} rows={4} placeholder="What should have happened?" />
+            </div>
+            <div>
+              <label htmlFor="public-report-actual">Actual behaviour <span className="font-normal text-zk-muted">(optional)</span></label>
+              <Textarea id="public-report-actual" name="actualBehavior" maxLength={700} rows={4} placeholder="What happened instead?" />
+            </div>
+          </div>
+
+          <div className="rounded-xl border border-zk-border bg-zk-chip p-4 text-xs leading-5 text-zk-text2">
+            Your report enters the project&apos;s private triage queue as an idea. Guests cannot vote, bid, claim, review, merge, or upload files. Keep secrets and personal data out of the report.
+          </div>
+        </div>
       </div>
 
-      <div className="rounded-xl border border-zk-border bg-zk-chip p-4 text-xs leading-5 text-zk-text2">
-        This sends an idea to the project&apos;s private triage queue, not an assignment or a public post. Guests cannot vote, bid, claim, review, merge, or upload files. Keep secrets and personal data out of the report.
-      </div>
-
-      <Button type="submit" variant="primary" disabled={pending} className="w-full sm:w-auto">
+      <div className="create-modal-actions flex justify-end">
+        <Button type="submit" variant="primary" disabled={pending} className="create-submit w-full sm:w-auto">
         {pending ? "Submitting…" : acknowledgeSimilar ? "Submit as a different report" : "Submit issue"}
-      </Button>
+        </Button>
+      </div>
     </form>
   );
 }
