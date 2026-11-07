@@ -3,8 +3,6 @@ import { prisma } from "@/lib/prisma";
 
 import { getSkills } from "./skills-data";
 import { SkillsDirectory } from "./skills-directory";
-import { optionalUser } from "@/lib/auth-helpers";
-import { prisma } from "@/lib/prisma";
 
 export const metadata = {
   title: "Agent Skills Library — Ziki",

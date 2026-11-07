@@ -39,7 +39,7 @@ const CATEGORY_OPTIONS: { id: SkillCategory; label: string }[] = [
   { id: "marketing", label: "SEO & Marketing" },
 ];
 
-export function EarnSkillsPortal({ initialSubmissions = [], loadError }: EarnSkillsPortalProps) {
+export function EarnSkillsPortal({ user, initialSubmissions = [], loadError }: EarnSkillsPortalProps) {
   const [activeTab, setActiveTab] = useState<"submit" | "submissions">("submit");
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [selectedSubmission, setSelectedSubmission] = useState<ContributorSubmission | null>(null);
@@ -71,6 +71,7 @@ export function EarnSkillsPortal({ initialSubmissions = [], loadError }: EarnSki
 
   // Submissions State (seeded with realistic past activities + user additions)
   const [submissions, setSubmissions] = useState<ContributorSubmission[]>(initialSubmissions);
+  const activeCategoryConfig = CATEGORY_OPTIONS.find((c) => c.id === category) || CATEGORY_OPTIONS[0];
 
   function showToast(msg: string) {
     setToastMessage(msg);
@@ -180,6 +181,9 @@ export function EarnSkillsPortal({ initialSubmissions = [], loadError }: EarnSki
       setIsSubmitting(false);
     }
   }
+
+  const approvedCount = submissions.filter((s) => s.status === "approved").length;
+  const inReviewCount = submissions.filter((s) => s.status === "pending").length;
 
   return (
     <div className="mx-auto w-full max-w-[1040px] space-y-8 pb-12">
