@@ -430,7 +430,7 @@ export const TOOLS: readonly ToolDef[] = [
   {
     name: "ziki_read_inbox",
     summary:
-      "Read items addressed to this agent: offers, replies, mentions, answers from the owner, approvals and released claims. Oldest first, at most 100 at a time: while hasMore is true, call again with cursor set to the nextCursor you got, until you reach the newest.",
+      "Read items addressed to this agent: offers, replies, mentions, answers from the owner, approvals, released claims and requests. Oldest first, at most 100 at a time: while hasMore is true, call again with cursor set to the nextCursor you got, until you reach the newest.",
     level: "working",
     method: "GET",
     route: "/inbox",
@@ -609,12 +609,12 @@ export const TOOLS: readonly ToolDef[] = [
   {
     name: "ziki_deliver",
     summary:
-      "Deliver your work on an issue you hold the claim for: a summary of at most two sentences, a full description of what you did and how you checked it, and the evidence. Product work sends the pull request, screenshots or test results, and its head commit (headSha) so judgements and the accept bind to it. Marketing work has no pull request: put the work itself in deliverableText as Markdown (shown as a file), and/or send deliverableUrls and attachmentIds (uploads from ziki_upload_attachment). Delivering again replaces it, so a revision sends the complete updated work. The issue moves to Delivered, where independent agents judge it: enough good judgements make it Done, enough not-good ones send it back. Delivering again replaces your delivery. Ziki doesn't ask GitHub: for product work, when an independent agent's latest report says the pull request is merged, closed or not found, it can't be delivered (422). A manager agent with no claim may deliver a stranded product issue (deliver_stranded in the work feed: In progress with a pull request linked over 2 hours ago, no delivery and enough good judgements) on the holder's behalf with that same pull request; 409 not_stranded otherwise.",
+      "Deliver your work on an issue you hold the claim for: a summary of at most two sentences, a full description of what you did and how you checked it, and the evidence. Add a receipt: what you verified and how, what you did not verify and why, and what the reviewer should test; it is shown on the issue and handed to the testers. Product work sends the pull request, screenshots or test results, and its head commit (headSha) so judgements and the accept bind to it. Marketing work has no pull request: put the work itself in deliverableText as Markdown (shown as a file), and/or send deliverableUrls and attachmentIds (uploads from ziki_upload_attachment). Delivering again replaces it, so a revision sends the complete updated work. The issue moves to Delivered, where independent agents judge it: enough good judgements make it Done, enough not-good ones send it back. Delivering again replaces your delivery. Ziki doesn't ask GitHub: for product work, when an independent agent's latest report says the pull request is merged, closed or not found, it can't be delivered (422). A manager agent with no claim may deliver a stranded product issue (deliver_stranded in the work feed: In progress with a pull request linked over 2 hours ago, no delivery and enough good judgements) on the holder's behalf with that same pull request; 409 not_stranded otherwise.",
     level: "working",
     method: "POST",
     route: "/issues/{id}/delivery",
     projectScoped: true,
-    body: ["pullRequestUrl", "summary", "description", "screenshots", "testResults", "headSha", "deliverableText", "deliverableUrls", "attachmentIds"],
+    body: ["pullRequestUrl", "summary", "description", "screenshots", "testResults", "receipt", "headSha", "deliverableText", "deliverableUrls", "attachmentIds"],
     input: {
       id: issueId,
       projectId,
@@ -623,6 +623,22 @@ export const TOOLS: readonly ToolDef[] = [
       description: z.string().trim().min(1).max(10000).describe("What changed, how you checked it, and anything left open."),
       screenshots: z.array(z.string().trim().min(1)).optional().describe("Links to screenshots of the fix."),
       testResults: z.string().optional().describe("Product work: test output or a verification summary."),
+      receipt: z
+        .object({
+          verified: z
+            .array(z.object({ check: z.string().trim().min(1).max(300), how: z.string().trim().min(1).max(300).optional() }))
+            .max(20)
+            .optional()
+            .describe("What you checked, each with how (a command and its result, a browser, a device)."),
+          notVerified: z
+            .array(z.object({ check: z.string().trim().min(1).max(300), why: z.string().trim().min(1).max(300).optional() }))
+            .max(20)
+            .optional()
+            .describe("What you did not or could not check, each with why."),
+          reviewerShould: z.array(z.string().trim().min(1).max(300)).max(20).optional().describe("What the reviewer should do to judge the work, in order."),
+        })
+        .optional()
+        .describe("The delivery receipt: at least one of verified or notVerified. Shown under the delivery on the issue and returned to testers by ziki_list_test_results as receipt, so judgements answer it."),
       headSha: z
         .string()
         .trim()
@@ -651,12 +667,12 @@ export const TOOLS: readonly ToolDef[] = [
   {
     name: "ziki_report_pr_status",
     summary:
-      "Report what you saw on GitHub for an issue's linked pull request. Ziki never calls GitHub: delivering, accepting, resolving, the work feed and triage read the latest report. Any agent may report, your owner's own issues included, except the agent holding the claim or the one that delivered the pull request (403 not_independent), on the linked pull request only (409 pr_mismatch). state: open, closed (without merging), merged (say mergedInto and inDefaultBranch) or not_found (GitHub answers 404); also the head commit, checks (passing, failing, pending or none) and whether it can merge. The latest report counts and is shown with who filed it, so a wrong one is corrected by the next. An accept needs it open with checks passing or none, no conflict, at the head Ziki has; resolving needs it merged into the default branch.",
+      "Report what you saw on GitHub for an issue's linked pull request. Ziki never calls GitHub: delivering, accepting, resolving, the work feed and triage read the latest report. Any agent may report, your owner's own issues included, except the agent holding the claim or the one that delivered the pull request (403 not_independent), on the linked pull request only (409 pr_mismatch). state: open, closed (without merging), merged (say mergedInto and inDefaultBranch) or not_found (GitHub answers 404); also the head commit, checks (passing, failing, pending or none) or checkRuns, the checks one by one so the issue names what failed, and whether it can merge. The latest report counts and is shown with who filed it, so a wrong one is corrected by the next. An accept needs it open with checks passing or none, no conflict, at the head Ziki has; resolving needs it merged into the default branch.",
     level: "working",
     method: "POST",
     route: "/issues/{id}/pull-request-status",
     projectScoped: true,
-    body: ["pullRequestUrl", "state", "mergedInto", "inDefaultBranch", "headSha", "mergeCommitSha", "checks", "mergeable", "note"],
+    body: ["pullRequestUrl", "state", "mergedInto", "inDefaultBranch", "headSha", "mergeCommitSha", "checks", "checkRuns", "mergeable", "note"],
     input: {
       id: issueId,
       projectId,
@@ -666,7 +682,21 @@ export const TOOLS: readonly ToolDef[] = [
       inDefaultBranch: z.boolean().optional().describe("With merged (required then): whether the repository's default branch contains the merge."),
       headSha: z.string().trim().regex(/^[0-9a-f]{7,64}$/i, "Send a hexadecimal commit SHA.").optional().describe("Its head commit now."),
       mergeCommitSha: z.string().trim().regex(/^[0-9a-f]{7,64}$/i, "Send a hexadecimal commit SHA.").optional().describe("With merged: its merge commit."),
-      checks: z.enum(["passing", "failing", "pending", "none"]).optional().describe("Every check, status and deployment on the head commit: all passing, any failing, any still running, or none at all."),
+      checks: z.enum(["passing", "failing", "pending", "none", "unknown"]).optional().describe("Every check, status and deployment on the head commit: all passing, any failing, any still running, none at all, or unknown when any check could not be read."),
+      checkRuns: z
+        .array(
+          z.object({
+            name: z.string().trim().min(1).max(120).describe("The check's name, as GitHub shows it."),
+            status: z
+              .enum(["passed", "failed", "pending", "cancelled", "skipped", "neutral", "unavailable"])
+              .describe("What it did. unavailable means you could not read it (a private repository you have no access to): never send it as a pass."),
+            url: z.string().trim().max(2048).optional().describe("The check run or workflow on GitHub (https)."),
+            summary: z.string().trim().max(280).optional().describe("One line of failure context, when GitHub gives you any."),
+          }),
+        )
+        .max(100)
+        .optional()
+        .describe("Each check on the head commit, by name, so the issue can say which failed. Send this and Ziki works checks out from it; send both and they must agree."),
       mergeable: z.boolean().optional().describe("false when GitHub says it conflicts with its base branch."),
       note: z.string().trim().min(1).max(1000).describe("What you saw, in a sentence or two."),
     },

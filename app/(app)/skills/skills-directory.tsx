@@ -13,6 +13,8 @@ interface SkillsDirectoryProps {
   loadError?: string;
   agents?: AgentOption[];
   isGuest?: boolean;
+  /** The search box's starting text, from `/skills?search=` (a skill page's tag links). */
+  initialSearch?: string;
 }
 
 /**
@@ -24,10 +26,11 @@ export function SkillsDirectory({
   loadError,
   agents = [],
   isGuest = true,
+  initialSearch = "",
 }: SkillsDirectoryProps) {
   const router = useRouter();
   const [selectedCategory, setSelectedCategory] = useState<string>("all");
-  const [searchQuery, setSearchQuery] = useState<string>("");
+  const [searchQuery, setSearchQuery] = useState<string>(initialSearch);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
   // Track the target agent chosen on each card, keyed by skill id.

@@ -15,10 +15,12 @@ import {
 function SkillUnavailableBanner() {
   return (
     <div className="mx-auto max-w-3xl space-y-4 py-16 text-center">
-      <h1 className="text-2xl font-extrabold tracking-tight text-zk-text">Skill unavailable</h1>
+      <h1 className="text-2xl font-extrabold tracking-tight text-zk-text">
+        Skill unavailable
+      </h1>
       <p role="alert" className="text-sm text-zk-text2">
-        The skills library is temporarily unavailable, so this skill can&apos;t be loaded right now. Please try
-        again in a moment.
+        The skills library is temporarily unavailable, so this skill can&apos;t
+        be loaded right now. Please try again in a moment.
       </p>
       <Link
         href="/skills"
@@ -90,18 +92,17 @@ export default async function SkillDetailPage({
     notFound();
   }
 
-  // Fetch optional signed-in user and their agents
+  // Data loading: load agents owned by the signed-in viewer (guests get [])
   const user = await optionalUser();
-  let userAgents: { id: string; name: string; username?: string }[] = [];
-  if (user) {
-    userAgents = await prisma.agent
-      .findMany({
-        where: { ownerUserId: user.id },
-        select: { id: true, name: true, username: true },
-        orderBy: { name: "asc" },
-      })
-      .catch(() => []);
-  }
+  const agents = user
+    ? await prisma.agent
+        .findMany({
+          where: { ownerUserId: user.id },
+          select: { id: true, name: true, username: true },
+          orderBy: { name: "asc" },
+        })
+        .catch(() => [])
+    : [];
 
   // Schema.org Structured Data for Search Engines (safe with JsonLd escaping)
   const jsonLd = {
@@ -165,7 +166,7 @@ export default async function SkillDetailPage({
 
           {/* Interactive Agent Target & Copy Action Bar */}
           <div className="pt-2">
-            <SkillDetailInteractive skill={skill} agents={userAgents} isGuest={!user} />
+            <SkillDetailInteractive skill={skill} agents={agents} isGuest={!user} />
           </div>
         </div>
 
@@ -195,9 +196,9 @@ export default async function SkillDetailPage({
       <div className="grid grid-cols-1 gap-6 lg:gap-8 lg:grid-cols-3">
         {/* Left Column: Spec, Checklist, Command, Instructions */}
         <div className="space-y-6 lg:col-span-2">
-          {/* Overview */}
+          {/* Overview & Objectives */}
           <section className="space-y-2.5">
-            <h2 className="text-sm font-bold uppercase tracking-wider text-zk-text">Overview & Objectives</h2>
+            <h2 className="text-sm font-bold uppercase tracking-wider text-zk-text">Overview &amp; Objectives</h2>
             <div className="rounded-2xl border border-zk-border bg-zk-surface p-5">
               <p className="text-sm text-zk-text2 leading-relaxed">
                 {skill.spec.overview}
@@ -205,11 +206,11 @@ export default async function SkillDetailPage({
             </div>
           </section>
 
-          {/* Contributor's Checklist */}
+          {/* Quality & Verification Checklist */}
           {skill.spec.checklist.length > 0 && (
             <section className="space-y-2.5">
               <h2 className="text-sm font-bold uppercase tracking-wider text-zk-text">
-                Quality & Verification Checklist
+                Quality &amp; Verification Checklist
               </h2>
               <div className="rounded-2xl border border-zk-border bg-zk-surface p-5 space-y-3">
                 {skill.spec.checklist.map((item, i) => (
@@ -241,7 +242,7 @@ export default async function SkillDetailPage({
           )}
 
           {/* Agent System Instructions Box */}
-          <SkillPromptSection skill={skill} agents={userAgents} isGuest={!user} />
+          <SkillPromptSection skill={skill} agents={agents} />
         </div>
 
         {/* Right Sidebar: Skill Specification & Tags */}
@@ -252,7 +253,9 @@ export default async function SkillDetailPage({
             <div className="space-y-3 text-xs divide-y divide-zk-divider">
               <div className="pt-2.5 flex justify-between items-center">
                 <span className="text-zk-muted">Category</span>
-                <span className="font-semibold text-zk-text">{skill.categoryLabel}</span>
+                <span className="font-semibold text-zk-text">
+                  {skill.categoryLabel}
+                </span>
               </div>
               <div className="pt-2.5 flex justify-between items-center">
                 <span className="text-zk-muted">Compatible Agents</span>
@@ -260,11 +263,13 @@ export default async function SkillDetailPage({
               </div>
               <div className="pt-2.5 flex justify-between items-center">
                 <span className="text-zk-muted">Author</span>
-                <span className="font-semibold text-zk-text">{skill.author.name}</span>
+                <span className="font-semibold text-zk-text">
+                  {skill.author.name}
+                </span>
               </div>
               <div className="pt-2.5 flex justify-between items-center">
                 <span className="text-zk-muted">Verification</span>
-                <span className="font-semibold text-zk-text">CLI & Test Suite</span>
+                <span className="font-semibold text-zk-text">CLI &amp; Test Suite</span>
               </div>
               {skill.spec.documentationUrl && (
                 <div className="pt-2.5 flex justify-between items-center">
@@ -286,12 +291,14 @@ export default async function SkillDetailPage({
           {/* Tags */}
           {skill.tags.length > 0 && (
             <div className="rounded-2xl border border-zk-border bg-zk-surface p-5 space-y-3">
-              <h3 className="text-xs font-bold uppercase tracking-wider text-zk-muted">Tags</h3>
+              <h3 className="text-xs font-bold uppercase tracking-wider text-zk-muted">
+                Tags
+              </h3>
               <div className="flex flex-wrap gap-1.5">
                 {skill.tags.map((tag) => (
                   <Link
                     key={tag}
-                    href="/skills"
+                    href={`/skills?search=${encodeURIComponent(tag)}`}
                     className="rounded-md bg-zk-chip hover:bg-zk-border px-2.5 py-1 text-[11px] font-mono text-zk-muted hover:text-zk-text transition"
                   >
                     #{tag}
