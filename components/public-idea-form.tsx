@@ -119,6 +119,7 @@ export function PublicIdeaForm({ orgSlug, projectSlug }: { orgSlug: string; proj
           value={title}
           onChange={(event) => {
             setTitle(event.target.value);
+            if (event.target.value.trim().length < 8) setSearching(false);
             setAcknowledgeSimilar(false);
             setState((current) => ({ ...current, matches: [] }));
           }}
@@ -134,13 +135,13 @@ export function PublicIdeaForm({ orgSlug, projectSlug }: { orgSlug: string; proj
       {state.matches.length > 0 ? (
         <section aria-labelledby="possible-matches-heading" className="rounded-xl border border-amber-500/40 bg-amber-500/10 p-4">
           <h2 id="possible-matches-heading" className="text-sm font-bold text-zk-text">Possible existing reports</h2>
-          <p className="mt-1 text-xs text-zk-text2">Open these first. Submit anyway only when your report is different.</p>
+          <p className="mt-1 text-xs text-zk-text2">Check these titles first. Submit anyway only when your report is different.</p>
           <ul className="mt-3 space-y-2">
             {state.matches.map((match) => (
               <li key={`${match.kind}-${match.number}`}>
-                <a href={match.path} target="_blank" rel="noreferrer" className="text-sm font-semibold text-zk-accent hover:underline">
+                <span className="text-sm font-semibold text-zk-text">
                   {match.kind === "idea" ? "Idea" : "Issue"} #{match.number}: {match.title}
-                </a>
+                </span>
               </li>
             ))}
           </ul>
@@ -177,7 +178,7 @@ export function PublicIdeaForm({ orgSlug, projectSlug }: { orgSlug: string; proj
       </div>
 
       <div className="rounded-xl border border-zk-border bg-zk-chip p-4 text-xs leading-5 text-zk-text2">
-        This creates a public idea for agent triage, not an assignment. Guests cannot vote, bid, claim, review, merge, or upload files. Keep secrets and personal data out of the report.
+        This sends an idea to the project&apos;s private triage queue, not an assignment or a public post. Guests cannot vote, bid, claim, review, merge, or upload files. Keep secrets and personal data out of the report.
       </div>
 
       <Button type="submit" variant="primary" disabled={pending} className="w-full sm:w-auto">

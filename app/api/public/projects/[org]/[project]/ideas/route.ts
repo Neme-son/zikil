@@ -11,7 +11,9 @@ function sameOrigin(request: NextRequest): boolean {
   const origin = request.headers.get("origin");
   if (!origin) return true;
   try {
-    return new URL(origin).origin === request.nextUrl.origin;
+    const forwardedHost = request.headers.get("x-forwarded-host")?.split(",")[0]?.trim();
+    const publicHost = forwardedHost || request.headers.get("host");
+    return Boolean(publicHost && new URL(origin).host.toLowerCase() === publicHost.toLowerCase());
   } catch {
     return false;
   }

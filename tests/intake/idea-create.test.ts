@@ -112,7 +112,7 @@ const publicInput = (overrides: Record<string, unknown> = {}) => ({
 });
 const idea = {
   id: "i1", number: 12, title: "Export activity as CSV", summary: "People want a CSV.", description: "People want their data.",
-  track: "product" as const, rationale: null as string | null, status: "open" as const, score: 3, typeId: null, areaId: null, proofLinks: [], projectId: "p1",
+  source: "internal", track: "product" as const, rationale: null as string | null, status: "open" as const, score: 3, typeId: null, areaId: null, proofLinks: [], projectId: "p1",
   reporterId: "ada", beneficiaryUserId: "ada", createdByAgentId: null, convertedAt: null, archiveReason: null,
   archiveEvidence: null, archiveDuplicateOf: null, archivedAt: null, archivedByAgentId: null,
   createdAt: new Date("2026-10-20T10:00:00Z"), updatedAt: new Date("2026-10-20T10:00:00Z"), area: null, issue: null,
@@ -232,7 +232,7 @@ describe("signed-out public idea intake (#3464)", () => {
     })).resolves.toMatchObject({
       status: 409,
       error: "similar_ideas",
-      matches: [{ kind: "issue", number: 12, path: "/p/zedu/web/issues/12" }],
+      matches: [{ kind: "issue", number: 12, title: similarRow.title, status: "open" }],
     });
     expect(db.idea.create).not.toHaveBeenCalled();
   });
@@ -248,7 +248,7 @@ describe("signed-out public idea intake (#3464)", () => {
       status: 201,
       ideaId: "public-idea",
       ideaNumber: 77,
-      trackingPath: `/p/zedu/web/track/${"a".repeat(32)}`,
+      trackingPath: `/zedu/web/track/${"a".repeat(32)}`,
       replayed: false,
     });
     expect(db.user.upsert).toHaveBeenCalledWith(expect.objectContaining({
@@ -304,14 +304,14 @@ describe("signed-out public idea intake (#3464)", () => {
     expect(db.idea.create).not.toHaveBeenCalled();
   });
 
-  it("sanitizes markup and refuses unsafe URL schemes", () => {
+  it("sanitizes markup while allowing reports to describe URL schemes as text", () => {
     const sanitized = publicIdeaSchema.parse(publicInput({
       summary: "<b>A public report is not stored after submission.</b>",
       description: "<!-- template -->The report is not stored after submission.",
     }));
     expect(sanitized.summary).toBe("A public report is not stored after submission.");
     expect(sanitized.description).not.toContain("template");
-    expect(publicIdeaSchema.safeParse(publicInput({ description: "Open javascript:alert(1) after submitting." })).success).toBe(false);
+    expect(publicIdeaSchema.safeParse(publicInput({ description: "Open javascript:alert(1) after submitting; expected data: 5." })).success).toBe(true);
   });
 
   it("rejects cross-origin and oversized API submissions before database work", async () => {
@@ -325,11 +325,28 @@ describe("signed-out public idea intake (#3464)", () => {
 
     const oversized = new NextRequest("https://ziki.dev/api/public/projects/zedu/web/ideas", {
       method: "POST",
-      headers: { "content-type": "application/json", "content-length": String(25 * 1024), origin: "https://ziki.dev" },
+      headers: { "content-type": "application/json", "content-length": String(25 * 1024), origin: "https://ziki.dev", host: "ziki.dev" },
       body: "{}",
     });
     expect((await submitPublicIdea(oversized, context)).status).toBe(413);
     expect(db.project.findFirst).not.toHaveBeenCalled();
+  });
+
+  it("accepts the public forwarded host when the server request URL uses its bind address", async () => {
+    const context = { params: Promise.resolve({ org: "zedu", project: "web" }) };
+    const proxied = new NextRequest("http://0.0.0.0:3000/api/public/projects/zedu/web/ideas", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        origin: "https://ziki.dev",
+        host: "0.0.0.0:3000",
+        "x-forwarded-host": "ziki.dev",
+      },
+      body: JSON.stringify(publicInput({ acknowledgeSimilar: true })),
+    });
+
+    expect((await submitPublicIdea(proxied, context)).status).toBe(201);
+    expect(db.idea.create).toHaveBeenCalled();
   });
 });
 

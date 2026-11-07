@@ -17,7 +17,6 @@ import {
 } from "@/lib/public-projects";
 import {
   publicTrackingPath,
-  publicWorkItemPath,
   type PublicProjectRef,
 } from "@/lib/public-project-paths";
 
@@ -44,14 +43,12 @@ const publicText = (label: string, max: number, minimum = 0) =>
     .string()
     .transform(cleanPublicText)
     .refine((value) => value.length >= minimum, `${label} must be at least ${minimum} characters.`)
-    .refine((value) => value.length <= max, `${label} must be ${max} characters or fewer.`)
-    .refine((value) => !/\b(?:javascript|vbscript|data):/i.test(value), `${label} contains an unsafe URL.`);
+    .refine((value) => value.length <= max, `${label} must be ${max} characters or fewer.`);
 
 const publicSummarySchema = z
   .string()
   .transform(cleanPublicText)
-  .pipe(reportSummarySchema)
-  .refine((value) => !/\b(?:javascript|vbscript|data):/i.test(value), "Summary contains an unsafe URL.");
+  .pipe(reportSummarySchema);
 
 const publicTitleSchema = publicText("Title", 200, 3)
   .refine((value) => !/[\r\n]/.test(value), "Title must be one line.");
@@ -82,7 +79,6 @@ export type PublicIdeaMatch = {
   number: number;
   title: string;
   status: string;
-  path: string;
 };
 
 export type PublicIdeaResult =
@@ -109,7 +105,7 @@ function publicIdeaDescription(input: Pick<PublicIdeaInput, "description" | "ste
   return sections.join("\n\n");
 }
 
-function publicMatches(matches: Awaited<ReturnType<typeof findSimilarIssues>>, ref: PublicProjectRef): PublicIdeaMatch[] {
+function publicMatches(matches: Awaited<ReturnType<typeof findSimilarIssues>>): PublicIdeaMatch[] {
   return matches.map((match) => {
     const kind = match.kind === "idea" ? "idea" : "issue";
     return {
@@ -117,7 +113,6 @@ function publicMatches(matches: Awaited<ReturnType<typeof findSimilarIssues>>, r
       number: match.number,
       title: match.title,
       status: String(match.status),
-      path: publicWorkItemPath(ref, kind, match.number),
     };
   });
 }
@@ -161,7 +156,7 @@ export async function findPublicIdeaMatches(
     organisationId: project.organisationId,
     projectId: project.id,
   }, parsedTitle.data);
-  return { status: 200, matches: publicMatches(matches, ref) };
+  return { status: 200, matches: publicMatches(matches) };
 }
 
 export async function createPublicIdea(
@@ -228,7 +223,7 @@ export async function createPublicIdea(
         status: 409,
         error: "similar_ideas",
         message: "Review the possible matches before submitting another report.",
-        matches: publicMatches(matches, ref),
+        matches: publicMatches(matches),
       };
     }
   }

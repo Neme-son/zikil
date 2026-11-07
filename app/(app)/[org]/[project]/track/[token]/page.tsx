@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { RichText } from "@/components/rich-text";
+import { stateLabel, statusLabel } from "@/lib/labels";
 import { prisma } from "@/lib/prisma";
 import { findPublicProject, publicTrackingTokenHash } from "@/lib/public-projects";
 import { publicProjectPath } from "@/lib/public-project-paths";
@@ -28,6 +29,9 @@ export default async function PublicTrackingPage({ params }: { params: Promise<{
     },
   });
   if (!idea) notFound();
+  const state = idea.issue
+    ? `Issue #${idea.issue.number} · ${idea.issue.substatus ? stateLabel(idea.issue.substatus) : statusLabel[idea.issue.status]}`
+    : idea.status === "open" ? "Awaiting triage" : "Converted to an issue";
 
   return (
     <div className="mx-auto max-w-3xl space-y-6">
@@ -35,9 +39,7 @@ export default async function PublicTrackingPage({ params }: { params: Promise<{
       <article className="rounded-[20px] border border-zk-border bg-zk-surface p-6 sm:p-8">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <p className="text-xs font-bold uppercase tracking-[0.16em] text-zk-muted">Idea #{idea.number}</p>
-          <span className="rounded-full border border-zk-border bg-zk-chip px-3 py-1 text-xs font-semibold text-zk-text2">
-            {idea.issue ? `Issue #${idea.issue.number} · ${label(idea.issue.substatus ?? idea.issue.status)}` : label(idea.status)}
-          </span>
+          <span className="rounded-full border border-zk-border bg-zk-chip px-3 py-1 text-xs font-semibold text-zk-text2">{state}</span>
         </div>
         <h1 className="mt-4 text-2xl font-extrabold tracking-tight text-zk-text">{idea.title}</h1>
         {idea.summary ? <p className="mt-3 whitespace-pre-line text-sm font-medium text-zk-text2">{idea.summary}</p> : null}
@@ -46,8 +48,4 @@ export default async function PublicTrackingPage({ params }: { params: Promise<{
       </article>
     </div>
   );
-}
-
-function label(value: string): string {
-  return value.replaceAll("_", " ").replace(/^./, (letter) => letter.toUpperCase());
 }

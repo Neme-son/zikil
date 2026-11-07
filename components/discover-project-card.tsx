@@ -7,7 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { joinOpenProjectAction } from "@/app/actions/project-join-requests";
 import { projectPath, projectRef } from "@/lib/project-paths";
-import { publicProjectPath, publicReportPath } from "@/lib/public-project-paths";
+import { publicReportPath } from "@/lib/public-project-paths";
 
 export type DiscoverableProject = {
   id: string;
@@ -57,9 +57,7 @@ export function DiscoverProjectCard({ project }: { project: DiscoverableProject 
               </span>
               <h3 className="text-lg font-bold text-zk-text">
                 <Link
-                  href={currentStatus === "guest"
-                    ? publicProjectPath(publicRef)
-                    : projectPath(projectRef(project.organisation.slug, project.slug))}
+                  href={projectPath(projectRef(project.organisation.slug, project.slug))}
                   className="hover:text-zk-accent hover:underline"
                 >
                   {project.name}

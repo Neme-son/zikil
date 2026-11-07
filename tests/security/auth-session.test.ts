@@ -175,9 +175,9 @@ describe("shared issue login destinations", () => {
 
 describe("signed-out public project routes (#3464)", () => {
   it.each([
-    "/p/zedu/web",
-    "/p/zedu/web/report",
-    "/p/zedu/web/track/private-token",
+    "/zedu/web",
+    "/zedu/web/report",
+    "/zedu/web/track/private-token",
     "/api/public/projects/zedu/web/ideas",
   ])("allows %s through session middleware", (path) => {
     expect(isPublicPath(path)).toBe(true);
@@ -185,6 +185,7 @@ describe("signed-out public project routes (#3464)", () => {
 
   it("does not make similarly named private routes public", () => {
     expect(isPublicPath("/projects/zedu/web")).toBe(false);
+    expect(isPublicPath("/zedu/web/reporter")).toBe(false);
     expect(isPublicPath("/api/projects/zedu/web/ideas")).toBe(false);
   });
 });

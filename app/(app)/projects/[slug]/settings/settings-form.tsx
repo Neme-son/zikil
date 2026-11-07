@@ -120,7 +120,7 @@ export function ProjectSettingsForm({
                 <span>Accept public issue reports</span>
               </label>
               <p className="mt-1 pl-6 text-xs text-zk-muted">
-                Signed-out visitors may submit an idea and track it with a private link. They cannot vote, bid, claim, review, or upload files.
+                Signed-out visitors may send an idea to the private triage queue and track it with an unlisted link. It is not published on the project overview. Guests cannot vote, bid, claim, review, or upload files.
               </p>
             </div>
 
