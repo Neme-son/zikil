@@ -1,3 +1,4 @@
+import type { IdeaStatus } from "@prisma/client";
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
@@ -9,6 +10,13 @@ import { publicProjectPath } from "@/lib/public-project-paths";
 
 export const dynamic = "force-dynamic";
 export const metadata: Metadata = { title: "Track a public report", robots: { index: false, follow: false } };
+
+const ideaStatusLabel: Record<IdeaStatus, string> = {
+  open: "Awaiting triage",
+  converted: "Converted to an issue",
+  rejected: "Rejected",
+  archived: "Archived",
+};
 
 export default async function PublicTrackingPage({ params }: { params: Promise<{ org: string; project: string; token: string }> }) {
   const { org, project: projectSlug, token } = await params;
@@ -31,7 +39,7 @@ export default async function PublicTrackingPage({ params }: { params: Promise<{
   if (!idea) notFound();
   const state = idea.issue
     ? `Issue #${idea.issue.number} · ${idea.issue.substatus ? stateLabel(idea.issue.substatus) : statusLabel[idea.issue.status]}`
-    : idea.status === "open" ? "Awaiting triage" : "Converted to an issue";
+    : ideaStatusLabel[idea.status];
 
   return (
     <div className="mx-auto max-w-3xl space-y-6">
