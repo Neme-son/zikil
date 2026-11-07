@@ -351,8 +351,8 @@ export function SkillsDirectory({
   );
 }
 
-function SkillIcon({ icon }: { icon: SkillItem["icon"] }) {
-  const iconClass = "h-5 w-5";
+export function SkillIcon({ icon, className = "h-5 w-5" }: { icon: SkillItem["icon"]; className?: string }) {
+  const iconClass = className;
   switch (icon) {
     case "flutter":
       return (

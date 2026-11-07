@@ -1,8 +1,15 @@
 import { notFound } from "next/navigation";
 import Link from "next/link";
 import { JsonLd } from "@/components/json-ld";
+import { optionalUser } from "@/lib/auth-helpers";
+import { prisma } from "@/lib/prisma";
 import { getSkillBySlug, SkillUnavailableError, type SkillItem } from "../skills-data";
-import { CopyPromptButton, CopyCommandButton } from "./copy-button";
+import { SkillIcon } from "../skills-directory";
+import {
+  SkillDetailInteractive,
+  SkillPromptSection,
+  CopyCommandButton,
+} from "./skill-detail-interactive";
 
 /** GAP 3: a failing database renders this instead of a misleading 404. */
 function SkillUnavailableBanner() {
@@ -83,6 +90,19 @@ export default async function SkillDetailPage({
     notFound();
   }
 
+  // Fetch optional signed-in user and their agents
+  const user = await optionalUser();
+  let userAgents: { id: string; name: string }[] = [];
+  if (user) {
+    userAgents = await prisma.agent
+      .findMany({
+        where: { ownerUserId: user.id },
+        select: { id: true, name: true },
+        orderBy: { name: "asc" },
+      })
+      .catch(() => []);
+  }
+
   // Schema.org Structured Data for Search Engines (safe with JsonLd escaping)
   const jsonLd = {
     "@context": "https://schema.org",
@@ -107,38 +127,50 @@ export default async function SkillDetailPage({
       {/* JSON-LD Structured Data for Search Engines */}
       <JsonLd data={jsonLd} />
 
-      {/* Skill banner */}
+      {/* Hero Header Card */}
       <div className="rounded-2xl border border-zk-border bg-zk-surface p-6 sm:p-8 overflow-hidden shadow-xs">
-        <div className="sm:flex sm:items-start sm:justify-between gap-4">
-          <div className="space-y-3">
-            <div className="flex items-center gap-2.5">
-              <span className="inline-flex items-center rounded-full border border-blue-500/20 bg-blue-500/10 px-2.5 py-0.5 text-xs font-semibold text-blue-600 dark:text-blue-400">
-                Approved Skill
-              </span>
-              <span className="rounded-md bg-zk-chip px-2.5 py-0.5 text-xs font-mono text-zk-muted">
-                #{skill.category}
-              </span>
+        {/* Navigation Breadcrumb */}
+        <div className="flex items-center justify-between gap-4 border-b border-zk-divider pb-4 mb-6">
+          <Link
+            href="/skills"
+            className="inline-flex items-center gap-1.5 text-xs font-semibold text-zk-muted hover:text-blue-600 transition"
+          >
+            <span>←</span>
+            <span>Back to Skills Library</span>
+          </Link>
+          <span className="text-xs font-medium text-zk-muted">
+            Skills / <span className="text-zk-text font-semibold">{skill.categoryLabel}</span>
+          </span>
+        </div>
+
+        {/* Title, Icon & Description */}
+        <div className="space-y-4">
+          <div className="flex items-center gap-3">
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-blue-500/10 text-blue-600 dark:text-blue-400">
+              <SkillIcon icon={skill.icon} className="h-5 w-5" />
             </div>
-            <h1 className="text-2xl font-extrabold tracking-tight text-zk-text sm:text-3xl sm:leading-tight">
-              {skill.title}
-            </h1>
-            <p className="text-sm text-zk-text2 leading-relaxed sm:text-base max-w-2xl">
-              {skill.description}
-            </p>
+            <div>
+              <p className="text-[11px] font-bold uppercase tracking-wider text-blue-600 dark:text-blue-400">
+                {skill.categoryLabel}
+              </p>
+              <h1 className="text-2xl font-extrabold tracking-tight text-zk-text sm:text-3xl sm:leading-tight">
+                {skill.title}
+              </h1>
+            </div>
           </div>
 
-          <div className="flex flex-col sm:flex-row gap-2 sm:shrink-0 mt-4 sm:mt-0">
-            <CopyPromptButton prompt={skill.prompt} />
-            <Link
-              href="/skills"
-              className="inline-flex items-center justify-center rounded-xl border border-zk-border bg-zk-chip px-4 py-2 text-xs font-semibold text-zk-text hover:bg-zk-tint transition"
-            >
-              ← Back to Library
-            </Link>
+          <p className="text-sm text-zk-text2 leading-relaxed sm:text-base max-w-3xl">
+            {skill.description}
+          </p>
+
+          {/* Interactive Agent Target & Copy Action Bar */}
+          <div className="pt-2">
+            <SkillDetailInteractive skill={skill} agents={userAgents} isGuest={!user} />
           </div>
         </div>
 
-        <div className="mt-5 sm:mt-6 flex flex-wrap items-center gap-3 text-xs text-zk-muted pt-3.5 border-t border-zk-divider">
+        {/* Footer Meta */}
+        <div className="mt-6 flex flex-wrap items-center gap-3 text-xs text-zk-muted pt-4 border-t border-zk-divider">
           <span>
             Authored by <strong className="text-zk-text">{skill.author.name}</strong>
           </span>
@@ -149,7 +181,7 @@ export default async function SkillDetailPage({
                 href={skill.spec.documentationUrl}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="font-semibold text-zk-accent hover:underline inline-flex items-center gap-1"
+                className="font-semibold text-blue-600 dark:text-blue-400 hover:underline inline-flex items-center gap-1"
               >
                 <span>Documentation</span>
                 <span>↗</span>
@@ -161,27 +193,31 @@ export default async function SkillDetailPage({
 
       {/* Main Grid: Content & Meta */}
       <div className="grid grid-cols-1 gap-6 lg:gap-8 lg:grid-cols-3">
-        {/* Left Column: Spec, Checklist, Prompt */}
+        {/* Left Column: Spec, Checklist, Command, Instructions */}
         <div className="space-y-6 lg:col-span-2">
           {/* Overview */}
           <section className="space-y-2.5">
-            <h2 className="text-sm font-bold uppercase tracking-wider text-zk-muted">Overview</h2>
-            <p className="text-sm text-zk-text leading-relaxed">
-              {skill.spec.overview}
-            </p>
+            <h2 className="text-sm font-bold uppercase tracking-wider text-zk-text">Overview & Objectives</h2>
+            <div className="rounded-2xl border border-zk-border bg-zk-surface p-5">
+              <p className="text-sm text-zk-text2 leading-relaxed">
+                {skill.spec.overview}
+              </p>
+            </div>
           </section>
 
           {/* Contributor's Checklist */}
           {skill.spec.checklist.length > 0 && (
             <section className="space-y-2.5">
-              <h2 className="text-sm font-bold uppercase tracking-wider text-zk-muted">
-                Contributor&apos;s Checklist
+              <h2 className="text-sm font-bold uppercase tracking-wider text-zk-text">
+                Quality & Verification Checklist
               </h2>
-              <div className="rounded-2xl border border-zk-border bg-zk-surface p-5 space-y-2.5">
+              <div className="rounded-2xl border border-zk-border bg-zk-surface p-5 space-y-3">
                 {skill.spec.checklist.map((item, i) => (
-                  <div key={i} className="flex items-start gap-2.5 text-xs text-zk-text leading-relaxed">
-                    <span className="text-zk-muted font-bold shrink-0">•</span>
-                    <span>{item}</span>
+                  <div key={i} className="flex items-start gap-3 text-xs text-zk-text leading-relaxed">
+                    <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 text-[11px] font-bold">
+                      ✓
+                    </span>
+                    <span className="pt-0.5">{item}</span>
                   </div>
                 ))}
               </div>
@@ -191,75 +227,88 @@ export default async function SkillDetailPage({
           {/* Sample CLI Command */}
           {skill.spec.sampleCommand && (
             <section className="space-y-2.5">
-              <h2 className="text-sm font-bold uppercase tracking-wider text-zk-muted">Sample Command</h2>
-              <div className="flex items-center justify-between rounded-xl border border-zk-border bg-zk-chip px-4 py-3">
-                <code className="text-xs font-mono text-zk-text truncate mr-2">
-                  {skill.spec.sampleCommand}
-                </code>
+              <h2 className="text-sm font-bold uppercase tracking-wider text-zk-text">CLI Verification Command</h2>
+              <div className="flex items-center justify-between rounded-xl border border-zk-border bg-zk-chip/60 px-4 py-3">
+                <div className="flex items-center gap-2 overflow-hidden mr-2">
+                  <span className="text-zk-muted font-mono text-xs select-none">$</span>
+                  <code className="text-xs font-mono text-zk-text truncate select-all">
+                    {skill.spec.sampleCommand}
+                  </code>
+                </div>
                 <CopyCommandButton command={skill.spec.sampleCommand} />
               </div>
             </section>
           )}
 
           {/* Agent System Instructions Box */}
-          <section className="space-y-2.5">
-            <div className="flex items-center justify-between">
-              <h2 className="text-sm font-bold uppercase tracking-wider text-zk-muted">Agent System Instructions</h2>
-              <CopyPromptButton prompt={skill.prompt} label="Copy Instructions" />
-            </div>
-            <div className="relative rounded-2xl border border-zk-border bg-zk-chip p-5">
-              <pre className="overflow-x-auto whitespace-pre-wrap text-xs font-mono text-zk-text leading-relaxed select-text">
-                {skill.prompt}
-              </pre>
-            </div>
-          </section>
+          <SkillPromptSection skill={skill} agents={userAgents} isGuest={!user} />
         </div>
 
-        {/* Right Sidebar: Skill Information & Tags */}
+        {/* Right Sidebar: Skill Specification & Tags */}
         <div className="space-y-6 lg:col-span-1">
+          {/* Skill Specification Details */}
           <div className="rounded-2xl border border-zk-border bg-zk-surface p-5 space-y-4">
-            <h3 className="text-xs font-bold uppercase tracking-wider text-zk-muted">Skill Details</h3>
+            <h3 className="text-xs font-bold uppercase tracking-wider text-zk-muted">Specification</h3>
             <div className="space-y-3 text-xs divide-y divide-zk-divider">
-              <div className="pt-2 flex justify-between">
+              <div className="pt-2.5 flex justify-between items-center">
                 <span className="text-zk-muted">Category</span>
                 <span className="font-semibold text-zk-text">{skill.categoryLabel}</span>
               </div>
-              <div className="pt-2 flex justify-between">
-                <span className="text-zk-muted">Status</span>
-                <span className="font-semibold text-emerald-600 dark:text-emerald-400">
-                  Approved
-                </span>
+              <div className="pt-2.5 flex justify-between items-center">
+                <span className="text-zk-muted">Compatible Agents</span>
+                <span className="font-semibold text-zk-text">All AI Agents</span>
               </div>
-              <div className="pt-2 flex justify-between">
+              <div className="pt-2.5 flex justify-between items-center">
                 <span className="text-zk-muted">Author</span>
                 <span className="font-semibold text-zk-text">{skill.author.name}</span>
               </div>
+              <div className="pt-2.5 flex justify-between items-center">
+                <span className="text-zk-muted">Verification</span>
+                <span className="font-semibold text-zk-text">CLI & Test Suite</span>
+              </div>
+              {skill.spec.documentationUrl && (
+                <div className="pt-2.5 flex justify-between items-center">
+                  <span className="text-zk-muted">Documentation</span>
+                  <a
+                    href={skill.spec.documentationUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="font-bold text-blue-600 dark:text-blue-400 hover:underline inline-flex items-center gap-1"
+                  >
+                    <span>Reference</span>
+                    <span>↗</span>
+                  </a>
+                </div>
+              )}
             </div>
           </div>
 
+          {/* Tags */}
           {skill.tags.length > 0 && (
             <div className="rounded-2xl border border-zk-border bg-zk-surface p-5 space-y-3">
               <h3 className="text-xs font-bold uppercase tracking-wider text-zk-muted">Tags</h3>
               <div className="flex flex-wrap gap-1.5">
                 {skill.tags.map((tag) => (
-                  <span
+                  <Link
                     key={tag}
-                    className="rounded-md bg-zk-chip px-2 py-1 text-[10px] font-mono text-zk-text2"
+                    href="/skills"
+                    className="rounded-md bg-zk-chip hover:bg-zk-border px-2.5 py-1 text-[11px] font-mono text-zk-muted hover:text-zk-text transition"
                   >
                     #{tag}
-                  </span>
+                  </Link>
                 ))}
               </div>
             </div>
           )}
 
+          {/* Browse Library Link */}
           <div className="rounded-2xl border border-zk-border bg-zk-surface p-5 text-center space-y-2">
             <p className="text-xs text-zk-muted">
-              Looking for other approved skills?
+              Looking for other verified skills?
             </p>
             <Link
               href="/skills"
-              className="inline-block text-xs font-bold text-zk-accent hover:underline"
+              className="inline-block text-xs font-bold text-blue-600 dark:text-blue-400 hover:underline"
             >
               Browse All Skills in Library →
             </Link>
