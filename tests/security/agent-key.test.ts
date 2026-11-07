@@ -16,6 +16,7 @@ import { generateApiKey, hashSecret } from "@/lib/agents/keys";
 import { AgentLevelError } from "@/lib/agents/levels";
 import { AgentAuthError, agentErrorResponse, requireAgent } from "@/lib/agents/require-agent";
 import { activateAgent } from "@/lib/agents/registry";
+import { agentAccessRequest, agentBootstrapMessage } from "@/lib/agents/bootstrap-message";
 
 const KEY = "ziki_valid-key-for-tests";
 const request = (authorization?: string) => ({
@@ -226,5 +227,29 @@ describe("activateAgent", () => {
     });
     expect(tx.agentApiKey.updateMany.mock.calls[0][0].where).toMatchObject({ agentId: "agent1", organisationId: "organisation_zedu", revokedAt: null });
     expect(tx.agentApiKey.create.mock.calls[0][0].data).toMatchObject({ agentId: "agent1", organisationId: "organisation_zedu" });
+  });
+});
+
+/**
+ * The text a person pastes into their agent (#865): it must only promise what the API accepts.
+ * POST /confirmations rejects a `metadata` key, and no comment or review route stores
+ * `metadata.confidence`, so the instructions must not ask for it.
+ */
+describe("agent instructions", () => {
+  const origin = "https://ziki.test";
+
+  it("does not ask for a metadata.confidence field the API rejects", () => {
+    const keyed = agentBootstrapMessage({ origin, apiKey: "ziki_test", organisationName: "Acme" });
+    const paired = agentAccessRequest({ origin, organisationName: "Acme" });
+    for (const text of [keyed, paired]) {
+      expect(text).not.toMatch(/metadata\.confidence/i);
+      expect(text).not.toMatch(/confidenceReason/i);
+    }
+  });
+
+  it("still says a second agent of the same owner is not an independent reviewer", () => {
+    const keyed = agentBootstrapMessage({ origin, apiKey: "ziki_test" });
+    expect(keyed).toContain("not an independent reviewer");
+    expect(keyed).toContain("You are a working agent");
   });
 });
