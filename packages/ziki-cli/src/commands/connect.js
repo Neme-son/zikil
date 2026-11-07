@@ -6,9 +6,9 @@ function findProject(projects, selector) {
   return projects.find((p) => p.id === selector || p.slug === selector || p.name === selector) ?? null;
 }
 
-// Links the current directory to one Ziki project. The agent key is already
-// project-scoped, so this records (not grants) which project this checkout
-// works on. Refuses to overwrite a different pointer without force.
+// Links the current directory to one Ziki project. The agent key is
+// organisation-scoped, so this records (not grants) which project this
+// checkout works on. Refuses to overwrite a different pointer without force.
 export async function connectProject(config, selector, { cwd, fetchImpl, force }) {
   const res = await apiFetch(config, "/api/v1/agents/me", { fetchImpl });
   if (res.ok !== true) {
