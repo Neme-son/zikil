@@ -16,12 +16,12 @@ export default async function SkillsPage() {
     getSkills(),
   ]);
 
-  let userAgents: { id: string; name: string }[] = [];
+  let userAgents: { id: string; name: string; username?: string }[] = [];
   if (user) {
     userAgents = await prisma.agent
       .findMany({
         where: { ownerUserId: user.id },
-        select: { id: true, name: true },
+        select: { id: true, name: true, username: true },
         orderBy: { name: "asc" },
       })
       .catch(() => []);

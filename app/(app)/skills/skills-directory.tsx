@@ -4,11 +4,9 @@ import { useState, useMemo } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { type SkillItem } from "./skills-data";
+import { buildSmartSkillPrompt, type AgentInfo } from "./skills-prompt-builder";
 
-export interface AgentOption {
-  id: string;
-  name: string;
-}
+export type AgentOption = AgentInfo;
 
 interface SkillsDirectoryProps {
   skills: SkillItem[];
@@ -82,20 +80,23 @@ export function SkillsDirectory({
     });
   }, [skills, selectedCategory, searchQuery]);
 
-  async function copyPrompt(skill: SkillItem) {
-    const targetAgent = cardSelectedAgents[skill.id];
-    const targeted = Boolean(targetAgent && targetAgent !== "all");
-    const promptText = targeted
-      ? `Target Agent: ${targetAgent}\n\n${skill.prompt}`
-      : skill.prompt;
+  async function copyPrompt(skill: SkillItem, e?: React.MouseEvent) {
+    e?.stopPropagation();
+    e?.preventDefault();
+    const targetAgent = cardSelectedAgents[skill.id] || "all";
+    const promptText = buildSmartSkillPrompt(skill, targetAgent, agents);
 
     try {
       await navigator.clipboard.writeText(promptText);
-      showToast(
-        targeted
-          ? `Copied "${skill.title}" prompt for ${targetAgent}!`
-          : `Copied "${skill.title}" prompt to clipboard!`,
-      );
+      const isAll = targetAgent === "all";
+      const matchedAgent = agents.find((a) => a.name === targetAgent);
+      const agentLabel = isAll
+        ? "all agents"
+        : matchedAgent?.username
+        ? `@${matchedAgent.username}`
+        : targetAgent;
+
+      showToast(`Copied "${skill.title}" prompt for ${agentLabel}!`);
     } catch {
       showToast("Unable to copy to clipboard.");
     }
@@ -218,13 +219,17 @@ export function SkillsDirectory({
                 tabIndex={0}
                 onClick={(e) => {
                   const target = e.target as HTMLElement | null;
-                  if (target?.closest("button, a, select, input, label")) {
+                  if (target?.closest("button, a, select, input, label, [data-prevent-card-click]")) {
                     return;
                   }
                   router.push(`/skills/${skill.slug}`);
                 }}
                 onKeyDown={(e) => {
                   if (e.key === "Enter") {
+                    const target = e.target as HTMLElement | null;
+                    if (target?.closest("button, a, select, input, label, [data-prevent-card-click]")) {
+                      return;
+                    }
                     router.push(`/skills/${skill.slug}`);
                   }
                 }}
@@ -286,17 +291,23 @@ export function SkillsDirectory({
                 </div>
 
                 {/* Bottom Actions: Agent Dropdown & Copy Prompt */}
-                <div className="space-y-2.5 border-t border-zk-divider pt-4">
+                <div
+                  className="space-y-2.5 border-t border-zk-divider pt-4"
+                  data-prevent-card-click="true"
+                  onClick={(e) => e.stopPropagation()}
+                >
                   {/* Agent Target Dropdown */}
-                  <div className="relative">
+                  <div className="relative" onClick={(e) => e.stopPropagation()}>
                     <select
                       value={selectedAgent}
-                      onChange={(e) =>
+                      onClick={(e) => e.stopPropagation()}
+                      onChange={(e) => {
+                        e.stopPropagation();
                         setCardSelectedAgents((prev) => ({
                           ...prev,
                           [skill.id]: e.target.value,
-                        }))
-                      }
+                        }));
+                      }}
                       aria-label={`Target agent for ${skill.title}`}
                       className="w-full appearance-none rounded-xl border border-zk-border bg-zk-chip/60 hover:bg-zk-chip py-2 pl-3.5 pr-8 text-xs font-semibold text-zk-text focus:border-blue-600 focus:outline-hidden transition cursor-pointer"
                     >
@@ -305,7 +316,7 @@ export function SkillsDirectory({
                           <option value="all">For: All My Agents</option>
                           {agents.map((agent) => (
                             <option key={agent.id} value={agent.name}>
-                              For: {agent.name}
+                              For: {agent.name}{agent.username ? ` (@${agent.username})` : ""}
                             </option>
                           ))}
                         </>
@@ -325,8 +336,12 @@ export function SkillsDirectory({
                   {/* Copy Button */}
                   <button
                     type="button"
-                    onClick={() => copyPrompt(skill)}
-                    className="flex w-full items-center justify-center gap-2 rounded-xl border border-zk-border bg-zk-surface hover:bg-zk-chip py-2.5 text-xs font-bold text-zk-text shadow-xs hover:border-zk-border-hover transition"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      e.preventDefault();
+                      copyPrompt(skill, e);
+                    }}
+                    className="flex w-full items-center justify-center gap-2 rounded-xl border border-zk-border bg-zk-surface hover:bg-zk-chip py-2.5 text-xs font-bold text-zk-text shadow-xs hover:border-zk-border-hover transition cursor-pointer"
                   >
                     <svg className="h-3.5 w-3.5 text-zk-muted" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
@@ -336,7 +351,8 @@ export function SkillsDirectory({
 
                   <Link
                     href={`/skills/${skill.slug}`}
-                    className="flex w-full items-center justify-center gap-1.5 text-center text-xs font-medium text-zk-muted hover:text-blue-600 transition py-0.5"
+                    onClick={(e) => e.stopPropagation()}
+                    className="flex w-full items-center justify-center gap-1.5 text-center text-xs font-medium text-zk-muted hover:text-blue-600 transition py-0.5 cursor-pointer"
                   >
                     <span>View Details &amp; Spec</span>
                     <span>→</span>
