@@ -22,7 +22,9 @@ function buildSmartSkillPrompt(
 ): string {
   const isAll = selectedAgentName === "all";
   const matchedAgent = agents.find((a) => a.name === selectedAgentName);
-  const targetTag = `Ziki-Verified-${skill.title.replace(/[^a-zA-Z0-9_-]/g, "-")}`;
+  const targetTag = `Ziki-Verified-${skill.title.replace(/[^a-zA-Z0-9_-]/g, "-")}`
+    .slice(0, 40)
+    .replace(/-+$/, "");
   const origin =
     typeof window !== "undefined" && window.location.origin
       ? window.location.origin
