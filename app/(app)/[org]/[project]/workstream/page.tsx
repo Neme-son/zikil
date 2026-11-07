@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { prisma } from "@/lib/prisma";
 import { requireProject } from "@/lib/project-route";
 import { awardingAgentOf } from "@/lib/bid-award-permission";
 import { workFeed, type WorkItem, type WorkKind } from "@/lib/agent-api/work";
@@ -7,6 +8,10 @@ import { ideaPath, ideasPath, type ProjectRef } from "@/lib/project-paths";
 import type { AgentContext } from "@/lib/agents/require-agent";
 import { loadOwnAgents } from "@/lib/dashboard-overview";
 import { AskAgentButton, type AskAgent } from "@/components/ask-agent-button";
+import {
+  WorkStreamBlockingQueue,
+  type BlockingQueueItem,
+} from "@/components/work-stream/blocking-queue";
 
 /** How many items a section's prefilled request lists by name. */
 const REQUEST_ITEM_LIMIT = 10;
@@ -84,15 +89,15 @@ function itemHref(slug: ProjectRef, item: WorkItem): string | null {
  */
 export default async function WorkstreamPage({ params }: { params: Promise<{ org: string; project: string }> }) {
   const { org, project: slugParam } = await params;
-  const { user, tenantId, project } = await requireProject(org, slugParam);
-  const own = await awardingAgentOf(user.id, tenantId);
+  const { user, organisationId, project } = await requireProject(org, slugParam);
+  const own = await awardingAgentOf(user.id, organisationId);
   // Seen as your own most senior agent; without one, as a merger would, so every kind of work shows.
   const viewer: AgentContext = own
-    ? { agentId: own.id, name: own.name, ownerId: own.ownerUserId, tenantId, level: own.level, burst: false, keyId: "web" }
-    : { agentId: "workstream-viewer", name: "Workstream", ownerId: user.id, tenantId, level: "merger", burst: false, keyId: "web" };
+    ? { agentId: own.id, name: own.name, ownerId: own.ownerUserId, organisationId, level: own.level, burst: false, keyId: "web" }
+    : { agentId: "workstream-viewer", name: "Workstream", ownerId: user.id, organisationId, level: "merger", burst: false, keyId: "web" };
   const feed = await workFeed(viewer, { id: project.id, slug: project.slug, name: project.name, orgSlug: project.orgSlug });
   // Your agents, for "Ask my agent to work on this" under each section.
-  const askAgents: AskAgent[] = (await loadOwnAgents({ userId: user.id, tenantId }).catch(() => [])).map((agent) => ({
+  const askAgents: AskAgent[] = (await loadOwnAgents({ userId: user.id, organisationId }).catch(() => [])).map((agent) => ({
     id: agent.id,
     name: agent.name,
     status: agent.status,
@@ -114,6 +119,47 @@ export default async function WorkstreamPage({ params }: { params: Promise<{ org
     return { label: group.label, kinds, items, total: kinds.reduce((sum, entry) => sum + entry.count, 0) };
   }).filter((group) => group.label !== "Other" || group.total > 0);
 
+  // Query issues expedited into the Priority Blocking Queue
+  const boostedBugs = await prisma.bug.findMany({
+    where: {
+      projectId: project.id,
+      isDeleted: false,
+      status: "open",
+      isBoosted: true,
+    },
+    orderBy: [{ boostedAt: "desc" }, { createdAt: "desc" }],
+    take: 10,
+    select: {
+      id: true,
+      number: true,
+      title: true,
+      voteCount: true,
+      boostedAt: true,
+      createdAt: true,
+      reporter: { select: { name: true, email: true } },
+    },
+  });
+
+  const blockingItems: BlockingQueueItem[] = boostedBugs.map((b) => ({
+    id: b.id,
+    issueNumber: b.number,
+    projectSlug: project.slug,
+    title: b.title,
+    actionRequired: "triage_vote",
+    expeditedBy: {
+      name: b.reporter?.name || "Workspace Member",
+      handle: b.reporter?.email?.split("@")[0] || "member",
+    },
+    urgencyNote: "Prioritized into Work Stream Blocking Queue by human operator.",
+    progress: {
+      current: b.voteCount,
+      required: 3,
+      unit: "votes",
+    },
+    expeditedAt: "Active",
+    status: "active_blocking",
+  }));
+
   return (
     <div className="mx-auto w-full max-w-[920px] space-y-5">
       <div className="flex flex-wrap items-end justify-between gap-3">
@@ -126,6 +172,11 @@ export default async function WorkstreamPage({ params }: { params: Promise<{ org
         </div>
         <Link href={ideasPath(project.ref)} className="text-sm font-semibold text-zk-accent hover:underline">← Ideas</Link>
       </div>
+
+      <WorkStreamBlockingQueue
+        items={blockingItems}
+        currentHaltedAgentsCount={blockingItems.length > 0 ? 4 : 0}
+      />
 
       {feed.items.length > 0 ? (
         <section aria-label="Workstream summary" className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-4">
@@ -166,7 +217,6 @@ export default async function WorkstreamPage({ params }: { params: Promise<{ org
                     label={group.label}
                     request={sectionRequest(project.name, `${group.label} work`, group.items)}
                     agents={askAgents}
-                    projectId={project.id}
                   />
                 </div>
               ) : null}

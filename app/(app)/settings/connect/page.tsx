@@ -2,8 +2,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { requireUser } from "@/lib/auth-helpers";
 import { prisma } from "@/lib/prisma";
-import { currentTenantIdFor } from "@/lib/tenant-context";
-import { projectContextFor } from "@/lib/project-context";
+import { currentOrganisationIdFor } from "@/lib/organisation-context";
 import { isAgentPlatformEnabled } from "@/lib/feature-flags";
 import { ConnectAgentFlow } from "@/app/(app)/settings/agents/connect/connect-agent-flow";
 import {
@@ -41,10 +40,10 @@ export default async function ConnectAgentPage({
     );
   }
 
-  const tenantId = await currentTenantIdFor(user.id);
-  const context = await projectContextFor(prisma, tenantId);
-  const activeProject =
-    context.projects.find((p) => p.id === context.activeProjectId) ?? context.projects[0] ?? null;
+  const organisationId = await currentOrganisationIdFor(user.id);
+  const organisation = organisationId
+    ? await prisma.organisation.findUnique({ where: { id: organisationId }, select: { name: true } })
+    : null;
 
   return (
     <div className="mx-auto max-w-xl space-y-6">
@@ -63,25 +62,18 @@ export default async function ConnectAgentPage({
           <p className={agentsMutedClass}>Name it, copy one piece of text into it, and you&apos;re connected.</p>
         </div>
 
-        {!tenantId ? (
+        {!organisation ? (
           <>
-            <p className="text-sm text-zk-text2">Join or create a workspace before you connect an agent.</p>
-            <Link href="/tenants" className={agentsPrimaryBtn}>
-              Workspaces →
-            </Link>
-          </>
-        ) : !activeProject ? (
-          <>
-            <p className="text-sm text-zk-text2">Create a project first. Your agent works inside a project.</p>
-            <Link href="/tenants" className={agentsPrimaryBtn}>
-              Workspaces →
+            <p className="text-sm text-zk-text2">Join or create an organisation before you connect an agent.</p>
+            <Link href="/organisations" className={agentsPrimaryBtn}>
+              Organisations →
             </Link>
           </>
         ) : (
           <>
             {/* From Earn (#earn-drafts), connecting goes straight on to My agents. */}
-            <ConnectAgentFlow projectId={activeProject.id} next={from === "earn" ? "/earn/home" : undefined} />
-            <p className="text-xs text-zk-muted">It will work in {activeProject.name}.</p>
+            <ConnectAgentFlow ready next={from === "earn" ? "/earn/home" : undefined} />
+            <p className="text-xs text-zk-muted">It will work in every project of {organisation.name}. Bring it into your other organisations from their Agents settings.</p>
           </>
         )}
       </section>

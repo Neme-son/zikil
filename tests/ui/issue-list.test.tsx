@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { ReactElement } from "react";
 
@@ -20,6 +20,13 @@ const groupBy = vi.hoisted(() => vi.fn(async (_args: { by: string[]; where?: Rec
   void _args;
   return [];
 }));
+const indexedSearch = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/search-index", () => ({
+  searchWorkItems: indexedSearch,
+  bugSearchSort: () => "createdAt:desc,sourceId:desc",
+  ideaSearchSort: () => "score:desc,createdAt:desc,sourceId:desc",
+  typesenseFilter: (field: string, value: unknown) => value === undefined ? null : `${field}:=${String(value)}`,
+}));
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: vi.fn(), replace: vi.fn(), refresh: vi.fn() }),
@@ -34,17 +41,24 @@ vi.mock("@/lib/auth-helpers", () => ({ requireUser: vi.fn(async () => ({ id: "da
 vi.mock("@/lib/project-route", () => ({
   requireProject: vi.fn(async () => ({
     user: { id: "dave", role: "user" },
-    tenantId: "tenant-acme",
-    project: { id: "project-acme", slug: "acme", name: "Acme Web", goal: null, tenantId: "tenant-acme", orgSlug: "zedu", ref: "zedu/acme" },
+    organisationId: "organisation-acme",
+    project: { id: "project-acme", slug: "acme", name: "Acme Web", goal: null, organisationId: "organisation-acme", orgSlug: "zedu", ref: "zedu/acme" },
+    isOrgMember: true,
+    isOrgAdmin: false,
+    isProjectMember: false,
+    canContribute: true,
   })),
 }));
-vi.mock("@/lib/tenant-access", () => ({ currentTenantAccess: vi.fn(async () => ({ membershipRole: "member" })) }));
+vi.mock("@/lib/organisation-access", () => ({
+  currentOrganisationAccess: vi.fn(async () => ({ membershipRole: "member", admin: false })),
+  organisationAccessFor: vi.fn(async () => ({ membershipRole: "member", admin: false })),
+}));
 vi.mock("@/lib/lookups", () => ({
   getIssueTypes: vi.fn(async () => []),
 }));
-vi.mock("@/lib/tenant-context", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@/lib/tenant-context")>()),
-  currentTenantIdFor: vi.fn(async () => "tenant-acme"),
+vi.mock("@/lib/organisation-context", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/organisation-context")>()),
+  currentOrganisationIdFor: vi.fn(async () => "organisation-acme"),
 }));
 vi.mock("@/lib/issue-stage", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/issue-stage")>()),
@@ -83,14 +97,21 @@ vi.mock("@/lib/prisma", () => ({
 }));
 
 // A person's answer on Your call is posted through the ordinary comment action: here it only records what it was given.
+vi.mock("@/lib/idea-structuring", () => ({ structureIdea: vi.fn(async (input: unknown) => input) }));
 vi.mock("@/app/actions/issues", async (importOriginal) => ({ ...(await importOriginal<typeof import("@/app/actions/issues")>()), addCommentAction: vi.fn(async () => ({ ok: true })) }));
 // Your call (#your-call) asks the database for the split issues on every view (for its step's count): the layout tests below read the list's own queries, so it gets an empty answer here.
 vi.mock("@/lib/your-call", async (importOriginal) => ({ ...(await importOriginal<typeof import("@/lib/your-call")>()), loadYourCall: vi.fn(async () => []) }));
 import { IssuesList } from "@/app/(app)/[org]/[project]/issues/_list/issues-list";
+import { requireProject } from "@/lib/project-route";
+import { organisationAccessFor } from "@/lib/organisation-access";
 import { answerFrom, topShare, urgencyOf, yardsticksFor, type UrgencySignals } from "@/lib/your-call";
-import { currentTenantAccess } from "@/lib/tenant-access";
+import { currentOrganisationAccess } from "@/lib/organisation-access";
 import { addCommentAction } from "@/app/actions/issues";
 import { answerYourCallAction } from "@/app/actions/your-call";
+import { TasksBoard } from "@/components/marketing/tasks/tasks-board";
+import { taskTab, type TaskRow, type TasksBoardData } from "@/components/marketing/tasks/model";
+import { projectRef } from "@/lib/project-paths";
+import { PROJECT_ALL, PROJECT_ALL_PARAM } from "@/lib/issue-list-filters";
 
 const BUG = {
   id: "bug-1",
@@ -111,7 +132,7 @@ const BUG = {
   reporter: { name: "Rita Reporter", role: "user", image: null },
   assignee: { name: "Bob Builder", role: "user", image: null },
   area: null,
-  project: { slug: "acme", tenant: { slug: "zedu" } },
+  project: { slug: "acme", organisation: { slug: "zedu" } },
   votes: [],
   _count: { comments: 3, attachments: 1 },
 };
@@ -155,6 +176,7 @@ beforeEach(() => {
   ideaCount.mockResolvedValue(4);
   ideaFindMany.mockResolvedValue([IDEA]);
   ideaVerdictGroupBy.mockResolvedValue([]);
+  indexedSearch.mockRejectedValue(new Error("Typesense is unavailable in this test."));
 });
 
 describe("issue list layout", () => {
@@ -179,7 +201,7 @@ describe("issue list layout", () => {
   it("lists ideas under Ideas' New ideas, from the Idea table, with their score and no importance button (#idea-table)", async () => {
     const html = await renderList();
     expect(ideaFindMany).toHaveBeenCalledWith(expect.objectContaining({
-      where: expect.objectContaining({ tenantId: "tenant-acme", projectId: "project-acme", status: "open", isDeleted: false }),
+      where: expect.objectContaining({ organisationId: "organisation-acme", projectId: "project-acme", status: "open", isDeleted: false }),
     }));
     expect(html).toContain('href="/zedu/acme/ideas/12"');
     expect(html).toContain("Idea #12");
@@ -198,7 +220,7 @@ describe("issue list layout", () => {
     expect(list).not.toContain("page=");
     expect(list).not.toContain("stage=");
     const statusCount = groupBy.mock.calls.find(([args]) => args?.by?.[0] === "status");
-    expect(statusCount?.[0].where).toMatchObject({ tenantId: "tenant-acme", projectId: "project-acme" });
+    expect(statusCount?.[0].where).toMatchObject({ organisationId: "organisation-acme", projectId: "project-acme" });
     expect(statusCount?.[0].where).not.toHaveProperty("status");
   });
 
@@ -215,6 +237,66 @@ describe("issue list layout", () => {
     expect(where).not.toHaveProperty("id");
     expect(where).not.toHaveProperty("status");
     expect(current(stages(html))).toEqual([]);
+  });
+
+  it("uses Typesense for issue text hits and rechecks the current organisation-scoped rows in PostgreSQL", async () => {
+    indexedSearch.mockResolvedValue({ found: 1, hits: [{ id: "bug-1", kind: "bug", score: 10 }] });
+    await renderList({ q: "login", status: "all" });
+    expect(indexedSearch).toHaveBeenCalledWith(expect.objectContaining({
+      kind: "bug", organisationId: "organisation-acme", projectId: "project-acme", track: "product",
+      extraFilters: expect.arrayContaining(["isDeleted:=false"]),
+    }));
+    const rowQuery = findMany.mock.calls.at(-1)![0];
+    expect(rowQuery.where.id).toEqual({ in: ["bug-1"] });
+    expect(rowQuery.where).not.toHaveProperty("OR");
+    expect(rowQuery.where).toMatchObject({ organisationId: "organisation-acme", projectId: "project-acme", track: "product", isDeleted: false });
+  });
+
+  it("uses Typesense for Idea text hits while retaining project and track predicates", async () => {
+    ideaCount.mockResolvedValue(1);
+    indexedSearch.mockResolvedValue({ found: 1, hits: [{ id: "idea-1", kind: "idea", score: 10 }] });
+    await renderList({ q: "export", status: "ideas" });
+    expect(indexedSearch).toHaveBeenCalledWith(expect.objectContaining({
+      kind: "idea", organisationId: "organisation-acme", projectId: "project-acme", track: "product",
+    }));
+    const rowQuery = ideaFindMany.mock.calls.at(-1)![0];
+    expect(rowQuery.where.id).toEqual({ in: ["idea-1"] });
+    expect(rowQuery.where).not.toHaveProperty("OR");
+    expect(rowQuery.where).toMatchObject({ organisationId: "organisation-acme", projectId: "project-acme", track: "product", isDeleted: false });
+  });
+
+  it("falls back to PostgreSQL for issue text search when Typesense is unavailable", async () => {
+    const html = await renderList({ q: "login", status: "all" });
+    expect(html).toContain("Issues");
+    expect(indexedSearch).toHaveBeenCalled();
+    const rowQuery = findMany.mock.calls.at(-1)![0];
+    expect(rowQuery.where).toMatchObject({ organisationId: "organisation-acme", projectId: "project-acme", track: "product" });
+    expect(rowQuery.where).toHaveProperty("OR");
+  });
+
+  it("falls back to PostgreSQL for idea text search and keeps its source-of-truth count", async () => {
+    const html = await renderList({ q: "export", status: "ideas" });
+    expect(html).toContain("Export activity as CSV");
+    expect(indexedSearch).toHaveBeenCalled();
+    const rowQuery = ideaFindMany.mock.calls.at(-1)![0];
+    expect(rowQuery.where).toMatchObject({ organisationId: "organisation-acme", projectId: "project-acme", track: "product" });
+    expect(rowQuery.where).toHaveProperty("OR");
+    expect(ideaCount).toHaveBeenCalled();
+  });
+
+  it("refills a stale Typesense page from PostgreSQL instead of returning a short page", async () => {
+    indexedSearch.mockResolvedValue({ found: 1, hits: [{ id: "deleted-or-missing", kind: "bug", score: 10 }] });
+    findMany.mockImplementation(async (args: { where?: Record<string, unknown> }) => args.where?.id ? [] : [BUG]);
+    await renderList({ q: "login", status: "all" });
+    expect(findMany.mock.calls.at(-1)![0].where).not.toHaveProperty("id");
+    expect(findMany.mock.calls.at(-1)![0].where).toHaveProperty("OR");
+  });
+
+  it("uses PostgreSQL rows when the indexed total disagrees with the exact database count", async () => {
+    indexedSearch.mockResolvedValue({ found: 99, hits: [{ id: "bug-1", kind: "bug", score: 10 }] });
+    await renderList({ q: "login", status: "all" });
+    expect(findMany.mock.calls.at(-1)![0].where).not.toHaveProperty("id");
+    expect(findMany.mock.calls.at(-1)![0].where).toHaveProperty("OR");
   });
 
   it("lists each tab by its main status (Ziki #713, #substatus)", async () => {
@@ -257,6 +339,53 @@ describe("issue list layout", () => {
 });
 
 /** The agents dock's settings (#agents-dock): saved per browser, and the dock still works when they can't be. */
+describe("a signed-in stranger on another organisation's public project", () => {
+  const visitor = {
+    user: { id: "stranger", role: "user" },
+    organisationId: "organisation-acme",
+    project: { id: "project-acme", slug: "acme", name: "Acme Web", goal: null, organisationId: "organisation-acme", orgSlug: "zedu", ref: projectRef("zedu", "acme"), visibility: "public", isOpenForContributors: true },
+    isOrgMember: false,
+    isOrgAdmin: false,
+    isProjectMember: false,
+    canContribute: false,
+  } as unknown as Awaited<ReturnType<typeof requireProject>>;
+  const asMember = vi.mocked(requireProject).getMockImplementation()!;
+  const memberRole = vi.mocked(organisationAccessFor).getMockImplementation()!;
+  const ownRole = vi.mocked(currentOrganisationAccess).getMockImplementation()!;
+  const owner = { organisationId: "own", organisationName: "Own", organisationSlug: "own", membershipRole: "owner", admin: true } as const;
+  const none = { organisationId: "organisation-acme", organisationName: null, organisationSlug: null, membershipRole: null, admin: false } as const;
+  const listQuery = () => findMany.mock.calls[0][0].where as { projectId?: string; isDeleted?: boolean };
+
+  beforeEach(() => {
+    vi.mocked(requireProject).mockImplementation(async () => visitor);
+    // They own an organisation of their own, as every new account does, and have no role in this one.
+    vi.mocked(currentOrganisationAccess).mockImplementation(async () => owner);
+    vi.mocked(organisationAccessFor).mockImplementation(async () => none);
+  });
+
+  afterEach(() => {
+    vi.mocked(requireProject).mockImplementation(asMember);
+    vi.mocked(currentOrganisationAccess).mockImplementation(ownRole);
+    vi.mocked(organisationAccessFor).mockImplementation(memberRole);
+  });
+
+  it("can't reach the organisation's private projects with ?project=all, which a member can", async () => {
+    await renderList({ status: "all", [PROJECT_ALL_PARAM]: PROJECT_ALL });
+    expect(listQuery().projectId).toBe("project-acme");
+    for (const [args] of ideaCount.mock.calls) expect((args as { where: { projectId?: string } }).where.projectId).toBe("project-acme");
+
+    findMany.mockClear();
+    vi.mocked(requireProject).mockImplementation(asMember);
+    await renderList({ status: "all", [PROJECT_ALL_PARAM]: PROJECT_ALL });
+    expect(listQuery().projectId).toBeUndefined();
+  });
+
+  it("can't list deleted issues, though they own an organisation of their own", async () => {
+    await renderList({ status: "all", deleted: "true" });
+    expect(listQuery().isDeleted).toBe(false);
+  });
+});
+
 describe("agents dock settings", () => {
   function fakeStorage(saved: string | null, blocked = false) {
     const store = new Map(saved === null ? [] : [["ziki-agents-dock", saved]]);
@@ -272,35 +401,34 @@ describe("agents dock settings", () => {
     return import("@/components/agents-dock-prefs");
   }
 
-  it("starts with the face and the bar closing when the cursor leaves", async () => {
+  it("starts with the face look", async () => {
     fakeStorage(null);
     const { readPrefs, lookFor } = await load();
-    expect(readPrefs().closeOnLeave).toBe(true);
     expect(lookFor(readPrefs(), "agent-1")).toBe("face");
     vi.unstubAllGlobals();
   });
 
-  it("keeps the checkbox's choice across a page load, and ignores anything it can't read", async () => {
+  it("keeps a hidden agent across a page load, and ignores anything it can't read", async () => {
     const store = fakeStorage(null);
-    (await load()).writePrefs({ closeOnLeave: false });
-    expect(JSON.parse(store.get("ziki-agents-dock")!).closeOnLeave).toBe(false);
-    expect((await load()).readPrefs().closeOnLeave).toBe(false);
-    fakeStorage(JSON.stringify({ closeOnLeave: "no", pinned: 1, looks: { a: "nonsense", b: "pixel" } }));
+    (await load()).writeHidden("agent-1", true);
+    expect(JSON.parse(store.get("ziki-agents-dock")!).hidden).toEqual(["agent-1"]);
+    expect((await load()).readPrefs().hidden).toEqual(["agent-1"]);
+    fakeStorage(JSON.stringify({ hidden: "no", looks: { a: "nonsense", b: "pixel" } }));
     const junk = (await load()).readPrefs();
-    expect(junk).toMatchObject({ closeOnLeave: true, pinned: true, looks: { b: "pixel" } });
+    expect(junk).toMatchObject({ hidden: [], looks: { b: "pixel" } });
     expect(junk.looks.a).toBeUndefined();
     fakeStorage("not json");
-    expect((await load()).readPrefs().closeOnLeave).toBe(true);
+    expect((await load()).readPrefs().hidden).toEqual([]);
     vi.unstubAllGlobals();
   });
 
   it("still works when the browser blocks storage: the choice holds until the page reloads", async () => {
     fakeStorage(null, true);
-    const { readPrefs, writePrefs } = await load();
-    expect(readPrefs().closeOnLeave).toBe(true);
-    writePrefs({ closeOnLeave: false });
-    expect(readPrefs().closeOnLeave).toBe(false);
-    expect((await load()).readPrefs().closeOnLeave).toBe(true);
+    const { readPrefs, writeHidden } = await load();
+    expect(readPrefs().hidden).toEqual([]);
+    writeHidden("agent-1", true);
+    expect(readPrefs().hidden).toEqual(["agent-1"]);
+    expect((await load()).readPrefs().hidden).toEqual([]);
     vi.unstubAllGlobals();
   });
 });
@@ -370,7 +498,7 @@ describe("Your call answers", () => {
     bugFindFirst.mockResolvedValue(issue({ reporterId: "ann", beneficiaryUserId: "ann" }));
     expect(await answerYourCallAction("bug-1", "confirm", "yes", "")).toEqual({ error: "Only the person this issue is for, or an admin, can answer for it." });
     expect(addCommentAction).not.toHaveBeenCalled();
-    vi.mocked(currentTenantAccess).mockResolvedValueOnce({ membershipRole: "admin" } as never);
+    vi.mocked(currentOrganisationAccess).mockResolvedValueOnce({ membershipRole: "admin" } as never);
     expect(await answerYourCallAction("bug-1", "confirm", "yes", "")).toEqual({ ok: true });
     bugFindFirst.mockResolvedValue(issue({ substatus: "open" }));
     expect(await answerYourCallAction("bug-1", "confirm", "yes", "")).toEqual({ error: "The agents are no longer split on this one." });
@@ -405,7 +533,7 @@ describe("Your call list", () => {
   const decision = (authorId: string, at: number) => ({ authorId, body: "**Decision from the owner:** Yes, the fix is ready. Please go ahead and merge it.", createdAt: T(at) });
   const issue = (over: Record<string, unknown> = {}) => ({
     id: "bug-9", number: 9, title: "Fix the header", summary: null, substatus: "requires_review", pullRequestUrl: PR, pullRequestHeadSha: "head2", updatedAt: T(0),
-    voteCount: 0, isBoosted: false, reporterId: "dave", beneficiaryUserId: "dave", milestone: null, project: { slug: "acme", tenant: { slug: "zedu" } },
+    voteCount: 0, isBoosted: false, reporterId: "dave", beneficiaryUserId: "dave", milestone: null, project: { slug: "acme", organisation: { slug: "zedu" } },
     deliveries: [{ beneficiaryUserId: "carl", pullRequestUrl: PR }], comments: [],
     testVerdicts: [verdict({}), verdict({ goodToMerge: false, agentId: "a2", onBehalfOfUserId: "ben", agent: { name: "Ben's agent", ownerUserId: "ben" }, createdAt: T(5), updatedAt: T(5) })],
     confirmations: [], ...over,
@@ -461,5 +589,107 @@ describe("Your call list", () => {
     expect(early!.answer).toBeNull();
     const [answered] = await load([issue({ comments: [decision("dave", 20)] })]);
     expect(answered!.answer).toBe("yes");
+  });
+});
+
+describe("the marketing tasks board", () => {
+  const ROW = {
+    id: "task-1", number: 41, title: "Write the launch post", href: "/acme/41", status: "open", substatus: "open", closeReason: null,
+    importance: 0, reward: 4, rewardEstimates: 2, rewardFixed: false, typeName: "Blog post", agentName: null, work: null, offeredTo: null,
+    revision: null, bids: 2, comments: 0, updatedAt: new Date("2026-11-01T10:00:00Z"),
+  } satisfies TaskRow;
+  
+  function renderBoard(board: Partial<TasksBoardData> = {}) {
+    return clean(renderToStaticMarkup(
+      <TasksBoard slug={projectRef("acme", "acme")} board={{
+        tab: taskTab("open"),
+        counts: { ideas: 2, open: 1, "in-progress": 4, closed: 1, done: 3, live: 2 },
+        sortParam: null,
+        list: { kind: "tasks", rows: [ROW], sort: "importance" },
+        pagination: { page: 1, totalPages: 1, totalCount: 1, from: 1, to: 1 },
+        ...board,
+      }} />,
+    ));
+  }
+
+  it("opens each task on the shared issue route, ready for bids with no confirmation step", () => {
+    const html = renderBoard();
+    expect(html).toContain('href="/acme/41"');
+    expect(html).toContain("2 bids");
+    expect(html).not.toContain("Awaiting Confirmation");
+  });
+
+  it("shows the three stages across the top, each counting its own steps, with Merge left out", () => {
+    const nav = stages(renderBoard());
+    expect(counted(nav)).toEqual({ Ideas: 2, "In Progress": 6, Delivered: 5 });
+    expect(current(nav)).toEqual(["In Progress"]);
+  });
+
+  it("lists a stage's lifecycle steps down the left", () => {
+    const inProgress = statusList(renderBoard());
+    expect(links(inProgress).map(labelOf)).toEqual(["Open", "In progress", "Closed"]);
+    expect(current(inProgress)).toEqual(["Open"]);
+    const delivered = statusList(renderBoard({ tab: taskTab("live") }));
+    expect(links(delivered).map(labelOf)).toEqual(["Done", "Live"]);
+    expect(current(delivered)).toEqual(["Live"]);
+  });
+
+  it("has no lifecycle steps under Ideas", () => {
+    const html = renderBoard({ tab: taskTab("ideas"), list: { kind: "proposals", sort: "score", ideas: [] } });
+    expect(statusList(html)).toBe("");
+    expect(current(stages(html))).toEqual(["Ideas"]);
+  });
+
+  it("lists proposals as ideas, each opening its idea page", () => {
+    const html = renderBoard({
+      tab: taskTab("ideas"),
+      list: { kind: "proposals", sort: "score", ideas: [{
+        id: "idea-1", number: 12, title: "A launch post", score: 2, threshold: 3, createdAt: new Date("2026-11-01T10:00:00Z"),
+        reporterName: "Rita", verdicts: 2, good: 3, badVotes: 1,
+      }] },
+    });
+    expect(html).toContain('href="/acme/acme/ideas/12"');
+  });
+
+  it("says why a tab is empty instead of showing an empty list", () => {
+    expect(renderBoard({ list: { kind: "tasks", rows: [], sort: "importance" }, pagination: { page: 1, totalPages: 1, totalCount: 0, from: 0, to: 0 } })).toContain("No open tasks.");
+  });
+
+  it("keeps the tab and sort when paging", () => {
+    const html = renderBoard({ sortParam: "reward", pagination: { page: 1, totalPages: 2, totalCount: 30, from: 1, to: 25 } }).replaceAll("&amp;", "&");
+    expect(html).toContain("/acme/acme/marketing?status=open&sort=reward&page=2");
+  });
+});
+
+describe("the issue list's track filter (M-UI-8)", () => {
+  it("lists, and searches, only marketing issues when asked", async () => {
+    indexedSearch.mockResolvedValue({ found: 1, hits: [{ id: "bug-1", kind: "bug", score: 10 }] });
+    await renderList({ q: "launch", status: "all", track: "marketing" });
+    expect(indexedSearch).toHaveBeenCalledWith(expect.objectContaining({ kind: "bug", track: "marketing" }));
+    // The first query lists the rows; a later one only reads their descriptions by id.
+    expect(findMany.mock.calls[0]![0].where.track).toBe("marketing");
+  });
+
+  it("names no track when asked for all work", async () => {
+    indexedSearch.mockResolvedValue({ found: 1, hits: [{ id: "bug-1", kind: "bug", score: 10 }] });
+    await renderList({ q: "launch", status: "all", track: "all" });
+    expect(indexedSearch.mock.calls.at(-1)![0]).not.toHaveProperty("track");
+    expect(findMany.mock.calls[0]![0].where.organisationId).toBe("organisation-acme");
+    expect(findMany.mock.calls[0]![0].where).not.toHaveProperty("track");
+  });
+});
+
+describe("keeping marketing work out of the product list", () => {
+  it("lists and counts only product issues", async () => {
+    await renderList({ status: "open" });
+    expect(findMany.mock.calls.at(-1)![0].where.track).toBe("product");
+    const statusTabs = groupBy.mock.calls.find(([args]) => args.by.includes("status"));
+    expect(statusTabs![0].where).toMatchObject({ track: "product" });
+  });
+
+  it("lists and counts only product ideas", async () => {
+    await renderList();
+    expect(ideaFindMany.mock.calls.at(-1)![0].where.track).toBe("product");
+    expect(ideaCount.mock.calls.at(-1)![0].where.track).toBe("product");
   });
 });

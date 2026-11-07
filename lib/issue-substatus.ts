@@ -7,15 +7,17 @@ import type { Status, Substatus } from "@prisma/client";
  * every write goes through `moveTo`, so `status` is always `STATUS_OF[substatus]`.
  *
  * - Open: Requires confirmation → Open (waiting for bids)
- * - In progress
+ * - In progress: Plan review (a complex issue's awarded agent writes its plan
+ *   and its owner approves it, #plan-review) → In progress
  * - Done: Requires review (delivered, being judged) → Accepted (judged good to merge)
  * - Merge: Ready to merge, or Error (the latest pull request report says it can't merge)
- * - Live (`resolved`): On dev → On staging → On prod (where agents report it is deployed)
+ * - Live (`resolved`): On dev → On staging → On prod (where agents report it is deployed), or Published (marketing work a manager accepted)
  * - Closed
  */
 export const STATUS_OF = {
   requires_confirmation: "open",
   open: "open",
+  plan_review: "in_progress",
   in_progress: "in_progress",
   requires_review: "done",
   accepted: "done",
@@ -24,16 +26,17 @@ export const STATUS_OF = {
   on_dev: "resolved",
   on_staging: "resolved",
   on_prod: "resolved",
+  published: "resolved",
   closed: "closed",
 } as const satisfies Record<Substatus, Status>;
 
 /** Each main status's substatuses, in pipeline order. */
 export const SUBSTATUSES: Record<Status, readonly Substatus[]> = {
   open: ["requires_confirmation", "open"],
-  in_progress: ["in_progress"],
+  in_progress: ["plan_review", "in_progress"],
   done: ["requires_review", "accepted"],
   merge: ["ready_to_merge", "error"],
-  resolved: ["on_dev", "on_staging", "on_prod"],
+  resolved: ["on_dev", "on_staging", "on_prod", "published"],
   closed: ["closed"],
 };
 

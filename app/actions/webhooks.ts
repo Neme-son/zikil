@@ -3,13 +3,14 @@
 import { revalidatePath } from "next/cache";
 import { requireUser } from "@/lib/auth-helpers";
 import { prisma } from "@/lib/prisma";
-import { tenantForOwner } from "@/lib/agents/membership";
+import { organisationForOwner } from "@/lib/agents/membership";
 import { checkSsrf } from "@/lib/webhooks/ssrf";
 import { generateSigningSecret, encryptSigningSecret } from "@/lib/webhooks/sign";
 import { MAX_SUBSCRIPTIONS_PER_AGENT } from "@/lib/webhooks/manage";
 import { deliverySummaries } from "@/lib/webhooks/history";
 import { z } from "zod";
 import { fromZodError } from "@/lib/form-errors";
+import { activeIn } from "@/lib/agents/active-in";
 
 const createWebhookSchema = z.object({
   agentId: z.string().min(1, "Select an agent."),
@@ -41,13 +42,13 @@ export type ListWebhooksResult =
 
 export async function listWebhooksAction(): Promise<ListWebhooksResult> {
   const user = await requireUser();
-  const tenant = await tenantForOwner(user.id);
-  if (!tenant) {
-    return { ok: false, error: "No tenant found. Create or join a workspace first." };
+  const organisation = await organisationForOwner(user.id);
+  if (!organisation) {
+    return { ok: false, error: "No organisation found. Create or join an organisation first." };
   }
 
   const agents = await prisma.agent.findMany({
-    where: { ownerUserId: user.id, tenantId: tenant.tenantId, revokedAt: null },
+    where: { ownerUserId: user.id, ...activeIn(organisation.organisationId), revokedAt: null },
     select: { id: true, name: true, avatar: true },
   });
 
@@ -101,9 +102,9 @@ export async function createWebhookAction(
   formData: FormData,
 ): Promise<CreateWebhookResult> {
   const user = await requireUser();
-  const tenant = await tenantForOwner(user.id);
-  if (!tenant) {
-    return { ok: false, error: "No tenant found." };
+  const organisation = await organisationForOwner(user.id);
+  if (!organisation) {
+    return { ok: false, error: "No organisation found." };
   }
 
   const parsed = createWebhookSchema.safeParse({
@@ -118,7 +119,7 @@ export async function createWebhookAction(
   const { agentId, url } = parsed.data;
 
   const agent = await prisma.agent.findFirst({
-    where: { id: agentId, ownerUserId: user.id, tenantId: tenant.tenantId, revokedAt: null },
+    where: { id: agentId, ownerUserId: user.id, ...activeIn(organisation.organisationId), revokedAt: null },
     select: { id: true },
   });
   if (!agent) {
@@ -189,13 +190,13 @@ export type ReEnableWebhookResult = { ok: true } | { ok: false; error: string };
 export async function reEnableWebhookAction(webhookId: unknown): Promise<ReEnableWebhookResult> {
   if (typeof webhookId !== "string") return { ok: false, error: "Invalid webhook." };
   const user = await requireUser();
-  const tenant = await tenantForOwner(user.id);
-  if (!tenant) return { ok: false, error: "No tenant found." };
+  const organisation = await organisationForOwner(user.id);
+  if (!organisation) return { ok: false, error: "No organisation found." };
 
   const subscription = await prisma.webhookSubscription.findFirst({
     where: {
       id: webhookId,
-      agent: { ownerUserId: user.id, tenantId: tenant.tenantId },
+      agent: { ownerUserId: user.id, ...activeIn(organisation.organisationId) },
     },
     select: { id: true, enabled: true },
   });
@@ -219,13 +220,13 @@ export type DeleteWebhookResult = { ok: true } | { ok: false; error: string };
 export async function deleteWebhookAction(webhookId: unknown): Promise<DeleteWebhookResult> {
   if (typeof webhookId !== "string") return { ok: false, error: "Invalid webhook." };
   const user = await requireUser();
-  const tenant = await tenantForOwner(user.id);
-  if (!tenant) return { ok: false, error: "No tenant found." };
+  const organisation = await organisationForOwner(user.id);
+  if (!organisation) return { ok: false, error: "No organisation found." };
 
   const subscription = await prisma.webhookSubscription.findFirst({
     where: {
       id: webhookId,
-      agent: { ownerUserId: user.id, tenantId: tenant.tenantId },
+      agent: { ownerUserId: user.id, ...activeIn(organisation.organisationId) },
     },
     select: { id: true },
   });

@@ -1,4 +1,3 @@
-import { isEarnPath } from "@/lib/earn/paths";
 import { isProjectFirstPath } from "@/lib/project-paths";
 import { isReservedProjectSlug } from "@/lib/project-slug";
 
@@ -13,9 +12,7 @@ export const AGENTS_DOCK_HEIGHT = 76;
  * Everything else hides it, including pages added later until they are named
  * here. The pages, matched on whole path segments (a trailing slash is fine):
  *
- * - the workspace's `/home`, `/feed`, `/activity` and `/inbox` (and below it);
- * - the earn pages (`isEarnPath`, lib/earn/paths.ts), where an earner keeps the
- *   bar for their agents (#earn-drafts);
+ * - the organisation's `/home`, `/feed`, `/activity` and `/inbox` (and below it);
  * - a project's landing page `/<org>/<project>`, its `/ideas` and `/issues`
  *   pages (and below them), an issue `/<org>/<project>/<number>`,
  *   `/<org>/<project>/workstream` and `/<org>/<project>/work`.
@@ -31,7 +28,6 @@ export function dockVisibleOn(pathname: string | null | undefined, agentCount: n
   const segments = path.split("/").filter(Boolean);
   const [first] = segments;
   if (!first) return false;
-  if (isEarnPath(pathname)) return true;
   if (first === "inbox") return true;
   if (first === "home" || first === "feed" || first === "activity") return segments.length === 1;
   if (isReservedProjectSlug(first) || segments.length < 2 || isProjectFirstPath(path)) return false;
@@ -43,22 +39,10 @@ export function dockVisibleOn(pathname: string | null | undefined, agentCount: n
 
 /**
  * Whether to show the Leaderboard link: "you can't be the only person on a
- * leaderboard", so not in a workspace of one member. When the count couldn't
+ * leaderboard", so not in an organisation of one member. When the count couldn't
  * be loaded the link stays, as it always was.
  */
 export function leaderboardVisible(memberCount: number | null | undefined): boolean {
   return memberCount == null || memberCount > 1;
 }
 
-/**
- * Whether the account menu offers Leaderboard: when the workspace has more than
- * one member and the bar isn't already showing it. The bar carries the link
- * wherever it is drawn (dockVisibleOn), so the menu is where it lives otherwise.
- */
-export function leaderboardInMenu(
-  pathname: string | null | undefined,
-  agentCount: number,
-  memberCount: number | null | undefined,
-): boolean {
-  return leaderboardVisible(memberCount) && !dockVisibleOn(pathname, agentCount);
-}

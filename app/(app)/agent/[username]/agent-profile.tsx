@@ -30,7 +30,8 @@ export type AgentProfileData = {
   lastActiveAt: Date | null;
   /** Its key was used in the last few minutes, worked out when the page loads. */
   activeNow: boolean;
-  projects: string[];
+  /** The organisations it works in (#user-agents). */
+  organisations: string[];
   counts: { filed: number; claims: number; comments: number; delivered: number };
   /** Global reputation (#agent-reputation): down for penalties on its confirmations, up for upvotes on its comments. */
   reputation: number;
@@ -49,7 +50,7 @@ export type AgentActivityItem = {
   id: string;
   createdAt: Date;
   action: string;
-  bug: { id: string; number: number; title: string; project: { slug: string; tenant: { slug: string } } } | null;
+  bug: { id: string; number: number; title: string; project: { slug: string; organisation: { slug: string } } } | null;
   target: string | null;
   undone: boolean;
 };
@@ -64,14 +65,14 @@ export function AgentProfileHeader({
   agent,
   avatarControl = null,
   reviewCount,
-  showWorkspace = false,
+  showOrganisation = false,
 }: {
   agent: AgentProfileData;
   /** Stands in for the avatar when the viewer may change it and the agent has no picture: the avatar, opening a picker. */
   avatarControl?: React.ReactNode;
   reviewCount: number;
-  /** Who it works for and its projects: for members of its workspace only. */
-  showWorkspace?: boolean;
+  /** Who it works for and its projects: for members of its organisation only. */
+  showOrganisation?: boolean;
 }) {
   return (
     <section aria-label="Profile" className={`${agentsSurface} space-y-8 p-5 sm:p-8`}>
@@ -115,7 +116,7 @@ export function AgentProfileHeader({
           {agent.model ? <p className="text-sm text-zk-text2">{agent.model}</p> : null}
 
           <p className="flex flex-wrap items-center gap-x-5 gap-y-1 text-sm text-zk-muted">
-            {showWorkspace ? (
+            {showOrganisation ? (
               <span className="inline-flex items-center gap-1.5">
                 <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
                   <circle cx="12" cy="8" r="4" />
@@ -186,19 +187,19 @@ export function AgentProfileHeader({
         )}
       </div>
 
-      {showWorkspace ? (
+      {showOrganisation ? (
         <div className="space-y-3">
-          <h2 className={sectionHeading}>Works on</h2>
-          {agent.projects.length ? (
+          <h2 className={sectionHeading}>Works in</h2>
+          {agent.organisations.length ? (
             <ul className="flex flex-wrap gap-2">
-              {agent.projects.map((project) => (
-                <li key={project} className="rounded-full border border-zk-border px-3.5 py-1.5 text-sm text-zk-text">
-                  {project}
+              {agent.organisations.map((organisation) => (
+                <li key={organisation} className="rounded-full border border-zk-border px-3.5 py-1.5 text-sm text-zk-text">
+                  {organisation}
                 </li>
               ))}
             </ul>
           ) : (
-            <p className={agentsMutedClass}>No project yet.</p>
+            <p className={agentsMutedClass}>No organisation yet.</p>
           )}
         </div>
       ) : null}
@@ -232,8 +233,11 @@ export function AgentSideCard({
   editControl = null,
   showActivity = false,
   blocked = false,
+  keyPanel = null,
 }: {
   agent: AgentProfileData;
+  /** Its key and how to connect it, for its owner. */
+  keyPanel?: React.ReactNode;
   /** "Setup Profile" or "Edit Profile", for those who may change it. */
   editControl?: React.ReactNode;
   /** Whether its activity is on the page, for its owner and team admins. */
@@ -254,6 +258,7 @@ export function AgentSideCard({
         </div>
       ) : null}
       {editControl ? <div className="grid">{editControl}</div> : null}
+      {keyPanel}
       <div className={`${agentsSurface} space-y-5 p-5 sm:p-6`}>
         <div className="flex items-center gap-3">
           <AgentPicture agentId={agent.id} avatar={agent.avatar} pictureUrl={agent.pictureUrl} name={agent.name} size={56} />

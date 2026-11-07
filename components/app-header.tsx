@@ -3,33 +3,30 @@
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { ideasPath, orgPath, type ProjectRef } from "@/lib/project-paths";
+import { useMarketingArea } from "@/components/marketing/marketing-area";
+import { ideasPath, type ProjectRef } from "@/lib/project-paths";
 import { useProjectRef } from "@/lib/use-project-ref";
 import { SignOutButton } from "@/components/sign-out-button";
-import { WorkspaceSwitcher, type WorkspaceChoice } from "@/components/workspace-switcher";
+import { OrganisationSwitcher, type OrganisationOption, type ExternalProjectChoice } from "@/components/organisation-switcher";
 import {
   MANAGE_AGENTS_HREF,
-  AGENTS_DIRECTORY_HREF,
-  LEADERBOARD_HREF,
-  SITE_ADMIN_HREF,
   isNavItemActive,
+  marketingTabHref,
   realRoleOf,
   roleViewLabels,
 } from "@/lib/header-nav";
-import { isSuperAdmin, type AppRole } from "@/lib/roles";
+import { type AppRole } from "@/lib/roles";
 import { Avatar } from "@/components/avatar";
 import { AccountThemeSelector } from "@/components/theme-toggle";
 import { CookieSettingsLink } from "@/components/consent-banner";
 import { VersionCredits } from "@/components/credits-dialog";
-import { leaderboardInMenu } from "@/lib/agents-dock";
 import { recentNotificationsAction } from "@/app/actions/notifications";
 import { LocalTime } from "@/components/local-time";
 import { BASE_PATH } from "@/lib/base-path";
 import { PAGE_CONTAINER_CLASS } from "@/components/page-container";
 import { ZikiMark } from "@/components/ziki-mark";
-import { EarnPill } from "@/components/earn-pill";
-import { isEarnPath } from "@/lib/earn/paths";
-import type { WithdrawInfo } from "@/lib/earn/draft";
+import { formatZ } from "@/lib/points/rules";
+import { WithdrawWindow } from "@/components/withdraw-window";
 
 const linkFocus =
   "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-electric-blue focus-visible:ring-offset-2";
@@ -121,26 +118,30 @@ function TopNavLink({
 }
 
 /**
- * The workspace areas: Product (the issue tracker), Marketing and Security.
+ * The organisation areas: Product (the issue tracker), Marketing and Security.
  * The logo goes to the project's Ideas.
  */
 function TopNav({ pathname, projectSlug }: { pathname: string | null; projectSlug: ProjectRef | null }) {
   // Product opens the project the page is in, or the first one (#project-urls).
-  const productHref = projectSlug ? ideasPath(projectSlug) : "/tenants";
+  const productHref = projectSlug ? ideasPath(projectSlug) : "/organisations";
+  const marketingHref = marketingTabHref(projectSlug);
+  // The section's address starts with the project's slug, but it isn't Your App.
+  const onMarketingWork = useMarketingArea();
+  const inMarketing = isNavItemActive(pathname, marketingHref) || onMarketingWork;
   return (
     <nav
-      aria-label="Workspace"
+      aria-label="Organisation"
       // Phones and tablets: a tab strip fixed to the bottom of the screen,
       // clear of the home indicator. From lg it sits inline in the top bar.
       className="flex items-center max-lg:fixed max-lg:inset-x-0 max-lg:bottom-0 max-lg:z-40 max-lg:justify-around max-lg:border-t max-lg:border-zk-border max-lg:bg-zk-surface max-lg:px-2 max-lg:pt-1.5 max-lg:pb-[max(0.375rem,env(safe-area-inset-bottom))] max-lg:shadow-[0_-1px_3px_rgba(0,0,0,0.04)] lg:ml-6 lg:gap-1"
     >
-      <TopNavLink href={productHref} active={Boolean(projectSlug && pathname?.startsWith(`/${projectSlug}`))} label="Your App">
+      <TopNavLink href={productHref} active={Boolean(projectSlug && pathname?.startsWith(`/${projectSlug}`) && !inMarketing)} label="Your App">
         <NavIcon>
           <circle cx="12" cy="12" r="9" />
           <circle cx="12" cy="12" r="1.5" fill="currentColor" stroke="none" />
         </NavIcon>
       </TopNavLink>
-      <TopNavLink href="https://amp.ziki.dev" active={isNavItemActive(pathname, "/marketing")} label="Marketing">
+      <TopNavLink href={marketingHref} active={inMarketing} label="Marketing">
         <NavIcon>
           <path d="M3 11v2a1 1 0 0 0 1 1h2l5 4V6L6 10H4a1 1 0 0 0-1 1Z" />
           <path d="M15.5 8.5a5 5 0 0 1 0 7M18.5 5.5a9 9 0 0 1 0 13" />
@@ -150,6 +151,17 @@ function TopNav({ pathname, projectSlug }: { pathname: string | null; projectSlu
         <NavIcon>
           <path d="M12 3 4 6v6c0 4.5 3.4 8.3 8 9 4.6-.7 8-4.5 8-9V6l-8-3Z" />
           <path d="m9 12 2 2 4-4" />
+        </NavIcon>
+      </TopNavLink>
+      <TopNavLink href="/discover" active={isNavItemActive(pathname, "/discover")} label="Discover">
+        <NavIcon>
+          <circle cx="12" cy="12" r="9" />
+          <path d="m15.5 8.5-2 5-5 2 2-5 5-2Z" />
+        </NavIcon>
+      </TopNavLink>
+      <TopNavLink href="/forum" active={isNavItemActive(pathname, "/forum")} label="Forum">
+        <NavIcon>
+          <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
         </NavIcon>
       </TopNavLink>
     </nav>
@@ -273,31 +285,22 @@ export function AppHeader({
   unreadCount = 0,
   pendingEscalationsCount = 0,
   userId,
-  workspaces = [],
-  activeTenantId = null,
+  organisationOptions = [],
+  externalProjects = [],
+  activeOrganisationId = null,
   reportFormUrl,
-  organizationAdmin = false,
   defaultProjectSlug = null,
   earned = null,
-  inEarnWorkspace = false,
-  withdraw = null,
+  earningsOrganisationId = null,
   version,
-  memberCount = null,
-  agentCount = 0,
 }: {
   /** The running version (package version), shown with Cookie settings at the foot of the account menu. */
   version?: string;
-  /** Members of the current workspace: the Leaderboard entry needs more than one. Null when unknown. */
-  memberCount?: number | null;
-  /** How many agents the person has here: with any, the agents bar shows Leaderboard on the pages it is drawn on. */
-  agentCount?: number;
-  /** Earn (#earn-drafts): what the Withdraw window shows; null for everyone else. */
-  withdraw?: WithdrawInfo | null;
-  /** Earn (#earn-drafts): an earner's dollars, shown with Withdraw in the header; null for everyone else. */
+  /** Earnings (#earnings): what the person earned in the workspace they're in, shown with Withdraw on every page; null when unknown. */
   earned?: number | null;
-  /** The person is working in the Earn workspace: the header is Earn's on every page there. */
-  inEarnWorkspace?: boolean;
-  /** The first project in the current workspace, for pages whose URL names none yet. */
+  /** The workspace the $ and Withdraw are for (#earnings): the one the person is in. */
+  earningsOrganisationId?: string | null;
+  /** The first project in the current organisation, for pages whose URL names none yet. */
   defaultProjectSlug?: ProjectRef | null;
   userName?: string | null;
   userImage?: string | null;
@@ -307,11 +310,10 @@ export function AppHeader({
   unreadCount?: number;
   pendingEscalationsCount?: number;
   userId?: string | null;
-  workspaces?: WorkspaceChoice[];
-  activeTenantId?: string | null;
+  organisationOptions?: OrganisationOption[];
+  externalProjects?: ExternalProjectChoice[];
+  activeOrganisationId?: string | null;
   reportFormUrl?: string;
-  /** Owner or admin of the current organization, or the site super admin: shows /org in the menus. */
-  organizationAdmin?: boolean;
 }) {
   const pathname = usePathname();
   const projectSlug = useProjectRef() ?? defaultProjectSlug;
@@ -328,37 +330,57 @@ export function AppHeader({
   }
 
   const realRole = realRoleOf({ isRealSuperAdmin, isRealAdmin });
-  // Earn (#earn-drafts): an earner on the earn pages, or anywhere in the Earn workspace, sees only what they came for.
-  const earnQuiet = earned !== null && (isEarnPath(pathname) || inEarnWorkspace);
 
   return (
     // Sticky only from lg: on phones and tablets the toolbar wraps onto rows,
     // and a header that tall pinned to the top covers the page under it.
     <header className="relative z-40 border-b border-zk-border bg-zk-surface shadow-[0_1px_3px_rgba(0,0,0,0.04)] lg:sticky lg:top-0">
-      <div className={`${PAGE_CONTAINER_CLASS} flex flex-wrap items-center gap-x-3 gap-y-2 py-3 max-sm:py-2 sm:px-6 ${earnQuiet ? "max-sm:flex-nowrap" : ""}`}>
+      <div className={`${PAGE_CONTAINER_CLASS} flex flex-wrap items-center gap-x-3 gap-y-2 py-3 max-sm:flex-nowrap max-sm:gap-x-2 max-sm:py-2 sm:px-6`}>
         {/* Below lg the nav lives in the bottom strip, leaving one row here.
             The logo (the mark alone) is the way to the Dashboard. */}
         <div className="flex min-w-0 items-center gap-2">
-          <Link href={earnQuiet ? "/earn/home" : projectSlug ? ideasPath(projectSlug) : "/home"} aria-label="Ziki" className={`flex shrink-0 items-center gap-2 rounded-full ${linkFocus}`}>
+          <Link href={projectSlug ? ideasPath(projectSlug) : "/home"} aria-label="Ziki" className={`flex shrink-0 items-center gap-2 rounded-full ${linkFocus}`}>
             {/* The mark alone; the link's name says Ziki. */}
             <ZikiMark className="h-8 w-auto text-zk-text max-sm:h-7" />
           </Link>
           <span aria-hidden="true" className="h-[18px] w-px shrink-0 bg-zk-border max-sm:hidden" />
-          <WorkspaceSwitcher workspaces={workspaces} activeTenantId={activeTenantId} canManage={organizationAdmin} orgHref={projectSlug ? orgPath(projectSlug) : null} tone="bar" className={`min-w-0 max-sm:max-w-44 ${earnQuiet ? "max-sm:hidden" : ""}`} />
+          <OrganisationSwitcher
+            organisationOptions={organisationOptions}
+            externalProjects={externalProjects}
+            activeOrganisationId={activeOrganisationId}
+            tone="bar"
+            className="min-w-0"
+          />
         </div>
 
-        {/* Earn (#earn-drafts): an earner on the earn pages sees none of the builders' links. */}
-        {earnQuiet ? null : <TopNav pathname={pathname} projectSlug={projectSlug} />}
+        <TopNav pathname={pathname} projectSlug={projectSlug} />
 
-        {/* Phones and tablets: min-w-0 lets the group narrow so its flex-wrap
-            breaks the chips onto rows (no sideways scroll at 360px or 768px).
-            From lg up it keeps shrink-0 so the account controls are never
-            squeezed. */}
-        <div className={`ml-auto flex min-w-0 items-center justify-end gap-2 max-sm:gap-1 lg:shrink-0 ${earnQuiet ? "max-sm:flex-nowrap" : "flex-wrap"}`}>
-          {earned !== null && withdraw ? (
-            // Earn (#earn-drafts): the balance as one pill, in reach from every page. It drops a panel down (the bar, the
-            // next task, Withdraw); Withdraw opens a window over the page, never another page.
-            <EarnPill info={withdraw} />
+        {/* Phones: one row. These controls never wrap or shrink; the workspace
+            name on the left narrows (down to its badge) instead. Tablets: min-w-0
+            lets the group narrow and its flex-wrap break the chips onto rows (no
+            sideways scroll at 768px). From lg up it keeps shrink-0. */}
+        <div className={`ml-auto flex min-w-0 items-center justify-end gap-2 max-sm:shrink-0 max-sm:flex-nowrap max-sm:gap-1.5 lg:shrink-0 flex-wrap`}>
+          {earned !== null ? (
+            // Earnings (#earnings), on every page: the amount opens Your earnings; Withdraw opens a window over the page.
+            <div className="inline-flex h-10 shrink-0 items-center gap-1 rounded-full border border-zk-border bg-zk-surface p-1">
+              <Link
+                href={projectSlug ? `/earnings?in=${projectSlug}` : "/earnings"}
+                aria-current={isNavItemActive(pathname, "/earnings") ? "page" : undefined}
+                className={`rounded-full px-2.5 py-1 text-sm font-bold tabular-nums text-zk-text hover:bg-zk-chip ${linkFocus}`}
+              >
+                {formatZ(earned)}
+                <span className="sr-only"> earned: Your earnings</span>
+              </Link>
+              <WithdrawWindow earned={earned} organisationId={earningsOrganisationId} className={`inline-flex items-center justify-center rounded-full bg-electric-blue-strong px-3 py-1.5 text-xs font-bold text-white hover:bg-[#2552af] max-sm:h-8 max-sm:w-8 max-sm:p-0 ${linkFocus}`}>
+                {/* Phones: a wallet icon; tablets and up: the word. Either way it is called Withdraw. */}
+                <svg viewBox="0 0 24 24" className="h-[18px] w-[18px] sm:hidden" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M19 7V5a2 2 0 0 0-2-2H5a2 2 0 0 0 0 4h14a2 2 0 0 1 2 2v3" />
+                  <path d="M3 5v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-3" />
+                  <path d="M21 12h-4a2 2 0 0 0 0 4h4z" />
+                </svg>
+                <span className="max-sm:sr-only">Withdraw</span>
+              </WithdrawWindow>
+            </div>
           ) : null}
 
           <div ref={accountRef} className="relative">
@@ -369,7 +391,7 @@ export function AppHeader({
               aria-expanded={accountOpen}
               aria-controls="account-menu"
               onClick={() => setAccountOpen((open) => !open)}
-              className={`inline-flex h-11 max-w-full items-center gap-2 rounded-full border border-zk-border bg-zk-surface py-[5px] pl-[5px] pr-3 text-zk-text hover:bg-zk-chip ${linkFocus}`}
+              className={`inline-flex h-11 max-w-full items-center gap-2 rounded-full border border-zk-border bg-zk-surface py-[5px] pl-[5px] pr-3 text-zk-text hover:bg-zk-chip max-sm:h-auto max-sm:border-0 max-sm:p-0 ${linkFocus}`}
             >
               <span className="sr-only">Account menu for </span>
               <Avatar name={userName} image={userImage} size="md" variant="solid" />
@@ -392,47 +414,25 @@ export function AppHeader({
                   userImage={userImage}
                   realRole={realRole}
                 />
-                <MenuLink href="/settings/profile" active={isNavItemActive(pathname, "/settings/profile")}>
-                  Profile
-                </MenuLink>
                 <AccountThemeSelector />
                 <div className="mx-2 h-px bg-zk-divider" />
+                {/* What your agents are doing and what needs you (#849). */}
                 <MenuLink href="/activity" active={isNavItemActive(pathname, "/activity")}>
                   Activity
                 </MenuLink>
-                {/* Every member can open the organization area; only owners and admins see its controls. */}
-                {projectSlug ? (
-                  <MenuLink href={orgPath(projectSlug)} active={Boolean(pathname?.startsWith(orgPath(projectSlug)))}>
-                    Organization settings
-                  </MenuLink>
-                ) : null}
                 <MenuLink href={MANAGE_AGENTS_HREF} active={Boolean(pathname?.startsWith(MANAGE_AGENTS_HREF))}>
                   Manage agents
                 </MenuLink>
-                <MenuLink href={AGENTS_DIRECTORY_HREF} active={pathname === AGENTS_DIRECTORY_HREF}>
-                  All agents
-                </MenuLink>
-                {/* The agents bar carries Leaderboard wherever it is drawn, so the menu offers it only elsewhere. And you
-                    can't be the only person on a leaderboard: a workspace of one has none. */}
-                {leaderboardInMenu(pathname, agentCount, memberCount) && !earnQuiet ? (
-                  <MenuLink href={LEADERBOARD_HREF} active={isNavItemActive(pathname, LEADERBOARD_HREF)}>
-                    Leaderboard
-                  </MenuLink>
-                ) : null}
-                {isSuperAdmin(role) ? (
-                  <MenuLink href={SITE_ADMIN_HREF} active={isNavItemActive(pathname, SITE_ADMIN_HREF)}>
-                    Site admin
-                  </MenuLink>
-                ) : null}
                 <MenuLink href="/settings" active={isNavItemActive(pathname, "/settings")}>
                   Settings
                 </MenuLink>
                 <MenuLink href="/docs" active={isNavItemActive(pathname, "/docs")}>
                   Documentation
                 </MenuLink>
-                {reportFormUrl ? (
-                  <MenuLink href={reportFormUrl}>Report issue</MenuLink>
-                ) : null}
+                {/* The skills library is public, but signed-in people look for it here (GAP 1). */}
+                <MenuLink href="/skills" active={isNavItemActive(pathname, "/skills")}>
+                  Skills library
+                </MenuLink>
                 <div className="mx-2 h-px bg-zk-divider" />
                 <SignOutButton
                   userId={userId}
@@ -451,7 +451,7 @@ export function AppHeader({
           </div>
 
           {/* Escalations, as an envelope, then the bell last. */}
-          {earnQuiet ? null : <InboxEnvelope key={`${userId}:${activeTenantId}:${pathname}`} unreadCount={unreadCount} pendingEscalations={pendingEscalationsCount} active={isNavItemActive(pathname, "/inbox")} />}
+          <InboxEnvelope key={`${userId}:${activeOrganisationId}:${pathname}`} unreadCount={unreadCount} pendingEscalations={pendingEscalationsCount} active={isNavItemActive(pathname, "/inbox")} />
         </div>
       </div>
     </header>

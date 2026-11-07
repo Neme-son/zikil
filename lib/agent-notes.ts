@@ -2,6 +2,7 @@ import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { IssueApiError } from "@/lib/agent-api/errors";
 import type { NotesActor } from "@/lib/project-notes";
+import { activeIn } from "@/lib/agents/active-in";
 
 /**
  * An agent's own notes on a project (#agent-notes): what it learned and wants
@@ -29,7 +30,7 @@ export async function listAgentNotes(actor: NotesActor) {
 export async function addAgentNote(actor: NotesActor, input: unknown) {
   const agentId = agentOf(actor);
   const { body } = agentNoteInput.parse(input);
-  const note = await prisma.agentNote.create({ data: { tenantId: actor.tenantId, projectId: actor.projectId, agentId, body } });
+  const note = await prisma.agentNote.create({ data: { organisationId: actor.organisationId, projectId: actor.projectId, agentId, body } });
   return { note };
 }
 
@@ -49,10 +50,10 @@ export async function deleteAgentNote(actor: NotesActor, noteId: string) {
   return { deleted: true };
 }
 
-/** The person's agents in this workspace, for the Notes sidebar, with how many notes each keeps on the project. */
-export async function ownAgentsWithNotes(userId: string, tenantId: string, projectId: string) {
+/** The person's agents in this organisation, for the Notes sidebar, with how many notes each keeps on the project. */
+export async function ownAgentsWithNotes(userId: string, organisationId: string, projectId: string) {
   const agents = await prisma.agent.findMany({
-    where: { ownerUserId: userId, tenantId, revokedAt: null },
+    where: { ownerUserId: userId, ...activeIn(organisationId), revokedAt: null },
     orderBy: { createdAt: "asc" },
     select: { id: true, name: true, _count: { select: { agentNotes: { where: { projectId } } } } },
   });

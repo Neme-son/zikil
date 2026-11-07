@@ -1,17 +1,17 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 
-/** Editing an issue (#713): only the reporter and organization admins may edit, an edit keeps the old version and voids the confirmations given before it. */
+/** Editing an issue (#713): only the reporter and organisation admins may edit, an edit keeps the old version and voids the confirmations given before it. */
 const publishWebEvent = vi.hoisted(() => vi.fn(async () => undefined));
 vi.mock("@/lib/agent-api/web-events", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/agent-api/web-events")>()),
   publishWebEvent,
 }));
 
-vi.mock("@/lib/tenant-context", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@/lib/tenant-context")>()),
-  currentTenantIdFor: vi.fn(async () => "tenant-zedu"),
+vi.mock("@/lib/organisation-context", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/organisation-context")>()),
+  currentOrganisationIdFor: vi.fn(async () => "organisation-zedu"),
   defaultProjectIdFor: vi.fn(async () => "project-zedu"),
-  tenantIdForUser: vi.fn(async () => "tenant-zedu"),
+  organisationIdForUser: vi.fn(async () => "organisation-zedu"),
 }));
 
 vi.mock("next/cache", () => ({
@@ -26,11 +26,11 @@ vi.mock("@/lib/auth-helpers", () => ({
   requireUser: vi.fn().mockResolvedValue({ id: "reporter-1", name: "Ada", role: "user" }),
 }));
 
-vi.mock("@/lib/tenant-access", () => ({
-  currentTenantAccess: vi.fn(async () => ({
-    tenantId: "tenant-zedu",
-    tenantName: "Zedu",
-    tenantSlug: "zedu",
+vi.mock("@/lib/organisation-access", () => ({
+  currentOrganisationAccess: vi.fn(async () => ({
+    organisationId: "organisation-zedu",
+    organisationName: "Zedu",
+    organisationSlug: "zedu",
     membershipRole: "member",
     admin: false,
   })),
@@ -57,7 +57,8 @@ vi.mock("@/lib/points/correct", () => ({
 
 const db = vi.hoisted(() => {
   const tx = {
-    bug: { update: vi.fn() },
+    bug: { update: vi.fn(), updateMany: vi.fn() },
+    delivery: { updateMany: vi.fn() },
     bugActivity: { create: vi.fn() },
     bugRevision: { create: vi.fn() },
     issueConfirmation: { deleteMany: vi.fn() },
@@ -76,9 +77,10 @@ const db = vi.hoisted(() => {
 
 vi.mock("@/lib/prisma", () => ({ prisma: db.prisma }));
 
-import { editBugContentAction } from "@/app/actions/issues";
-import { canEditTicket } from "@/lib/ticket-editing";
+import { editBugContentAction, editPullRequestUrlAction } from "@/app/actions/issues";
+import { canEditTicket, TICKET_EDIT_ERRORS } from "@/lib/ticket-editing";
 import { buildVersions } from "@/lib/issue-revisions";
+import { requireUser } from "@/lib/auth-helpers";
 
 function existingBug(overrides: Record<string, unknown> = {}) {
   return {
@@ -87,7 +89,7 @@ function existingBug(overrides: Record<string, unknown> = {}) {
     description: "Original Description",
     reporterId: "reporter-1",
     beneficiaryUserId: "reporter-1",
-    tenantId: "tenant-zedu",
+    organisationId: "organisation-zedu",
     isDeleted: false,
     ...overrides,
   };
@@ -105,7 +107,7 @@ beforeEach(() => {
   db.prisma.bug.findUnique.mockResolvedValue(existingBug());
   db.tx.pointEntry.findFirst.mockResolvedValue({
     id: "entry-1",
-    tenantId: "tenant-zedu",
+    organisationId: "organisation-zedu",
     userId: "reporter-1",
     bugId: "bug-1",
     role: "reporter",
@@ -130,10 +132,10 @@ describe("editBugContentAction confirmation invalidation (#713)", () => {
     // Found reporter points entry
     expect(db.tx.pointEntry.findFirst).toHaveBeenCalledWith({
       where: {
-        tenantId: "tenant-zedu",
+        organisationId: "organisation-zedu",
         sourceKey: "reporter:bug-1:reporter-1",
       },
-      select: { id: true, tenantId: true, userId: true, bugId: true, role: true, points: true },
+      select: { id: true, organisationId: true, userId: true, bugId: true, role: true, points: true },
     });
 
     // Reversed reporter points via correct()
@@ -178,7 +180,7 @@ describe("editBugContentAction confirmation invalidation (#713)", () => {
 });
 
 describe("who may edit", () => {
-  it("lets the reporter, an organization owner or admin, and a super admin edit", () => {
+  it("lets the reporter, an organisation owner or admin, and a super admin edit", () => {
     expect(canEditTicket({ actorId: "u1", actorRole: "user", reporterId: "u1" })).toBe(true);
     expect(canEditTicket({ actorId: "a1", actorRole: "user", membershipRole: "owner", reporterId: "u1" })).toBe(true);
     expect(canEditTicket({ actorId: "s1", actorRole: "super_admin", reporterId: "u1" })).toBe(true);
@@ -203,5 +205,37 @@ describe("the edit history", () => {
       [2, "T2", "Rae", false],
       [3, "T3", "Ann", true],
     ]);
+  });
+});
+
+describe("editPullRequestUrlAction (#edit-pr-link)", () => {
+  it("refuses former deliverer when another contributor holds active claim and delivered current PR", async () => {
+    const formerDelivererId = "past-owner";
+    (requireUser as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({ id: formerDelivererId, role: "user" });
+    db.prisma.bug.findUnique.mockResolvedValue({
+      id: "bug-1",
+      status: "done",
+      pullRequestUrl: "https://github.com/emerjent/ziki/pull/2",
+      pullRequestHeadSha: "sha-2",
+      proofLinks: [],
+      reporterId: "reporter-1",
+      assigneeId: "new-owner",
+      isDeleted: false,
+      project: { repoUrl: "https://github.com/emerjent/ziki" },
+      claims: [
+        { beneficiaryUserId: "new-owner", agent: { ownerUserId: "new-owner" }, status: "active", releasedAt: null },
+      ],
+      deliveries: [
+        { beneficiaryUserId: formerDelivererId, pullRequestUrl: "https://github.com/emerjent/ziki/pull/1", agent: { ownerUserId: formerDelivererId } },
+        { beneficiaryUserId: "new-owner", pullRequestUrl: "https://github.com/emerjent/ziki/pull/2", agent: { ownerUserId: "new-owner" } },
+      ],
+    });
+
+    const formData = new FormData();
+    formData.set("pullRequestUrl", "https://github.com/emerjent/ziki/pull/3");
+
+    const result = await editPullRequestUrlAction("bug-1", formData);
+    expect(result).toEqual({ error: TICKET_EDIT_ERRORS.unauthorized });
+    expect(db.prisma.$transaction).not.toHaveBeenCalled();
   });
 });

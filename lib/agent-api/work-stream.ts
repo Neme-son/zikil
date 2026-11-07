@@ -1,6 +1,7 @@
+import type { WorkTrack } from "@prisma/client";
 import type { AgentContext } from "@/lib/agents/require-agent";
 import { workEtag, workFeed, type FeedProject, type WorkFeed } from "@/lib/agent-api/work";
-import { eventStreamBus, TENANT_WRITE, type StreamEvent } from "@/lib/events/stream-bus";
+import { eventStreamBus, ORGANISATION_WRITE, type StreamEvent } from "@/lib/events/stream-bus";
 
 /**
  * The work feed as a live stream (#work-feed-push).
@@ -43,10 +44,12 @@ export function workFeedStream(options: {
   request: Request;
   /** The ETag the client last saw, from `Last-Event-ID`. */
   lastEventId?: string | null;
+  /** Which track's feed to stream. Defaults to the product feed. */
+  track?: WorkTrack;
   /** How the feed is read. The default is the real feed. */
   readFeed?: () => Promise<WorkFeed>;
 }): Response {
-  const { agent, project, request, lastEventId, readFeed = () => workFeed(agent, project) } = options;
+  const { agent, project, request, lastEventId, track = "product", readFeed = () => workFeed(agent, project, track) } = options;
   const encoder = new TextEncoder();
   let stop: (() => void) | null = null;
 
@@ -72,7 +75,7 @@ export function workFeedStream(options: {
         if (maxTimer) clearTimeout(maxTimer);
         if (settleTimer) clearTimeout(settleTimer);
         eventStreamBus.off("event", onEvent);
-        eventStreamBus.off(TENANT_WRITE, onTenantWrite);
+        eventStreamBus.off(ORGANISATION_WRITE, onOrganisationWrite);
         request.signal.removeEventListener("abort", close);
         try {
           controller.close();
@@ -103,10 +106,10 @@ export function workFeedStream(options: {
         }, WORK_STREAM_SETTLE_MS);
       };
       const onEvent = (event: StreamEvent) => {
-        if (event.tenantId === agent.tenantId) onSignal();
+        if (event.organisationId === agent.organisationId) onSignal();
       };
-      const onTenantWrite = (tenantId: string) => {
-        if (tenantId === agent.tenantId) onSignal();
+      const onOrganisationWrite = (organisationId: string) => {
+        if (organisationId === agent.organisationId) onSignal();
       };
 
       heartbeat = setInterval(() => send(": ping\n\n"), WORK_STREAM_HEARTBEAT_MS);
@@ -114,7 +117,7 @@ export function workFeedStream(options: {
       // it closes on its own and the client reconnects.
       maxTimer = setTimeout(() => close(), WORK_STREAM_MAX_MS);
       eventStreamBus.on("event", onEvent);
-      eventStreamBus.on(TENANT_WRITE, onTenantWrite);
+      eventStreamBus.on(ORGANISATION_WRITE, onOrganisationWrite);
       request.signal.addEventListener("abort", close);
       stop = close;
 

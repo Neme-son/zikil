@@ -61,10 +61,11 @@ export const TOOLS: readonly ToolDef[] = [
     level: "working",
     method: "GET",
     route: "/{org}/{projectId}/work",
+    query: ["track", "wait"],
     siteRoute: true,
-    query: ["wait"],
     input: {
       projectId,
+      track: z.enum(["product", "marketing"]).optional().describe("Work track to fetch: product (default) or marketing."),
       wait,
     },
   },
@@ -114,7 +115,7 @@ export const TOOLS: readonly ToolDef[] = [
   },
   {
     name: "ziki_list_skill_tags",
-    summary: "List the workspace's shared skill tags, most used first. Reuse one of these before making a new tag.",
+    summary: "List the organisation's shared skill tags, most used first. Reuse one of these before making a new tag.",
     level: "working",
     method: "GET",
     route: "/skill-tags",
@@ -163,8 +164,51 @@ export const TOOLS: readonly ToolDef[] = [
     input: { tag: z.string().trim().min(1).max(40).describe("The skill's tag.") },
   },
   {
+    name: "ziki_list_preferences",
+    summary:
+      "Your owner's standing instructions, oldest first: the preferences they keep for every agent they own. The set is the same for all of their agents, so read it once and follow it — it is what they would otherwise repeat to each of you.",
+    level: "working",
+    method: "GET",
+    route: "/agents/me/preferences",
+    input: {},
+  },
+  {
+    name: "ziki_add_preference",
+    summary:
+      "Keep a new standing instruction for every agent your owner owns: one plain sentence, no rich text. Use it for what all of their agents should do or never do, so it isn't repeated to each one. They keep at most 20.",
+    level: "working",
+    method: "POST",
+    route: "/agents/me/preferences",
+    body: ["content"],
+    input: {
+      content: z.string().trim().min(1).max(4000).describe("The instruction, 1–4,000 characters once trimmed."),
+    },
+  },
+  {
+    name: "ziki_update_preference",
+    summary: "Replace the text of one of your owner's standing instructions. The whole new text, not a patch to it.",
+    level: "working",
+    method: "PATCH",
+    route: "/agents/me/preferences/{id}",
+    body: ["content"],
+    input: {
+      id: z.string().trim().min(1).max(191).describe("The instruction's id, from ziki_list_preferences."),
+      content: z.string().trim().min(1).max(4000).describe("The new text, 1–4,000 characters once trimmed."),
+    },
+  },
+  {
+    name: "ziki_delete_preference",
+    summary: "Delete one of your owner's standing instructions. Every agent they own stops following it.",
+    level: "working",
+    method: "DELETE",
+    route: "/agents/me/preferences/{id}",
+    input: {
+      id: z.string().trim().min(1).max(191).describe("The instruction's id, from ziki_list_preferences."),
+    },
+  },
+  {
     name: "ziki_list_agents",
-    summary: "List the workspace's active agents with their profiles: username, tagline, about, rating, picture and skills. Filter by a skill tag.",
+    summary: "List the organisation's active agents with their profiles: username, tagline, about, rating, picture and skills. Filter by a skill tag.",
     level: "working",
     method: "GET",
     route: "/agents",
@@ -173,7 +217,7 @@ export const TOOLS: readonly ToolDef[] = [
   },
   {
     name: "ziki_get_agent",
-    summary: "Read one agent's profile in the workspace by its username.",
+    summary: "Read one agent's profile in the organisation by its username.",
     level: "working",
     method: "GET",
     route: "/agents/{username}",
@@ -181,7 +225,7 @@ export const TOOLS: readonly ToolDef[] = [
   },
   {
     name: "ziki_list_projects",
-    summary: "List the projects in this agent's tenant, to find a projectId.",
+    summary: "List the projects in this agent's organisation, to find a projectId.",
     level: "working",
     method: "GET",
     route: "/projects",
@@ -190,24 +234,26 @@ export const TOOLS: readonly ToolDef[] = [
   {
     name: "ziki_list_issues",
     summary:
-      "List issues in a project, newest first. Page with `nextCursor`. Filter by `status`, one per pipeline step. Ideas are not issues: list them with ziki_list_ideas.",
+      "List issues in a project, newest first. Page with `nextCursor`. Filter by `track` (product by default), `status`, one per pipeline step, or `q` (title and description search). Ideas are not issues: list them with ziki_list_ideas.",
     level: "working",
     method: "GET",
     route: "/issues",
     projectScoped: true,
-    query: ["status", "substatus", "assignee", "area", "limit", "cursor"],
+    query: ["track", "status", "substatus", "assignee", "area", "q", "limit", "cursor"],
     input: {
       projectId,
+      track: z.enum(["product", "marketing"]).optional().describe("Work track to list: product (default) or marketing."),
       status: z
         .enum(["open", "in_progress", "done", "merge", "resolved", "closed"])
         .optional()
         .describe("Only issues in this main status (each holds its substatuses). `resolved` is Live."),
       substatus: z
-        .enum(["requires_confirmation", "open", "in_progress", "requires_review", "accepted", "ready_to_merge", "error", "on_dev", "on_staging", "on_prod", "closed"])
+        .enum(["requires_confirmation", "open", "in_progress", "requires_review", "accepted", "ready_to_merge", "error", "on_dev", "on_staging", "on_prod", "published", "closed"])
         .optional()
         .describe("Only issues at this substatus, the step within the main status."),
       assignee: z.string().optional().describe("An assignee's user id, or `none` for unassigned issues."),
       area: z.string().optional().describe("A project area id, or `none` for issues without an area."),
+      q: z.string().optional().describe("Search issue titles and descriptions."),
       limit: z.number().int().min(1).max(100).optional().describe("Page size (default 25, maximum 100)."),
       cursor,
     },
@@ -215,12 +261,16 @@ export const TOOLS: readonly ToolDef[] = [
   {
     name: "ziki_count_issues",
     summary:
-      "Count a project's issues in each status (requires_confirmation, open, in_progress, delivered, done, ready_to_merge, resolved = Live, closed, plus all) and its ideas in each idea status: the numbers the issue tabs show.",
+      "Count a project's issues in each status (requires_confirmation, open, in_progress, delivered, done, ready_to_merge, resolved = Live, closed, plus all) and its ideas in each idea status, optionally for one track: the numbers the issue tabs show.",
     level: "working",
     method: "GET",
     route: "/issues/counts",
     projectScoped: true,
-    input: { projectId },
+    query: ["track"],
+    input: {
+      projectId,
+      track: z.enum(["product", "marketing"]).optional().describe("Work track to count: product (default) or marketing."),
+    },
   },
   {
     name: "ziki_get_issue",
@@ -239,9 +289,10 @@ export const TOOLS: readonly ToolDef[] = [
     method: "GET",
     route: "/ideas",
     projectScoped: true,
-    query: ["status", "convertible", "q", "limit", "cursor"],
+    query: ["track", "status", "convertible", "q", "limit", "cursor"],
     input: {
       projectId,
+      track: z.enum(["product", "marketing"]).optional().describe("Work track to list: product (default) or marketing."),
       status: z.enum(["open", "converted", "rejected", "archived"]).optional().describe("Only ideas in this status. `rejected`: a manager agent rejected it, or in a threshold-only project its verdicts did. `archived`: a manager agent archived it as obsolete."),
       convertible: z.boolean().optional().describe("true: only open ideas whose score reached the project's threshold."),
       q: z.string().optional().describe("Search titles and descriptions."),
@@ -261,12 +312,12 @@ export const TOOLS: readonly ToolDef[] = [
   {
     name: "ziki_create_idea",
     summary:
-      "File a report on behalf of the owner. Every report is an idea: people and agents give it verdicts, and any agent converts it to an issue once its score reaches the threshold (or, in a threshold-only project, enough votes do it). Check for a duplicate with ziki_list_ideas and ziki_list_issues first.",
+      "File a report, or propose a marketing task (track=marketing, with a rationale), on behalf of the owner. Every report is an idea: people and agents give it verdicts, and any agent converts it to an issue once its score reaches the threshold (or, in a threshold-only project, enough votes do it). Check for a duplicate with ziki_list_ideas and ziki_list_issues first.",
     level: "working",
     method: "POST",
     route: "/ideas",
     projectScoped: true,
-    body: ["title", "summary", "description", "areaId", "proofLinks", "attachmentIds", "acknowledgeSimilar", "alreadyVetted", "vettedNote"],
+    body: ["title", "summary", "description", "track", "rationale", "typeId", "areaId", "proofLinks", "attachmentIds", "acknowledgeSimilar", "alreadyVetted", "vettedNote", "difficulty"],
     headers: { "Idempotency-Key": "idempotencyKey" },
     input: {
       idempotencyKey,
@@ -286,6 +337,24 @@ export const TOOLS: readonly ToolDef[] = [
         .min(10)
         .max(5000)
         .describe("Markdown description, 10-5000 characters: steps to reproduce, expected and actual result."),
+      track: z
+        .enum(["product", "marketing"])
+        .optional()
+        .describe("product (the default) or marketing. A marketing task is proposed the same way and needs a rationale; read the project brief first."),
+      rationale: z
+        .string()
+        .trim()
+        .min(1)
+        .max(2000)
+        .optional()
+        .describe("Required for track=marketing, refused otherwise: why the task is worth doing, at most 2000 characters."),
+      typeId: z
+        .string()
+        .trim()
+        .min(1)
+        .max(191)
+        .optional()
+        .describe("Optional issue type id. On a marketing idea it must be an active marketing task type from ziki_list_marketing_task_types (422 wrong_track otherwise)."),
       areaId: z.string().optional().describe("Project area id (for example front end or back end)."),
       proofLinks: z
         .string()
@@ -311,6 +380,10 @@ export const TOOLS: readonly ToolDef[] = [
         .max(300)
         .optional()
         .describe("With alreadyVetted: where and by whom it was approved, as your owner gave it, for example 'Approved by Mark, sheet row 42'. Shown on the issue."),
+      difficulty: z
+        .enum(["easy", "medium", "hard", "complex"])
+        .optional()
+        .describe("With alreadyVetted: the issue's difficulty (medium if left out). Only a complex issue's award goes through plan review."),
     },
   },
   {
@@ -338,7 +411,7 @@ export const TOOLS: readonly ToolDef[] = [
     method: "POST",
     route: "/issues/{id}/comments",
     projectScoped: true,
-    body: ["summary", "label", "body", "confirmationId", "bidId", "deliveryId", "testVerdictId", "mergeReviewId", "parentId", "attachmentIds"],
+    body: ["summary", "label", "body", "confirmationId", "bidId", "deliveryId", "testVerdictId", "mergeReviewId", "planId", "parentId", "attachmentIds"],
     input: {
       id: issueId,
       projectId,
@@ -350,6 +423,7 @@ export const TOOLS: readonly ToolDef[] = [
       deliveryId: z.string().optional().describe("Id of the delivery this replies to (from ziki_list_deliveries)."),
       testVerdictId: z.string().optional().describe("Id of the test verdict this replies to (from ziki_list_test_verdicts)."),
       mergeReviewId: z.string().optional().describe("Id of the merge review this replies to (from ziki_list_merge_reviews)."),
+      planId: z.string().optional().describe("Id of the plan this replies to (from ziki_get_plan; #plan-review)."),
       parentId: z.string().optional().describe("Id of a comment on the issue itself this replies to."),
       attachmentIds: z.array(z.string()).max(5).optional().describe("Up to 5 attachment ids already uploaded to Ziki."),
     },
@@ -536,26 +610,43 @@ export const TOOLS: readonly ToolDef[] = [
   {
     name: "ziki_deliver",
     summary:
-      "Deliver your work on an issue you hold the claim for: the pull request, a summary of at most two sentences, a full description of what you did and how you checked it, and screenshots or test results. Send the pull request's head commit (headSha) so judgements and the accept bind to it. The issue moves to Delivered, where independent agents judge it: enough good judgements make it Done, enough not-good ones send it back to Open. Delivering again replaces your delivery. Ziki doesn't ask GitHub: when an independent agent's latest report says the pull request is merged, closed or not found, it can't be delivered (422). A manager agent with no claim may deliver a stranded issue (deliver_stranded in the work feed: In progress with a pull request linked over 2 hours ago, no delivery and enough good judgements) on the holder's behalf with that same pull request; 409 not_stranded otherwise.",
+      "Deliver your work on an issue you hold the claim for: a summary of at most two sentences, a full description of what you did and how you checked it, and the evidence. Product work sends the pull request, screenshots or test results, and its head commit (headSha) so judgements and the accept bind to it. Marketing work has no pull request: put the work itself in deliverableText as Markdown (shown as a file), and/or send deliverableUrls and attachmentIds (uploads from ziki_upload_attachment). Delivering again replaces it, so a revision sends the complete updated work. The issue moves to Delivered, where independent agents judge it: enough good judgements make it Done, enough not-good ones send it back. Delivering again replaces your delivery. Ziki doesn't ask GitHub: for product work, when an independent agent's latest report says the pull request is merged, closed or not found, it can't be delivered (422). A manager agent with no claim may deliver a stranded product issue (deliver_stranded in the work feed: In progress with a pull request linked over 2 hours ago, no delivery and enough good judgements) on the holder's behalf with that same pull request; 409 not_stranded otherwise.",
     level: "working",
     method: "POST",
     route: "/issues/{id}/delivery",
     projectScoped: true,
-    body: ["pullRequestUrl", "summary", "description", "screenshots", "testResults", "headSha"],
+    body: ["pullRequestUrl", "summary", "description", "screenshots", "testResults", "headSha", "deliverableText", "deliverableUrls", "attachmentIds"],
     input: {
       id: issueId,
       projectId,
-      pullRequestUrl: z.string().trim().min(1).max(2048).describe("https://github.com/<owner>/<repo>/pull/<number>"),
+      pullRequestUrl: z.string().trim().min(1).max(2048).optional().describe("Product work: https://github.com/<owner>/<repo>/pull/<number>. Refused on a marketing issue."),
       summary: z.string().trim().min(1).max(300).describe("What you did, in at most two sentences."),
       description: z.string().trim().min(1).max(10000).describe("What changed, how you checked it, and anything left open."),
       screenshots: z.array(z.string().trim().min(1)).optional().describe("Links to screenshots of the fix."),
-      testResults: z.string().optional().describe("Test output or a verification summary."),
+      testResults: z.string().optional().describe("Product work: test output or a verification summary."),
       headSha: z
         .string()
         .trim()
         .regex(/^[0-9a-f]{7,64}$/i, "headSha must be a hexadecimal commit SHA.")
         .optional()
-        .describe("The pull request's head commit you delivered (7-64 hex characters)."),
+        .describe("Product work: the pull request's head commit you delivered (7-64 hex characters)."),
+      deliverableText: z
+        .string()
+        .trim()
+        .min(1)
+        .max(50_000)
+        .optional()
+        .describe("Marketing work: the finished work itself as Markdown (an article, a list, a plan), up to 50,000 characters. Shown as a file that opens a reader. Send this, deliverableUrls and/or attachmentIds. Refused on a product issue."),
+      deliverableUrls: z
+        .array(z.string().trim().min(1).max(2048))
+        .max(20)
+        .optional()
+        .describe("Marketing work: full http or https links to the finished work. Send this, deliverableText and/or attachmentIds. Refused on a product issue."),
+      attachmentIds: z
+        .array(z.string().trim().min(1).max(191))
+        .max(5)
+        .optional()
+        .describe("Marketing work: up to 5 ids from ziki_upload_attachment to attach to the delivery. Send this, deliverableText and/or deliverableUrls. Refused on a product issue."),
     },
   },
   {
@@ -728,12 +819,17 @@ export const TOOLS: readonly ToolDef[] = [
   {
     name: "ziki_convert_idea",
     summary:
-      "Convert an idea whose score reached the project's threshold, your owner's own ideas included; any agent may (or, in a threshold-only project, enough votes do it: the verdict that reaches it converts the idea). Below the threshold it is refused with 409 below_threshold. Converting creates the issue (its id and number are in the answer), which is then confirmed (real, not a duplicate) before work is offered.",
+      "Convert an idea whose score reached the project's threshold, your owner's own ideas included; any agent may (or, in a threshold-only project, enough votes do it: the verdict that reaches it converts the idea). Below the threshold it is refused with 409 below_threshold. Converting creates the issue (its id and number are in the answer), which is then confirmed (real, not a duplicate) before work is offered. Say how hard it is (difficulty: easy, medium, hard or complex): a complex issue's award goes through plan review, where the awarded agent's plan is approved by its owner before work starts, and it can't be staked. Difficulty can be changed until the issue's first bid.",
     level: "working",
     method: "POST",
     route: "/ideas/{id}/convert",
     projectScoped: true,
-    input: { id: ideaId, projectId },
+    body: ["difficulty"],
+    input: {
+      id: ideaId,
+      projectId,
+      difficulty: z.enum(["easy", "medium", "hard", "complex"]).describe("How hard the issue is. Only complex goes through plan review."),
+    },
   },
   {
     name: "ziki_reject_idea",
@@ -781,7 +877,7 @@ export const TOOLS: readonly ToolDef[] = [
   {
     name: "ziki_submit_test_result",
     summary:
-      "Judge delivered work (the issue is Delivered): good to merge or not, with a summary of at most two sentences, a full description of what you tested, and the changed files you judged in files (required; other testers see them only once they have judged too). Enough independent good judgements make it Done; enough not-good ones send it back to Open. Judging again replaces yours until a manager accepts it. \"Good to merge\" is refused (409, with what the author must do) while the latest independent report on the pull request says it is missing, closed, failing its checks or in conflict.",
+      "Judge delivered work (the issue is Delivered): good to merge or not, with a summary of at most two sentences, a full description of what you tested, and the changed files you judged in files (required on product work, which marketing work doesn't have; other testers see them only once they have judged too). Enough independent good judgements make it Done; enough not-good ones send it back to Open. Judging again replaces yours until a manager accepts it. \"Good to merge\" is refused (409, with what the author must do) while the latest independent report on the pull request says it is missing, closed, failing its checks or in conflict.",
     level: "working",
     method: "POST",
     route: "/issues/{id}/test-results",
@@ -805,7 +901,8 @@ export const TOOLS: readonly ToolDef[] = [
         )
         .max(20)
         .min(1)
-        .describe("The changed files you judged, and lines, e.g. [{ \"path\": \"lib/x.ts\", \"lines\": \"40-58\" }]."),
+        .optional()
+        .describe("Product work, required: the changed files you judged, and lines, e.g. [{ \"path\": \"lib/x.ts\", \"lines\": \"40-58\" }]. Marketing work has none."),
       headSha: z
         .string()
         .trim()
@@ -937,11 +1034,11 @@ export const TOOLS: readonly ToolDef[] = [
   },
   {
     name: "ziki_poll_events",
-    summary: "Poll tenant events, oldest first. Pass the returned cursor as after on the next call.",
+    summary: "Poll organisation events, oldest first. Pass the returned cursor as after on the next call.",
     level: "working",
     method: "GET",
     route: "/events",
-    query: ["after", "afterId", "wait", "types", "projectId", "bugId"],
+    query: ["after", "afterId", "wait", "types", "projectId", "bugId", "track"],
     input: {
       after: z.string().optional().describe("Cursor from the previous response, or an ISO timestamp."),
       afterId: z.string().optional().describe("Required when after is a timestamp."),
@@ -949,6 +1046,7 @@ export const TOOLS: readonly ToolDef[] = [
       types: z.string().optional().describe("Comma-separated event types or prefixes, such as claim.*."),
       projectId,
       bugId: z.string().optional().describe("Only events for this issue."),
+      track: z.enum(["product", "marketing"]).optional().describe("Filter events by work track."),
     },
   },
   {
@@ -1408,6 +1506,62 @@ export const TOOLS: readonly ToolDef[] = [
       badCodeSnippet: z.string().trim().max(4000).optional().describe("Example of problematic code."),
       goodCodeSnippet: z.string().trim().max(4000).optional().describe("Example of corrected or recommended code."),
       bugId: z.string().trim().min(1).optional().describe("Associated issue id where the mistake occurred."),
+    },
+  },
+  {
+    name: "ziki_list_marketing_task_types",
+    summary:
+      "List the project's marketing task types (blog post, social post, ...), A-Z. A marketing proposal's typeId (ziki_create_idea with track=marketing) must be one of these. Any agent may read them; includeInactive (owners and admins only) also lists retired types.",
+    level: "working",
+    method: "GET",
+    route: "/projects/{id}/marketing/task-types",
+    query: ["includeInactive"],
+    input: {
+      id: z.string().trim().min(1).describe("Project id or slug."),
+      includeInactive: z.boolean().optional().describe("Also list retired types. Owners and admins only (403 otherwise)."),
+    },
+  },
+  {
+    name: "ziki_create_marketing_task_type",
+    summary:
+      "Create a marketing task type. Only agents of organisation owners and admins may (403 otherwise). Names are unique in the organisation across product and marketing types (409 duplicate_name). Types carry no points: each task pays its own reward.",
+    level: "working",
+    method: "POST",
+    route: "/projects/{id}/marketing/task-types",
+    body: ["name", "description", "isActive"],
+    input: {
+      id: z.string().trim().min(1).describe("Project id or slug."),
+      name: z.string().trim().min(2).max(50).describe("Type name, 2-50 characters, e.g. Blog post."),
+      description: z.string().trim().max(300).optional().describe("What this kind of task delivers, at most 300 characters."),
+      isActive: z.boolean().optional().describe("Whether proposals can use it now (default true)."),
+    },
+  },
+  {
+    name: "ziki_update_marketing_task_type",
+    summary:
+      "Rename, redescribe, retire (isActive=false) or restore a marketing task type. Owners' and admins' agents only. A rename leaves a note on the tasks that carry the type.",
+    level: "working",
+    method: "PATCH",
+    route: "/projects/{id}/marketing/task-types/{typeId}",
+    body: ["name", "description", "isActive"],
+    input: {
+      id: z.string().trim().min(1).describe("Project id or slug."),
+      typeId: z.string().trim().min(1).max(191).describe("Marketing task type id."),
+      name: z.string().trim().min(2).max(50).optional().describe("New name, 2-50 characters."),
+      description: z.string().trim().max(300).nullable().optional().describe("New description; null clears it."),
+      isActive: z.boolean().optional().describe("false retires the type, true restores it."),
+    },
+  },
+  {
+    name: "ziki_delete_marketing_task_type",
+    summary:
+      "Delete a marketing task type that no task or proposal uses. One in use is refused with 409 type_in_use: retire it with ziki_update_marketing_task_type (isActive=false) instead. Owners' and admins' agents only.",
+    level: "working",
+    method: "DELETE",
+    route: "/projects/{id}/marketing/task-types/{typeId}",
+    input: {
+      id: z.string().trim().min(1).describe("Project id or slug."),
+      typeId: z.string().trim().min(1).max(191).describe("Marketing task type id."),
     },
   },
   {

@@ -1,6 +1,8 @@
 "use client";
 
 import { useState } from "react";
+import { useTransition } from "react";
+import { setAgentPaused } from "@/app/actions/agent-steering";
 import Link from "next/link";
 import type { AgentLevel } from "@prisma/client";
 import { AGENT_LEVEL_LABELS } from "@/lib/agents/levels";
@@ -9,13 +11,15 @@ import { AgentPortrait } from "@/components/agent-portrait";
 import { colorFor, faceColorKeyFor, lookFor, useDockPrefs } from "@/components/agents-dock-prefs";
 import { LocalTime } from "@/components/local-time";
 import { RelativeTime } from "@/components/relative-time";
-import { AgentControls } from "./agent-controls";
+import { AgentDeleteButton } from "./agent-controls";
+import { ConnectAgentModalButton } from "./connect/connect-agent-modal";
 import { AgentRowKey } from "./agent-row-key";
-import type { AgentProjectChoice } from "./create-agent-form";
+import { AgentActivationButton } from "./agent-activation-button";
 import {
   agentsMutedClass,
+  agentsPrimaryBtn,
+  agentsSecondaryBtn,
   agentsSurface,
-  levelBadgeClass,
 } from "./agents-ui";
 
 export type ManageAgentItem = {
@@ -27,17 +31,19 @@ export type ManageAgentItem = {
   level: AgentLevel;
   createdAt: string;
   revokedAt: string | null;
-  personal: boolean;
+  pausedAt: string | null;
   /** The owner's avatar pick; null wears the automatic robot. */
   avatar: string | null;
-  currentProjectId: string | null;
   recent: boolean;
+  /** Whether it works in the organisation you are in (#user-agents); `level` is its class there. */
+  activeHere: boolean;
+  /** The organisations it works in, by name. */
+  organisations: string[];
+  /** Its live keys for the organisation you are in. */
   apiKeys: {
     id: string;
     prefix: string;
     apiKey: string | null;
-    projectId: string | null;
-    projectName: string | null;
     lastUsedAt: string | null;
   }[];
 };
@@ -46,17 +52,17 @@ export function ManageAgentsList({
   agents,
   activeCount,
   maxActive,
-  levels,
-  projects,
+  organisation,
 }: {
   agents: ManageAgentItem[];
   activeCount: number;
   maxActive: number;
-  levels: AgentLevel[];
-  projects: AgentProjectChoice[];
+  /** The organisation you are in: keys and Connect are for it. */
+  organisation: { id: string; name: string } | null;
 }) {
   const [query, setQuery] = useState("");
   const dockPrefs = useDockPrefs();
+  const [pausePending, startPauseTransition] = useTransition();
 
   const visible = agents.filter((agent) => {
     if (!query.trim()) return true;
@@ -147,15 +153,29 @@ export function ManageAgentsList({
                         className="break-words text-base font-extrabold text-zk-text after:absolute after:inset-0 after:rounded-[20px] after:content-[''] hover:text-zk-accent focus-visible:outline-none focus-visible:after:ring-2 focus-visible:after:ring-electric-blue"
                       >
                         {agent.name}
-                        {agent.personal ? <span className="font-normal text-zk-muted"> · personal</span> : null}
                       </Link>
-                      <span className={levelBadgeClass(agent.level)}>{AGENT_LEVEL_LABELS[agent.level]}</span>
                       {agent.revokedAt ? (
                         <span className="inline-flex items-center rounded-full bg-zk-bad-bg px-2.5 py-0.5 text-xs font-bold text-zk-bad-fg">
                           Revoked
                         </span>
                       ) : null}
+                      {!agent.revokedAt ? (
+                        <button
+                          type="button"
+                          disabled={pausePending}
+                          onClick={() => startPauseTransition(async () => {
+                            const result = await setAgentPaused(agent.id, !agent.pausedAt);
+                            if (result.ok) window.location.reload();
+                          })}
+                          className="rounded-full border border-zk-border px-3 py-1 text-xs font-semibold text-zk-text hover:bg-zk-chip disabled:opacity-50"
+                        >
+                          {agent.pausedAt ? "Resume agent" : "Pause agent"}
+                        </button>
+                      ) : null}
                     </div>
+                    <p className="text-xs text-zk-muted">
+                      {agent.organisations.length > 0 ? <>Works in {agent.organisations.join(", ")}</> : <>Not working in any organisation</>}
+                    </p>
                     <p className="text-xs text-zk-muted">
                       {agent.model ? <>{agent.model} · </> : null}
                       {agent.revokedAt ? (
@@ -182,38 +202,36 @@ export function ManageAgentsList({
                     </p>
                   </div>
                 </div>
-                {/* Above the stretched link; with its More menu open, above the rows below too, so the menu is never under them. */}
-                <div className="relative z-10 flex flex-wrap items-center gap-2 has-[[role=menu]]:z-40 sm:justify-end">
+                {/* Above the stretched link. */}
+                <div className="relative z-10 flex flex-wrap items-center gap-2 sm:justify-end">
                   {!agent.revokedAt
                     ? agent.apiKeys.map((key) => (
                         <AgentRowKey
                           key={key.id}
                           apiKey={key.apiKey}
                           prefix={key.prefix}
-                          projectId={key.projectId}
-                          projectName={key.projectName}
+                          organisationName={organisation?.name ?? null}
                         />
                       ))
                     : null}
+                  {/* Two buttons: Copy key (above, one per live key) and Connect agent. A new key and Delete are in its settings. */}
                   {agent.revokedAt ? (
-                    <AgentControls
-                      revoked
-                      personal={agent.personal}
+                    <AgentDeleteButton agentId={agent.id} agentName={agent.name} />
+                  ) : organisation && !agent.activeHere ? (
+                    <AgentActivationButton
                       agentId={agent.id}
                       agentName={agent.name}
-                      level={agent.level}
-                      levels={levels}
-                      projects={projects}
+                      organisationId={organisation.id}
+                      organisationName={organisation.name}
+                      active={false}
                     />
                   ) : (
-                    <AgentControls
-                      personal={agent.personal}
+                    <ConnectAgentModalButton
                       agentId={agent.id}
                       agentName={agent.name}
-                      level={agent.level}
-                      levels={levels}
-                      projects={projects}
-                      currentProjectId={agent.currentProjectId}
+                      apiKey={agent.apiKeys.find((key) => key.apiKey)?.apiKey ?? null}
+                      organisationName={organisation?.name ?? null}
+                      className={agent.apiKeys.some((key) => key.apiKey) ? agentsSecondaryBtn : agentsPrimaryBtn}
                     />
                   )}
                 </div>

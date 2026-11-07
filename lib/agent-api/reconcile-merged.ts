@@ -10,7 +10,8 @@ import {
   finalizeResolved,
   mergeBugSelect,
 } from "@/lib/agent-api/merge";
-import { parseGitHubRepoUrl, parsePullRequestUrl } from "@/lib/github/pull-request-url";
+import { parsePullRequestUrl } from "@/lib/github/pull-request-url";
+import { repoForPullRequest } from "@/lib/github/project-repositories";
 import { prGate } from "@/lib/agent-api/pr-gate";
 import { gateReport, latestPullRequestReport, pullRequestStateView, type PullRequestStateView } from "@/lib/agent-api/pull-request-report";
 
@@ -89,7 +90,7 @@ const fail = (status: 403 | 404 | 409 | 422, error: ReconcileError, message: str
 /** Reconcile issue `bugId` (by id) in `scope`. `pullRequestUrl`, when given, must be the linked one. */
 export async function reconcileMergedWork(
   agent: AgentContext,
-  scope: { tenantId: string; projectId: string },
+  scope: { organisationId: string; projectId: string },
   bugId: string,
   pullRequestUrl?: string,
 ): Promise<ReconcileResult> {
@@ -101,7 +102,7 @@ export async function reconcileMergedWork(
   }
 
   const bug = await prisma.bug.findFirst({
-    where: { id: bugId, tenantId: scope.tenantId, projectId: scope.projectId, isDeleted: false },
+    where: { id: bugId, organisationId: scope.organisationId, projectId: scope.projectId, isDeleted: false },
     select: mergeBugSelect,
   });
   if (!bug) return fail(404, "not_found", "No such issue in this project.");
@@ -126,7 +127,7 @@ export async function reconcileMergedWork(
   const gate = prGate(gateReport(report), {
     pullRequestUrl: bug.pullRequestUrl,
     pullRequestHeadSha: bug.pullRequestHeadSha,
-    repo: parseGitHubRepoUrl(bug.project?.repoUrl),
+    repo: repoForPullRequest(bug.project, bug.pullRequestUrl),
   });
   const refusal = mergedRefusal(gate);
   if (refusal) return fail(409, refusal.error, refusal.message);

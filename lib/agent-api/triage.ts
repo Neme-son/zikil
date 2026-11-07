@@ -1,3 +1,4 @@
+import { PRODUCT_TRACK } from "@/lib/marketing/track";
 import type { AgentLevel, Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import type { AgentContext } from "@/lib/agents/require-agent";
@@ -14,7 +15,8 @@ import { currentHold, type IssueHold } from "@/lib/issue-holders";
 import { OPEN_BID_WHERE } from "@/lib/open-bids";
 import { isThresholdOnly, weightedTally } from "@/lib/governance";
 import { workflowFor } from "@/lib/workflow";
-import { parseGitHubRepoUrl, parsePullRequestUrl, type RepoRef } from "@/lib/github/pull-request-url";
+import { parsePullRequestUrl, type RepoRef } from "@/lib/github/pull-request-url";
+import { PROJECT_REPOSITORIES_SELECT, repoForPullRequest } from "@/lib/github/project-repositories";
 import { linkStateFromUrl, prGate, reportWanted, type LinkState, type PrGate } from "@/lib/agent-api/pr-gate";
 import {
   gateReport,
@@ -26,6 +28,7 @@ import {
 import { absoluteUrl } from "@/lib/site-url";
 import { issuePath } from "@/lib/issue-ref";
 import { refOf } from "@/lib/project-paths";
+import { activeLevels, levelIn } from "@/lib/agents/active-in";
 
 /**
  * The manager's triage view (#triage): one read that says, for every issue in
@@ -332,25 +335,25 @@ export function parseTriageQuery(params: URLSearchParams): { limit: number; curs
 /** One page of the project's triage, oldest issue first, for a manager or merger agent. */
 export async function triageQueue(
   agent: AgentContext,
-  scope: { tenantId: string; projectId: string },
+  scope: { organisationId: string; projectId: string },
   query: { limit: number; cursor: IssueCursor | null },
   deps: { now?: number } = {},
 ): Promise<TriagePage> {
   requireLevel(agent, "manager");
   const now = deps.now ?? Date.now();
   const project = await prisma.project.findFirst({
-    where: { id: scope.projectId, tenantId: scope.tenantId },
-    select: { id: true, slug: true, repoUrl: true, tenant: { select: { slug: true } } },
+    where: { id: scope.projectId, organisationId: scope.organisationId },
+    select: { id: true, slug: true, repoUrl: true, ...PROJECT_REPOSITORIES_SELECT, organisation: { select: { slug: true } } },
   });
   if (!project) throw new IssueApiError(404, "Project not found.");
-  const repo = parseGitHubRepoUrl(project.repoUrl);
   const workflow = await workflowFor(project.id);
   const thresholdOnly = isThresholdOnly(workflow);
 
   const rows = await prisma.bug.findMany({
     where: {
-      tenantId: scope.tenantId,
+      organisationId: scope.organisationId,
       projectId: project.id,
+      ...PRODUCT_TRACK,
       isDeleted: false,
       AND: [
         { OR: [{ status: { in: [...TRIAGE_STATUSES] } }, { substatus: "open", bids: { some: OPEN_BID_WHERE } }] },
@@ -366,6 +369,8 @@ export async function triageQueue(
   const reports = await latestPullRequestReports(page.items);
 
   const items = await Promise.all(page.items.map(async (bug): Promise<TriageItem> => {
+    // The repository this pull request is in: the main one or one the project lists (#2).
+    const repo = repoForPullRequest(project, bug.pullRequestUrl);
     const pullRequest = pullRequestFacts(bug.pullRequestUrl, repo, reports.get(bug.id) ?? null, bug.pullRequestHeadSha ?? null, now);
     const [hold, judged, bids, stranded, idle, stale] = await Promise.all([
       currentHold(bug.id),
@@ -455,13 +460,14 @@ async function openBidsOn(bugId: string, managerVoteWeight: number): Promise<Tri
     orderBy: [{ createdAt: "asc" }, { id: "asc" }],
     select: {
       id: true, beneficiaryUserId: true, agent: { select: { ownerUserId: true } },
-      votes: { select: { onBehalfOfUserId: true, agent: { select: { level: true } } } },
+      bug: { select: { organisationId: true } },
+      votes: { select: { onBehalfOfUserId: true, agent: { select: { activations: activeLevels } } } },
     },
   });
   return rows
     .map((row) => ({
       id: row.id,
-      votes: weightedTally(row.votes.map((vote) => ({ ownerId: vote.onBehalfOfUserId, level: vote.agent?.level })), managerVoteWeight),
+      votes: weightedTally(row.votes.map((vote) => ({ ownerId: vote.onBehalfOfUserId, level: levelIn(vote.agent, row.bug.organisationId) })), managerVoteWeight),
       ownerIds: [row.beneficiaryUserId, row.agent.ownerUserId],
     }))
     .sort((a, b) => b.votes - a.votes);

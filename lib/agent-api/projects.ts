@@ -1,3 +1,4 @@
+import { PRODUCT_TRACK } from "@/lib/marketing/track";
 import { prisma } from "@/lib/prisma";
 import { absoluteUrl } from "@/lib/site-url";
 import { projectPath, projectRef } from "@/lib/project-paths";
@@ -17,49 +18,67 @@ import type { Prisma } from "@prisma/client";
  * brief; each project's workflow numbers expose the gates it enforces so an
  * agent can set expectations.
  *
- * `githubInstallationId` is deliberately not selected — it is deployment
- * configuration, not agent-visible data.
+ * `repositories` (#2) lists every repository a fix can be in: the main one
+ * (`repoUrl`, kept for older agents) first, then the project's others.
+ *
+ * `githubInstallationId` (the project's and each repository's) is deliberately
+ * not selected — it is deployment configuration, not agent-visible data.
  */
 const projectSelect = {
   id: true, slug: true, name: true, goal: true, repoUrl: true, stagingUrl: true, rewardConfig: true,
   workflow: true,
+  repositories: {
+    select: { url: true, label: true, branch: true },
+    orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+  },
 } satisfies Prisma.ProjectSelect;
 
-/** The organisation's slug, the first segment of its projects' addresses (#project-urls). */
-export async function tenantSlugOf(tenantId: string): Promise<string> {
-  const tenant = await prisma.tenant.findUnique({ where: { id: tenantId }, select: { slug: true } });
-  if (!tenant) throw new IssueApiError(404, "Organisation not found.");
-  return tenant.slug;
+type AgentRepository = { url: string; label: string | null; branch: string | null; main: boolean };
+
+function agentRepositories(project: {
+  repoUrl: string | null;
+  repositories: { url: string; label: string | null; branch: string | null }[];
+}): AgentRepository[] {
+  const main = project.repoUrl ? [{ url: project.repoUrl, label: null, branch: null, main: true }] : [];
+  return [...main, ...project.repositories.map((repository) => ({ ...repository, main: false }))];
 }
 
-export async function listAgentProjectSummaries(tenantId: string) {
+/** The organisation's slug, the first segment of its projects' addresses (#project-urls). */
+export async function organisationSlugOf(organisationId: string): Promise<string> {
+  const organisation = await prisma.organisation.findUnique({ where: { id: organisationId }, select: { slug: true } });
+  if (!organisation) throw new IssueApiError(404, "Organisation not found.");
+  return organisation.slug;
+}
+
+export async function listAgentProjectSummaries(organisationId: string) {
   return prisma.project.findMany({
-    where: { tenantId },
+    where: { organisationId },
     orderBy: { slug: "asc" },
     select: { id: true, slug: true, name: true },
   });
 }
 
-/** Every project in the agent's tenant, with each project's goal and open-issue count. */
-export async function listAgentProjects(tenantId: string) {
+/** Every project in the agent's organisation, with each project's goal and open-issue count. */
+export async function listAgentProjects(organisationId: string) {
   const [projects, platform] = await Promise.all([
     prisma.project.findMany({
-      where: { tenantId },
+      where: { organisationId },
       orderBy: { slug: "asc" },
       select: projectSelect,
     }),
     getPlatformRewardConfig(prisma),
   ]);
-  const orgSlug = await tenantSlugOf(tenantId);
+  const orgSlug = await organisationSlugOf(organisationId);
   const base = projectDefaultsFromPlatform(platform);
   const openCounts = await prisma.bug.groupBy({
     by: ["projectId"],
-    where: { tenantId, projectId: { in: projects.map((project) => project.id) }, isDeleted: false, substatus: "open" },
+    where: { organisationId, projectId: { in: projects.map((project) => project.id) }, ...PRODUCT_TRACK, isDeleted: false, substatus: "open" },
     _count: { _all: true },
   });
   const openByProject = new Map(openCounts.map((row) => [row.projectId, row._count._all]));
   return projects.map((project) => ({
     ...project,
+    repositories: agentRepositories(project),
     workUrl: absoluteUrl(projectPath(projectRef(orgSlug, project.slug), "/work")),
     notesUrl: `/api/v1/projects/${project.id}/notes`,
     notesCommentsUrl: `/api/v1/projects/${project.id}/notes/comments`,
@@ -69,22 +88,23 @@ export async function listAgentProjects(tenantId: string) {
   }));
 }
 
-/** One project in the agent's tenant; foreign project ids are a 404, not a leak. */
-export async function getAgentProject(tenantId: string, projectId: string) {
+/** One project in the agent's organisation; foreign project ids are a 404, not a leak. */
+export async function getAgentProject(organisationId: string, projectId: string) {
   const [project, platform] = await Promise.all([
     prisma.project.findFirst({
-      where: { id: projectId, tenantId },
+      where: { id: projectId, organisationId },
       select: projectSelect,
     }),
     getPlatformRewardConfig(prisma),
   ]);
   if (!project) throw new IssueApiError(404, "Project not found.");
-  const orgSlug = await tenantSlugOf(tenantId);
+  const orgSlug = await organisationSlugOf(organisationId);
   const openIssueCount = await prisma.bug.count({
-    where: { tenantId, projectId: project.id, isDeleted: false, substatus: "open" },
+    where: { organisationId, projectId: project.id, ...PRODUCT_TRACK, isDeleted: false, substatus: "open" },
   });
   return {
     ...project,
+    repositories: agentRepositories(project),
     workUrl: absoluteUrl(projectPath(projectRef(orgSlug, project.slug), "/work")),
     notesUrl: `/api/v1/projects/${project.id}/notes`,
     notesCommentsUrl: `/api/v1/projects/${project.id}/notes/comments`,

@@ -1,8 +1,8 @@
 import { cookies } from "next/headers";
 import { NextResponse, type NextRequest } from "next/server";
 import { requireUser } from "@/lib/auth-helpers";
-import { isTenantAdmin } from "@/lib/agents/membership";
-import { currentTenantIdFor } from "@/lib/tenant-context";
+import { isAdminOfOrganisation } from "@/lib/agents/membership";
+import { currentOrganisationIdFor } from "@/lib/organisation-context";
 import { prisma } from "@/lib/prisma";
 import { getRequestOrigin } from "@/lib/auth-origin";
 import { logger } from "@/lib/logger";
@@ -46,8 +46,11 @@ export async function GET(request: NextRequest) {
     return response;
   }
 
+  // `slug.nonce` connects the project; `slug.repo-<id>.nonce` one of its other repositories (#2).
+  const [, target = "", nonce] = (expected || state).split(".");
+  const repositoryId = nonce !== undefined && target.startsWith("repo-") ? target.slice(5) : null;
   const isStateMismatch = Boolean(state && expected && state !== expected);
-  const hasValidState = Boolean(expected || (state && /^[a-z0-9-]{1,48}\.[A-Za-z0-9_-]+$/.test(state)));
+  const hasValidState = Boolean(expected || (state && /^[a-z0-9-]{1,48}\.(?:repo-[a-z0-9]{8,40}\.)?[A-Za-z0-9_-]+$/.test(state)));
   const isValidSlug = /^[a-z0-9-]{1,48}$/.test(slug);
   const isValidInstallationId = /^\d{1,20}$/.test(installationId);
   const isValidAction = ["install", "update", ""].includes(setupAction);
@@ -69,19 +72,50 @@ export async function GET(request: NextRequest) {
   }
 
   const user = await requireUser();
-  const tenantId = await currentTenantIdFor(user.id);
-  if (!tenantId || !(await isTenantAdmin(user, tenantId))) {
+  const organisationId = await currentOrganisationIdFor(user.id);
+  if (!organisationId || !(await isAdminOfOrganisation(user, organisationId))) {
     const response = NextResponse.redirect(new URL("/home", origin));
     response.cookies.delete(STATE_COOKIE);
     return response;
   }
 
   const project = await prisma.project.findFirst({
-    where: { tenantId, slug },
+    where: { organisationId, slug },
     select: { id: true, githubInstallationId: true },
   });
   if (!project) {
     const response = NextResponse.redirect(new URL("/home", origin));
+    response.cookies.delete(STATE_COOKIE);
+    return response;
+  }
+
+  if (repositoryId !== null) {
+    const repository = /^[a-z0-9]{8,40}$/.test(repositoryId)
+      ? await prisma.projectRepository.findFirst({
+          where: { id: repositoryId, projectId: project.id },
+          select: { id: true, url: true, githubInstallationId: true },
+        })
+      : null;
+    if (!repository) {
+      settingsUrl.searchParams.set("github", "error");
+      const response = NextResponse.redirect(settingsUrl);
+      response.cookies.delete(STATE_COOKIE);
+      return response;
+    }
+    await prisma.$transaction(async (tx) => {
+      await tx.projectRepository.update({ where: { id: repository.id }, data: { githubInstallationId: installationId } });
+      await tx.projectAuditEvent.create({
+        data: {
+          organisationId,
+          projectId: project.id,
+          actorUserId: user.id,
+          action: "github.installation.connected",
+          changes: { repository: repository.url, githubInstallationId: { from: repository.githubInstallationId, to: installationId } },
+        },
+      });
+    });
+    settingsUrl.searchParams.set("github", "connected");
+    const response = NextResponse.redirect(settingsUrl);
     response.cookies.delete(STATE_COOKIE);
     return response;
   }
@@ -93,7 +127,7 @@ export async function GET(request: NextRequest) {
     });
     await tx.projectAuditEvent.create({
       data: {
-        tenantId,
+        organisationId,
         projectId: project.id,
         actorUserId: user.id,
         action: "github.installation.connected",

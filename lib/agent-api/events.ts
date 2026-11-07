@@ -1,6 +1,6 @@
 import { prisma } from "@/lib/prisma";
+import { activeIn } from "@/lib/agents/active-in";
 import type { AgentContext } from "@/lib/agents/require-agent";
-import { AgentProjectError } from "@/lib/agents/require-agent";
 import type { Prisma } from "@prisma/client";
 import { z } from "zod";
 import { writeInbox } from "@/lib/agent-api/inbox";
@@ -11,7 +11,7 @@ import { logger } from "@/lib/logger";
  * Agent event feed (#445).
  *
  * Agents poll `GET /api/v1/events?after=&afterId=&wait=` to learn what changed
- * inside their tenant. The cursor is `(txid, id)` on `AgentEvent` (#739):
+ * inside their organisation. The cursor is `(txid, id)` on `AgentEvent` (#739):
  * `txid` is the id of the transaction that wrote the event, and a poll only
  * returns events whose transaction can no longer be running. `createdAt` is
  * set before commit, so ordering by it let an event that committed late land
@@ -86,6 +86,11 @@ export const AGENT_EVENT_TYPES = [
   "job.created",
   "job.review.requested",
   "job.submission.reviewed",
+  "plan.approved",
+  "plan.expired",
+  "plan.refused",
+  "plan.sent_back",
+  "plan.submitted",
   "project.mistake_recorded",
   "question.answered",
   "question.asked",
@@ -182,7 +187,7 @@ export async function broadcastWhenCommitted(
 export async function publish(
   db: PrismaClient | Prisma.TransactionClient,
   params: {
-    tenantId: string;
+    organisationId: string;
     type: string;
     payload: EventPayload;
     actorAgentId?: string | null;
@@ -191,11 +196,42 @@ export async function publish(
     projectId?: string | null;
   },
 ): Promise<{ id: string }> {
+  // Ensure payload carries track for issue and idea events if not already set (#M-API-9)
+  let payload = params.payload;
+  if (payload && typeof payload === "object" && !("track" in payload)) {
+    let track: string | null = null;
+    if (params.bugId) {
+      try {
+        const bug = await db.bug.findUnique({
+          where: { id: params.bugId },
+          select: { track: true },
+        });
+        if (bug) track = bug.track;
+      } catch {
+        // In mock environments or tests without bug model, ignore lookup error
+      }
+    } else if ("ideaId" in (payload as Record<string, unknown>)) {
+      try {
+        const ideaId = String((payload as Record<string, unknown>).ideaId);
+        const idea = await db.idea.findUnique({
+          where: { id: ideaId },
+          select: { track: true },
+        });
+        if (idea) track = idea.track;
+      } catch {
+        // In mock environments or tests without idea model, ignore lookup error
+      }
+    }
+    if (track) {
+      payload = { ...(payload as Record<string, unknown>), track } as Prisma.InputJsonObject;
+    }
+  }
+
   const event = await db.agentEvent.create({
     data: {
-      tenantId: params.tenantId,
+      organisationId: params.organisationId,
       type: params.type,
-      payload: params.payload,
+      payload,
       actorAgentId: params.actorAgentId ?? null,
       bugId: params.bugId ?? null,
       ...(params.projectId ? { projectId: params.projectId } : {}),
@@ -203,8 +239,8 @@ export async function publish(
     select: { id: true },
   });
   const subscriptions = await db.webhookSubscription.findMany({
-    where: { enabled: true, agent: { tenantId: params.tenantId, revokedAt: null,
-      owner: { memberships: { some: { tenantId: params.tenantId } } } },
+    where: { enabled: true, agent: { ...activeIn(params.organisationId), revokedAt: null,
+      owner: { memberships: { some: { organisationId: params.organisationId } } } },
       // Empty filter = every event; otherwise only the subscribed types (#512).
       OR: [{ events: { isEmpty: true } }, { events: { has: params.type } }] },
     select: { id: true },
@@ -214,16 +250,16 @@ export async function publish(
     skipDuplicates: true,
   });
   // #601: what this event addresses to one agent goes to its inbox too.
-  await writeInbox(db, { id: event.id, ...params });
+  await writeInbox(db, { id: event.id, ...params, payload });
   // #524: the event reaches subscribers only once its row is committed.
   void broadcastWhenCommitted({
     id: event.id,
     type: params.type,
-    payload: params.payload as unknown,
+    payload: payload as unknown,
     actorAgentId: params.actorAgentId ?? null,
     bugId: params.bugId ?? null,
     projectId: params.projectId ?? null,
-    tenantId: params.tenantId,
+    organisationId: params.organisationId,
     createdAt: new Date(),
   }).catch(() => {
     // Ignore broadcast failures to not block publishing
@@ -350,6 +386,7 @@ export type EventFilters = {
   typePrefixes?: string[];
   projectId?: string;
   bugId?: string;
+  track?: "product" | "marketing";
 };
 
 export type EventFilterError = { error: string; validTypes?: readonly string[] };
@@ -360,7 +397,7 @@ function validId(value: string): boolean {
 }
 
 /**
- * Parse `?types=&projectId=&bugId=`. `types` is a comma list of event types
+ * Parse `?types=&projectId=&bugId=&track=`. `types` is a comma list of event types
  * or `prefix.*` patterns; an unknown entry is an error that lists the valid
  * types so the caller can return a 400.
  */
@@ -395,6 +432,14 @@ export function parseEventFilters(params: URLSearchParams): EventFilters | Event
     filters[key] = value;
   }
 
+  const trackRaw = params.get("track");
+  if (trackRaw !== null && trackRaw !== "") {
+    if (trackRaw !== "product" && trackRaw !== "marketing") {
+      return { error: "track must be product or marketing." };
+    }
+    filters.track = trackRaw;
+  }
+
   return filters;
 }
 
@@ -403,48 +448,27 @@ export function parseEventFilters(params: URLSearchParams): EventFilters | Event
 // ---------------------------------------------------------------------------
 
 /**
- * Enforces the key's project on event filters (#405).
- *
- * A key issued for one project must never receive another project's events,
- * the same promise the issue and job routes already make. For a scoped
- * key:
- * - an explicit `projectId` for another project throws `AgentProjectError`
- *   (the wrapper answers `403 project_forbidden`);
- * - a `bugId` is looked up only inside the caller's tenant, so an
- *   unknown id and another tenant's id are indistinguishable (both 404);
- *   a same-tenant bug outside the key's project throws `AgentProjectError`
- *   (403); events for a bug are only written for issues in the key's project;
- * - with no explicit `projectId`, the poll is filtered to the key's project
- *   so an unfiltered poll cannot sweep the whole tenant.
- *
- * A legacy key (no `projectId`) keeps today's tenant-wide behavior.
- * Body note: `scopeEventFilters` narrows to the key's project exactly, so
- * tenant-level events that carry no `projectId` at all (`goal.*`, #405
- * follow-up) are not visible to scoped keys until they persist one.
+ * Checks event filters against the caller's organisation (#405). A key works
+ * in every project of its organisation (#user-agents), so polls aren't
+ * narrowed to a project; a `bugId` is looked up only inside the caller's
+ * organisation, so an unknown id and another organisation's look the same
+ * (both 404).
  */
 export type ScopedEventFilters = { filters: EventFilters } | { status: number; error: string };
 
-/** Applies the rules documented on `ScopedEventFilters`/(#405) above; never mutates `filters`. */
 export async function scopeEventFilters(
-  agent: Pick<AgentContext, "tenantId" | "projectId" | "projectSlug">,
+  agent: Pick<AgentContext, "organisationId">,
   filters: EventFilters,
   db: Pick<typeof prisma, "bug"> = prisma,
 ): Promise<ScopedEventFilters> {
-  if (!agent.projectId) return { filters };
-  if (filters.projectId && filters.projectId !== agent.projectId) {
-    throw new AgentProjectError(agent.projectSlug);
-  }
   if (filters.bugId) {
-    // Tenant-bound lookup: an id from another tenant must look exactly like a
-    // missing one, so the lookup never confirms a cross-tenant bug exists.
     const bug = await db.bug.findFirst({
-      where: { id: filters.bugId, tenantId: agent.tenantId },
-      select: { projectId: true },
+      where: { id: filters.bugId, organisationId: agent.organisationId },
+      select: { id: true },
     });
     if (!bug) return { status: 404, error: "Issue not found." };
-    if (bug.projectId !== agent.projectId) throw new AgentProjectError(agent.projectSlug);
   }
-  return { filters: { ...filters, projectId: agent.projectId } };
+  return { filters };
 }
 
 // ---------------------------------------------------------------------------
@@ -507,15 +531,15 @@ function afterCursor(cursor: EventCursor): Prisma.AgentEventWhereInput {
 }
 
 /**
- * Fetch events for `agent.tenantId` that come after `cursor`, in ascending
+ * Fetch events for `agent.organisationId` that come after `cursor`, in ascending
  * order (oldest first). Reads 101 rows so the route can detect another page.
  * Events from transactions that may still be running are held back until
  * they settle, so a cursor never moves past an event that is about to appear.
- * `filters` narrow the result; the `(tenantId, projectId|bugId, txid, id)`
- * indexes keep project and issue polls off the tenant-wide scan (#602).
+ * `filters` narrow the result; the `(organisationId, projectId|bugId, txid, id)`
+ * indexes keep project and issue polls off the organisation-wide scan (#602).
  */
 export async function listEvents(
-  agent: Pick<AgentContext, "tenantId">,
+  agent: Pick<AgentContext, "organisationId">,
   cursor: EventCursor | null,
   filters: EventFilters = {},
 ): Promise<AgentEventRow[]> {
@@ -524,9 +548,10 @@ export async function listEvents(
     ...(filters.typePrefixes ?? []).map((prefix) => ({ type: { startsWith: prefix } })),
   ];
   const where: Prisma.AgentEventWhereInput = {
-    tenantId: agent.tenantId,
+    organisationId: agent.organisationId,
     ...(filters.projectId ? { projectId: filters.projectId } : {}),
     ...(filters.bugId ? { bugId: filters.bugId } : {}),
+    ...(filters.track ? { payload: { path: ["track"], equals: filters.track } } : {}),
     ...(typeMatches.length ? { AND: [typeMatches.length === 1 ? typeMatches[0]! : { OR: typeMatches }] } : {}),
     txid: { lt: await settledBefore() },
     ...(cursor ? afterCursor(cursor) : {}),
@@ -546,7 +571,7 @@ export async function listEvents(
  * Returns immediately when events are already available.
  */
 export async function pollEvents(
-  agent: Pick<AgentContext, "tenantId">,
+  agent: Pick<AgentContext, "organisationId">,
   cursor: EventCursor | null,
   waitSeconds: number,
   filters: EventFilters = {},

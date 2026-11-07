@@ -9,13 +9,12 @@ import { agentBootstrapMessage } from "@/lib/agents/bootstrap-message";
 export function AgentRowKey({
   apiKey,
   prefix,
-  projectId,
-  projectName,
+  organisationName,
 }: {
   apiKey: string | null;
   prefix: string;
-  projectId: string | null;
-  projectName: string | null;
+  /** The organisation the key works in (#user-agents). */
+  organisationName: string | null;
 }) {
   const toast = useToast();
   const [copied, setCopied] = useState(false);
@@ -23,20 +22,18 @@ export function AgentRowKey({
   async function copy() {
     if (!apiKey) return;
     const origin = window.location.origin;
-    const value = projectId
-      ? agentBootstrapMessage({ origin, apiKey, projectName })
-      : apiKey;
+    const value = agentBootstrapMessage({ origin, apiKey, organisationName });
     const ok = await copyText(value);
     if (!ok) {
       toast("Couldn't copy the key.", "error");
       return;
     }
-    toast(projectId ? "Agent setup copied. Paste it into that agent." : "Key copied.");
+    toast("Agent setup copied. Paste it into that agent.");
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   }
 
-  const where = projectName ?? (projectId ? "this project" : "every project");
+  const where = organisationName ?? "its organisation";
 
   if (!apiKey) {
     return (
@@ -44,7 +41,7 @@ export function AgentRowKey({
         className="inline-flex min-h-11 items-center rounded-full border border-zk-warn-bd bg-zk-warn-bg/40 px-3.5 text-xs font-semibold text-zk-warn-fg"
         title={`${prefix}… was issued before keys could be copied again.`}
       >
-        Key can&apos;t be copied: get a new one from More
+        Key can&apos;t be copied: get a new one in its settings
       </span>
     );
   }

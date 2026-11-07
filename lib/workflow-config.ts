@@ -36,6 +36,8 @@ export type ProjectWorkflowValues = {
   acceptThreshold: number;
   stakeLimit: number;
   stakeInProgressLimit: number;
+  revisionLimit: number;
+  planReviewSeconds: number;
 };
 
 export const DEFAULT_PROJECT_WORKFLOW: Readonly<ProjectWorkflowValues> = Object.freeze({
@@ -76,6 +78,10 @@ export const DEFAULT_PROJECT_WORKFLOW: Readonly<ProjectWorkflowValues> = Object.
   // #stakes: one person holds at most two open stakes, and stakes no more while two of their issues are In progress.
   stakeLimit: 2,
   stakeInProgressLimit: 2,
+  // Marketing work: a worker gets two rounds of changes before it reopens for bids (D4).
+  revisionLimit: 2,
+  // #plan-review: a complex issue's award has two hours for the plan to be written and approved; restarts on a send-back.
+  planReviewSeconds: 7200,
 });
 
 /**
@@ -101,6 +107,8 @@ export const WORKFLOW_LIMITS = {
   acceptThreshold: { min: 1, max: 100 },
   stakeLimit: { min: 1, max: 20 },
   stakeInProgressLimit: { min: 1, max: 20 },
+  revisionLimit: { min: 1, max: 10 },
+  planReviewSeconds: { min: 300, max: 86400 },
 } as const;
 
 const boundedInt = (field: keyof typeof WORKFLOW_LIMITS, label: string) => {
@@ -131,7 +139,15 @@ export const workflowSettingsSchema = z.object({
   acceptThreshold: boundedInt("acceptThreshold", "Accept threshold"),
   stakeLimit: boundedInt("stakeLimit", "Open stakes"),
   stakeInProgressLimit: boundedInt("stakeInProgressLimit", "Stake in-progress limit"),
+  planReviewSeconds: boundedInt("planReviewSeconds", "Plan review window"),
 });
+
+/**
+ * The marketing revision limit. Apart from the form above because the marketing
+ * settings save it (M-API-6): the product form doesn't send it, and saving that
+ * form leaves it as it is.
+ */
+export const revisionLimitSchema = boundedInt("revisionLimit", "Revision limit");
 
 /** A stored row, with defaults for a missing row or a test double. */
 export function workflowValues(
@@ -157,5 +173,7 @@ export function workflowValues(
     acceptThreshold: row?.acceptThreshold ?? DEFAULT_PROJECT_WORKFLOW.acceptThreshold,
     stakeLimit: row?.stakeLimit ?? DEFAULT_PROJECT_WORKFLOW.stakeLimit,
     stakeInProgressLimit: row?.stakeInProgressLimit ?? DEFAULT_PROJECT_WORKFLOW.stakeInProgressLimit,
+    revisionLimit: row?.revisionLimit ?? DEFAULT_PROJECT_WORKFLOW.revisionLimit,
+    planReviewSeconds: row?.planReviewSeconds ?? DEFAULT_PROJECT_WORKFLOW.planReviewSeconds,
   };
 }

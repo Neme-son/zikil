@@ -5,9 +5,10 @@ import { NextResponse, type NextRequest } from "next/server";
 import { agentErrorResponse, requireAgent } from "@/lib/agents/require-agent";
 import { agentBudgetExceededResponse, consumeAgentBudget } from "@/lib/agents/rate-budget";
 import { withAgentBudgetHeaders } from "@/lib/agents/rate-budget-headers";
-import { listAgentProjectSummaries, tenantSlugOf } from "@/lib/agent-api/projects";
-import { projectPath, projectRef } from "@/lib/project-paths";
+import { listAgentProjectSummaries, organisationSlugOf } from "@/lib/agent-api/projects";
 import { readAgentInstructions } from "@/lib/agent-messages";
+import { prisma } from "@/lib/prisma";
+import { projectPath, projectRef } from "@/lib/project-paths";
 import { readAgentProfile, updateAgentProfile } from "@/lib/agents/profile";
 import { profileErrorResponse } from "@/lib/agent-api/agent-profiles";
 import { agentIssueRequest } from "@/lib/agent-api/issues";
@@ -16,8 +17,9 @@ import { agentWorkStatus } from "@/lib/agents/work-gate";
 /**
  * GET /api/v1/agents/me — who this key belongs to (#427). Any level may call
  * it; it is the quickest way for an agent to check its key works. It also
- * lists the tenant's projects (#607) so an agent can pick the `projectId`
- * every issue route needs, and the owner's standing `instructions` (#605).
+ * lists the organisation's projects (#607) so an agent can pick the `projectId`
+ * every issue route needs (each with its `workUrl`), the organisations the
+ * agent is active in (#user-agents), and the owner's standing `instructions` (#605).
  */
 export async function GET(req: NextRequest) {
   try {
@@ -29,29 +31,43 @@ export async function GET(req: NextRequest) {
       "read",
     );
     if (!budget.allowed) return agentBudgetExceededResponse(budget.retryAfterSeconds, budget);
-    const [projects, instructions, profile, orgSlug] = await Promise.all([
-      listAgentProjectSummaries(agent.tenantId),
+    const [projects, instructions, profile, orgSlug, activations] = await Promise.all([
+      listAgentProjectSummaries(agent.organisationId),
       readAgentInstructions(agent.agentId),
       readAgentProfile(agent.agentId),
-      tenantSlugOf(agent.tenantId),
+      organisationSlugOf(agent.organisationId),
+      // #user-agents: every organisation its owner switched it on in. This key works in this one.
+      prisma.agentActivation.findMany({
+        where: { agentId: agent.agentId, deactivatedAt: null },
+        orderBy: { activatedAt: "asc" },
+        select: { level: true, organisation: { select: { id: true, slug: true, name: true } } },
+      }),
     ]);
     return withAgentBudgetHeaders(
       NextResponse.json({
         id: agent.agentId,
         name: agent.name,
         owner_id: agent.ownerId,
-        tenant_id: agent.tenantId,
+        organisation_id: agent.organisationId,
         // The organisation's slug, the first segment of every project address (`/<org>/<project>/work`).
         org_slug: orgSlug,
         level: agent.level,
-        project_id: agent.projectId ?? null,
-        project_slug: agent.projectSlug ?? null,
-        // #work-feed: the one URL to watch. A key for every project finds each one's under `projects`.
-        work_url: agent.projectSlug ? absoluteUrl(projectPath(projectRef(orgSlug, agent.projectSlug), "/work")) : null,
+        paused: agent.pausedAt !== null,
+        // #user-agents: where it is active. A key works in its own organisation, in every project there.
+        activations: activations.map((row) => ({
+          organisation_id: row.organisation.id,
+          org_slug: row.organisation.slug,
+          name: row.organisation.name,
+          level: row.level,
+        })),
         // #owner-history: the owner's entries and comments, newest first, with how to replace each.
         history_url: absoluteUrl("/api/v1/agents/me/history"),
         next_step: WATCH_WORK_MESSAGE,
-        projects,
+        // #work-feed: each project's `workUrl` is the URL to watch. The key works in all of them (#user-agents).
+        projects: projects.map((project) => ({
+          ...project,
+          workUrl: orgSlug ? absoluteUrl(projectPath(projectRef(orgSlug, project.slug), "/work")) : null,
+        })),
         instructions,
         // #agent-profile: who it says it is. Set with PATCH here, /me/skills and /me/picture.
         profile: profile
@@ -76,14 +92,14 @@ export async function GET(req: NextRequest) {
 /**
  * PATCH /api/v1/agents/me — set any of `username`, `tagline` and `about`
  * (#agent-profile). `username` is 3–30 lowercase letters, digits and dashes,
- * unique in the workspace (409 if taken); `tagline` at most 120 characters;
+ * unique in the organisation (409 if taken); `tagline` at most 120 characters;
  * `about` at most 2,000. An empty string or null clears tagline or about.
  * 200 with the whole profile.
  */
 export async function PATCH(req: NextRequest) {
   return agentIssueRequest(req, "agents.profile_update", "working", "agent:me", async (agent) => {
     const body = await req.json().catch(() => null);
-    const result = await updateAgentProfile({ agentId: agent.agentId, tenantId: agent.tenantId }, body);
+    const result = await updateAgentProfile({ agentId: agent.agentId, organisationId: agent.organisationId }, body);
     if (!result.ok) return profileErrorResponse(result);
     const profile = result.profile;
     return NextResponse.json({ ...profile, picture_url: profile.picture_url ? absoluteUrl(profile.picture_url) : null });

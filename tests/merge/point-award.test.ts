@@ -1,3 +1,9 @@
+import { trackRules } from "@/lib/marketing/track";
+import {
+  clearLeaderboardCache,
+  leaderboardPeriodStart,
+  paginatedOrganisationLeaderboard,
+} from "@/lib/points/leaderboard";
 import { describe, expect, it, vi } from "vitest";
 
 // #pr-reports: whether a pull request was closed without merging is the latest
@@ -14,6 +20,9 @@ vi.mock("@/lib/agent-api/events", () => ({ publish: vi.fn(async () => ({ id: "ev
 
 import { awardDispatcher, solverAward, solverAwardFor } from "@/lib/points/award";
 import { holdPayout, releasePayoutIfLive } from "@/lib/points/payout";
+import { planPayoutFor } from "@/lib/agent-api/plan";
+import { marketingAcceptAwards } from "@/lib/agent-api/merge";
+import { PLAN_POINTS } from "@/lib/points/rules";
 import {
   confirmationReviewerSourceKey,
   CONFIRMATION_REVIEWER_POINTS,
@@ -45,7 +54,7 @@ function issueDb(bugs: Record<string, { reward: number; pullRequestUrl?: string 
   } as never;
 }
 
-const issue = { id: "bug-1", tenantId: "tenant-zedu", assigneeId: "user-1" };
+const issue = { id: "bug-1", organisationId: "organisation-zedu", assigneeId: "user-1" };
 
 describe("points ledger (#428)", () => {
 
@@ -57,7 +66,7 @@ describe("points ledger (#428)", () => {
 
   it("pays the solver the issue's reward, in $, $1 before any estimate (#rewards)", () => {
     expect(solverAward({ ...issue, reward: 6.5 })).toEqual({
-      tenantId: "tenant-zedu",
+      organisationId: "organisation-zedu",
       userId: "user-1",
       bugId: "bug-1",
       role: "solver",
@@ -83,6 +92,53 @@ describe("points ledger (#428)", () => {
   it("does not award the solver when the linked pull request is reported closed without being merged (#642)", async () => {
     const db = issueDb({ "bug-1": { reward: 5, pullRequestUrl: "https://github.com/zedu/web/pull/closed-1" } });
     expect(await solverAwardFor(db, issue)).toBeNull();
+  });
+});
+
+describe("shared leaderboard periods (M-API-10)", () => {
+  it("uses UTC week and month boundaries, with no boundary for all time", () => {
+    const now = new Date("2026-11-05T18:30:00.000Z");
+    expect(leaderboardPeriodStart("week", now)?.toISOString()).toBe("2026-11-02T00:00:00.000Z");
+    expect(leaderboardPeriodStart("month", now)?.toISOString()).toBe("2026-11-01T00:00:00.000Z");
+    expect(leaderboardPeriodStart("all", now)).toBeNull();
+  });
+
+  it("ranks the shared PointEntry total for the selected period without separating marketing rewards", async () => {
+    clearLeaderboardCache();
+    const now = new Date("2026-11-05T18:30:00.000Z");
+    const periodStart = new Date("2026-11-02T00:00:00.000Z");
+    const groupBy = vi.fn(async ({ where }: { where: { role?: string } }) =>
+      where.role === "solver"
+        ? [{ userId: "worker", _count: { _all: 2 } }]
+        // PointEntry has no track split: this total can contain both product and marketing awards.
+        : [{ userId: "worker", _sum: { points: 12 } }],
+    );
+    const db = {
+      pointEntry: { groupBy },
+      user: {
+        findMany: vi.fn(async () => [{ id: "worker", name: "Worker", image: null }]),
+      },
+    } as never;
+
+    const result = await paginatedOrganisationLeaderboard(db, "organisation-zedu", {
+      period: "week",
+      now,
+    });
+
+    expect(result).toMatchObject({
+      period: "week",
+      periodStart: periodStart.toISOString(),
+      entries: [{ userId: "worker", points: 12, solvedTasks: 2, rank: 1 }],
+    });
+    expect(groupBy).toHaveBeenCalledTimes(2);
+    for (const [query] of groupBy.mock.calls) {
+      expect(query.where).toMatchObject({
+        organisationId: "organisation-zedu",
+        createdAt: { gte: periodStart },
+      });
+      expect(query.where).not.toHaveProperty("bug.track");
+      expect(query.where).not.toHaveProperty("track");
+    }
   });
 });
 
@@ -124,11 +180,10 @@ describe("point rules (#428)", () => {
 
 });
 
-describe("payouts wait for the work to be live (#live-payout)", () => {
-  /** One issue, its held payout and its deployment reports, with an in-memory ledger. */
-  function payoutDb(reporters: string[]) {
+/** One issue, its held payout and its deployment reports, with an in-memory ledger. */
+function payoutDb(reporters: string[]) {
     const ledger = fakeLedger();
-    const bug = { id: "bug-1", number: 1, tenantId: "tenant-zedu", projectId: "p1", assigneeId: "solver", heldPayout: null as unknown, payoutReleasedAt: null as Date | null };
+    const bug = { id: "bug-1", number: 1, organisationId: "organisation-zedu", projectId: "p1", assigneeId: "solver", heldPayout: null as unknown, payoutReleasedAt: null as Date | null };
     const db = {
       pointEntry: (ledger.db as unknown as { pointEntry: unknown }).pointEntry,
       bug: {
@@ -138,9 +193,11 @@ describe("payouts wait for the work to be live (#live-payout)", () => {
       deploymentReport: { findMany: vi.fn(async () => reporters.map((onBehalfOfUserId) => ({ onBehalfOfUserId }))) },
     };
     return { db: db as never, bug, rows: ledger.rows, reporters };
-  }
-  const solver = { tenantId: "tenant-zedu", userId: "solver", bugId: "bug-1", role: "solver" as const, points: 6, sourceKey: "solver:bug-1:solver" };
-  const tester = { tenantId: "tenant-zedu", userId: "tester", bugId: "bug-1", role: "reviewer" as const, points: 3, sourceKey: "reviewer:bug-1:tester" };
+}
+const solver = { organisationId: "organisation-zedu", userId: "solver", bugId: "bug-1", role: "solver" as const, points: 6, sourceKey: "solver:bug-1:solver" };
+const tester = { organisationId: "organisation-zedu", userId: "tester", bugId: "bug-1", role: "reviewer" as const, points: 3, sourceKey: "reviewer:bug-1:tester" };
+
+describe("payouts wait for the work to be live (#live-payout)", () => {
 
   it("holds what resolving earned until three people other than the solver report it deployed", async () => {
     const { db, rows, reporters } = payoutDb(["solver", "a", "b"]);
@@ -154,5 +211,52 @@ describe("payouts wait for the work to be live (#live-payout)", () => {
     // Paid once: a later report pays nothing more.
     expect(await releasePayoutIfLive(db, "bug-1")).toBe(false);
     expect(rows).toHaveLength(2);
+  });
+});
+
+describe("the plan's award on a complex issue (#plan-review rule 13)", () => {
+  const bug = { id: "bug-1", organisationId: "organisation-zedu" };
+  const approved = { ownerId: "bob", agentId: "agent-bob" };
+  const planDb = (plan: typeof approved | null) => ({ plan: { findFirst: vi.fn(async () => plan) } }) as never;
+
+  it("is the owner's, for the claim that delivered the work under an approved plan, and nothing for a claim without one", async () => {
+    await expect(planPayoutFor(planDb(approved), bug, { id: "claim-1" })).resolves.toEqual({
+      organisationId: "organisation-zedu", userId: "bob", bugId: "bug-1", role: "plan", points: PLAN_POINTS, sourceKey: "plan:bug-1:bob", agentId: "agent-bob",
+    });
+    // The delivering claim never had a plan approved (a plan that was sent back, or an easy issue): nothing.
+    await expect(planPayoutFor(planDb(null), bug, { id: "claim-2" })).resolves.toBeNull();
+    // No claim delivered it (a person resolved it by hand): nothing.
+    await expect(planPayoutFor(planDb(approved), bug, null)).resolves.toBeNull();
+  });
+
+  it("pays nothing to an owner whose agent got its plan approved and then released the claim, even when someone else finishes the issue", async () => {
+    // The approved plan belongs to claim-1, which was released; claim-2 delivered the work with no plan of its own.
+    const db = { plan: { findFirst: vi.fn(async ({ where }: { where: { claimId: string } }) => (where.claimId === "claim-1" ? approved : null)) } } as never;
+    await expect(planPayoutFor(db, bug, { id: "claim-2" })).resolves.toBeNull();
+  });
+
+  it("is held with the solver's reward at resolve and paid only once enough people report the work deployed", async () => {
+    const { db, rows, reporters } = payoutDb(["a", "b"]);
+    const plan = (await planPayoutFor(planDb(approved), bug, { id: "claim-1" }))!;
+    expect(await holdPayout(db, "bug-1", [solver, plan])).toEqual({ held: 2, paid: false });
+    expect(rows).toEqual([]);
+    expect(await releasePayoutIfLive(db, "bug-1")).toBe(false);
+    reporters.push("c");
+    expect(await releasePayoutIfLive(db, "bug-1")).toBe(true);
+    expect(rows.map((row) => [row.userId, row.role, row.points])).toEqual([["solver", "solver", 6], ["bob", "plan", PLAN_POINTS]]);
+  });
+
+  it("goes with the marketing accept awards, direct, when the claim ran under an approved plan", () => {
+    const base = { bug: { id: "bug-1", organisationId: "organisation-zedu", reporterId: "ada" }, claim: null, solverUserId: "bob", rewardedReviewerUserIds: [], reward: 4, reporterPoints: 1.5, reviewerPoints: 3, dispatcherPoints: 0.6 };
+    const plan = { organisationId: "organisation-zedu", userId: "bob", bugId: "bug-1", role: "plan" as const, points: PLAN_POINTS, sourceKey: "plan:bug-1:bob", agentId: "agent-bob" };
+    expect(marketingAcceptAwards({ ...base, planAward: plan }).map((award) => award.role)).toEqual(["solver", "reporter", "plan"]);
+    expect(marketingAcceptAwards({ ...base, planAward: null }).map((award) => award.role)).toEqual(["solver", "reporter"]);
+  });
+});
+
+describe("when the reporter is paid", () => {
+  it("is at conversion for marketing, which has no confirmation, and at confirmation for product", () => {
+    expect(trackRules("marketing").reporterPaidOn).toBe("conversion");
+    expect(trackRules("product").reporterPaidOn).toBe("confirmation");
   });
 });

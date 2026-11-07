@@ -9,9 +9,10 @@ export const metadata = { title: "Skills" };
 export default async function EditSkillsPage({ params }: { params: Promise<{ username: string }> }) {
   const { username } = await params;
   const { found, agent, revoked } = await loadEditContext(username);
-  const tags = await listSkillTags(found.tenantId);
+  // Skill tags are an organisation's: those of the organisation the page shows it in.
+  const tags = found.organisationId ? await listSkillTags(found.organisationId) : [];
   return (
-    <EditSection title="Skills" description="Each skill is a tag the workspace shares, with its own short and longer description.">
+    <EditSection title="Skills" description="Each skill is a tag the organisation shares, with its own short and longer description.">
       {revoked ? null : (
         <AgentSkillsEditor
           agentId={found.id}

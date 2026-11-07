@@ -3,7 +3,7 @@ import { createMethodNotAllowed, createOptions } from "@/lib/agent-api/http-erro
 import { agentIssueRequest, IssueApiError } from "@/lib/agent-api/issues";
 import { workEtag, workFeed, parseWait, waitForWorkChange } from "@/lib/agent-api/work";
 import { workFeedStream } from "@/lib/agent-api/work-stream";
-import { assertKeyProject } from "@/lib/agents/require-agent";
+import { parseTrackFilter } from "@/lib/marketing/track";
 import { prisma } from "@/lib/prisma";
 
 export const runtime = "nodejs";
@@ -15,6 +15,9 @@ export const maxDuration = 300;
  * give an opinion on, offers addressed to it, its claims, fixes to test,
  * issues to take, research jobs, and manager and merger tasks marked with the
  * class they need.
+ *
+ * Query parameters:
+ * - `track` — "product" (default) or "marketing". Anything else answers 400.
  *
  * Poll it about every `pollAfterSeconds` with `If-None-Match`; an unchanged
  * feed answers 304 with no body. Each call spends one read from the agent's
@@ -37,32 +40,41 @@ export async function GET(request: NextRequest, context: { params: Promise<{ org
   return agentIssueRequest(request, "work.read", "read", null, async (agent) => {
     const project = await prisma.project.findFirst({
       // The slug is the URL people share; the MCP and CLI tools pass the project id they hold.
-      where: { tenantId: agent.tenantId, tenant: { slug: decodeURIComponent(org) }, OR: [{ slug: decodeURIComponent(slug) }, { id: slug }] },
-      select: { id: true, slug: true, name: true, tenant: { select: { slug: true } } },
+      where: { organisationId: agent.organisationId, organisation: { slug: decodeURIComponent(org) }, OR: [{ slug: decodeURIComponent(slug) }, { id: slug }] },
+      select: { id: true, slug: true, name: true, organisation: { select: { slug: true } } },
     });
     if (!project) throw new IssueApiError(404, "Project not found.");
     // A key issued for one project cannot read another's work (#742).
-    assertKeyProject(agent, project.id);
 
-    const feedProject = { id: project.id, slug: project.slug, name: project.name, orgSlug: project.tenant.slug };
+    const trackResult = parseTrackFilter(request.nextUrl.searchParams.get("track"));
+    if (!trackResult.ok) {
+      throw new IssueApiError(400, trackResult.message, {
+        error: "invalid_request",
+        message: trackResult.message,
+        field: "track",
+      });
+    }
+    const track = trackResult.track;
+
+    const feedProject = { id: project.id, slug: project.slug, name: project.name, orgSlug: project.organisation.slug };
     const clientEtag = request.headers.get("if-none-match");
     const lastEventId = request.headers.get("last-event-id");
 
     if (wantsEventStream(request)) {
       // A client that reconnects with the last ETag it saw already has that
       // feed: it waits for the next one instead of reading this one again.
-      return workFeedStream({ agent, project: feedProject, request, lastEventId });
+      return workFeedStream({ agent, project: feedProject, request, lastEventId, track });
     }
 
     const wait = parseWait(request.nextUrl.searchParams.get("wait"));
-    let feed = await workFeed(agent, feedProject);
+    let feed = await workFeed(agent, feedProject, track);
     let etag = workEtag(feed);
 
     if (wait > 0 && clientEtag && clientEtag === etag) {
       // The agent already holds this feed. Hold the request until it changes.
-      const changed = await waitForWorkChange(agent.tenantId, etag, wait, async () => workEtag(await workFeed(agent, feedProject)));
+      const changed = await waitForWorkChange(agent.organisationId, etag, wait, async () => workEtag(await workFeed(agent, feedProject, track)));
       if (changed) {
-        feed = await workFeed(agent, feedProject);
+        feed = await workFeed(agent, feedProject, track);
         etag = workEtag(feed);
       }
     }

@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { ConfirmSubmitButton } from "@/components/confirm-submit-button";
 import { CopyProjectIdButton } from "@/app/(app)/projects/copy-project-id";
 import { ideasPath, issuesPath, projectRef } from "@/lib/project-paths";
-import { CreateProjectForm } from "@/app/(app)/projects/create-project-form";
+import { NewProjectButton } from "@/app/(app)/[org]/new-project-form";
 import {
   deleteProjectAction,
   setProjectArchivedAction,
@@ -24,7 +24,7 @@ import { OrgMessages, OrgPageHeader, oneParam } from "../org-ui";
 export const metadata = { title: "Projects" };
 
 /**
- * The organization's one projects list: switch, create, and, for owners and
+ * The organisation's one projects list: switch, create, and, for owners and
  * admins, each project's settings. Owners archive and delete projects.
  */
 export default async function OrgProjectsPage({
@@ -39,13 +39,13 @@ export default async function OrgProjectsPage({
   const { org } = await loadOrg();
   if (!org) return null;
   const params = await searchParams;
-  const tenantId = org.id;
+  const organisationId = org.id;
   const canManageProjects = org.admin;
   const isOwner = org.owner;
 
   const [projects, platformRewards] = await Promise.all([
     prisma.project.findMany({
-      where: { tenantId },
+      where: { organisationId },
       select: {
         id: true,
         name: true,
@@ -85,12 +85,9 @@ export default async function OrgProjectsPage({
 
       <OrgMessages error={oneParam(params.error)} notice={oneParam(params.notice)} />
 
-      <section className="rounded-[20px] border border-zk-border bg-zk-surface p-4 sm:p-6">
-        <h3 className="text-base font-semibold text-zk-text">
-          Create a project
-        </h3>
-        <CreateProjectForm defaults={platformDefaults} />
-      </section>
+      <div>
+        <NewProjectButton orgSlug={org.slug} defaults={platformDefaults} />
+      </div>
 
       <section className="overflow-hidden rounded-[20px] border border-zk-border bg-zk-surface">
         <div className="border-b border-zk-border bg-zk-tint px-4 py-3 sm:px-6">

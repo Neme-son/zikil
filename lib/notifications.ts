@@ -25,7 +25,7 @@ type AgentBase = {
   actorId: string | null;
   actorName: string;
   recipientId: string;
-  tenantId?: string;
+  organisationId?: string;
   bugId?: string | null;
   bugTitle?: string | null;
 };
@@ -84,10 +84,10 @@ export type NotificationEvent =
       proposalTitle: string;
     })
   | (AgentBase & {
-      /** Someone invited this person to a tenant (#444). */
-      kind: "tenant_invite";
+      /** Someone invited this person to a organisation (#444). */
+      kind: "organisation_invite";
       inviteId: string;
-      tenantName: string;
+      organisationName: string;
     })
   | (AgentBase & {
       /** The platform offered this person an issue (#449). */
@@ -105,16 +105,23 @@ export type NotificationEvent =
       kind: "merge_failed";
       /** Why the merge did not happen, already human-readable. */
       reason: string;
+    })
+  | (AgentBase & {
+      /** An agent submitted its plan on a complex issue and its owner must approve it (#plan-review). */
+      kind: "plan_submitted";
+      planId: string;
+      round: number;
     });
 
 /** The kinds raised by agents and the platform rather than by issue edits. */
 export const AGENT_NOTIFICATION_KINDS = [
   "agent_question",
   "approval_needed",
-  "tenant_invite",
+  "organisation_invite",
   "claim_offered",
   "reviewer_eligible",
   "merge_failed",
+  "plan_submitted",
 ] as const;
 
 export type PlannedNotification = {
@@ -156,14 +163,16 @@ function agentTarget(event: Extract<NotificationEvent, AgentBase>, issuePath: st
       return { path: `/questions/${event.questionId}`, label: "Answer the question" };
     case "approval_needed":
       return { path: `/redesigns/${event.proposalId}`, label: "Review the proposal" };
-    case "tenant_invite":
-      return { path: `/tenants?invite=${encodeURIComponent(event.inviteId)}`, label: "See the invite" };
+    case "organisation_invite":
+      return { path: `/organisations?invite=${encodeURIComponent(event.inviteId)}`, label: "See the invite" };
     case "claim_offered":
       return { path: issuePath ?? "/home", label: "Open the issue" };
     case "reviewer_eligible":
       return { path: "/settings/agents", label: "Manage agents" };
     case "merge_failed":
       return { path: issuePath ?? "/home", label: "Open the issue" };
+    case "plan_submitted":
+      return { path: issuePath ? `${issuePath}#plan` : "/home", label: "Review the plan" };
   }
 }
 
@@ -195,9 +204,9 @@ function planAgentNotification(
         "It stays blocked until a person approves or rejects it.",
       ];
       break;
-    case "tenant_invite":
-      subject = `${event.actorName} invited you to ${event.tenantName}`;
-      lines = [`${event.actorName} invited you to join ${event.tenantName} on Ziki.`];
+    case "organisation_invite":
+      subject = `${event.actorName} invited you to ${event.organisationName}`;
+      lines = [`${event.actorName} invited you to join ${event.organisationName} on Ziki.`];
       break;
     case "claim_offered":
       subject = `You've been offered ${quote(event.bugTitle)}`;
@@ -219,6 +228,17 @@ function planAgentNotification(
         `The fix for ${quote(title)} was accepted on Ziki, but the pull request could not be merged.`,
         event.reason,
         "Nothing was changed on the tracker: the acceptance and the points stay.",
+      ];
+      break;
+    }
+    case "plan_submitted": {
+      const title = event.bugTitle ?? "this issue";
+      subject = event.round > 1
+        ? `${event.actorName} revised its plan for ${quote(title)}: approve it or send it back`
+        : `${event.actorName}'s plan for ${quote(title)} needs your approval`;
+      lines = [
+        `${event.actorName}, an agent working for you, was awarded ${quote(title)}, a complex issue, and wrote its plan.`,
+        "Read how it understood the task and the steps it will take. Edit the steps if you like, then approve the plan or send it back. Nothing starts until you do, and the award lapses if the window runs out.",
       ];
       break;
     }
