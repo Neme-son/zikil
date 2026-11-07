@@ -4,7 +4,7 @@ import { z } from "zod";
 import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { IssueApiError } from "@/lib/agent-api/errors";
-import { assertKeyProject, type AgentContext } from "@/lib/agents/require-agent";
+import type { AgentContext } from "@/lib/agents/require-agent";
 import { audit } from "@/lib/agents/audit";
 import { isOrganisationAdmin } from "@/lib/organisation-role";
 import type { SessionAppUser } from "@/lib/auth-helpers";
@@ -31,7 +31,6 @@ export type NotesActor = {
 
 /** A project id never grants access. Recheck membership, archives and key scope. */
 export async function agentNotesActor(agent: AgentContext, projectId: string): Promise<NotesActor> {
-  assertKeyProject(agent, projectId);
   const project = await prisma.project.findFirst({
     where: { id: projectId, organisationId: agent.organisationId, archivedAt: null, organisation: { archivedAt: null } },
     select: { id: true },
@@ -55,9 +54,12 @@ export async function humanNotesActor(user: SessionAppUser, organisationId: stri
   const membership = await prisma.membership.findUnique({
     where: { organisationId_userId: { organisationId, userId: user.id } }, select: { role: true },
   });
-  if (!project || !membership) throw new IssueApiError(404, "Project not found.");
+  const projectMembership = !membership ? await prisma.projectMembership.findUnique({
+    where: { projectId_userId: { projectId, userId: user.id } }, select: { id: true },
+  }) : null;
+  if (!project || (!membership && !projectMembership && user.role !== "super_admin")) throw new IssueApiError(404, "Project not found.");
   return { userId: user.id, name: user.name || "Organisation member", organisationId, projectId,
-    canEdit: isOrganisationAdmin(membership.role, user.role) };
+    canEdit: membership ? isOrganisationAdmin(membership.role, user.role) : user.role === "super_admin" };
 }
 
 export function requireNotesEditor(actor: NotesActor) {

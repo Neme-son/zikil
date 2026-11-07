@@ -32,7 +32,15 @@ async function ideaForVerdict(user: { id: string; role?: string | null }, ideaId
     where: {
       id: ideaId,
       isDeleted: false,
-      organisation: { archivedAt: null, ...(user.role === "super_admin" ? {} : { memberships: { some: { userId: user.id } } }) },
+      organisation: { archivedAt: null },
+      ...(user.role === "super_admin"
+        ? {}
+        : {
+            OR: [
+              { organisation: { memberships: { some: { userId: user.id } } } },
+              { project: { memberships: { some: { userId: user.id } } } },
+            ],
+          }),
     },
     select: { id: true, number: true, projectId: true, organisationId: true },
   });
@@ -172,7 +180,7 @@ async function ideaDecision(formData: FormData, decide: "approve" | "reject"): P
   let issueNumber: number | null = null;
   try {
     if (decide === "approve") {
-      const converted = await convertIdea(context, idea.projectId, idea.id);
+      const converted = await convertIdea(context, idea.projectId, idea.id, "medium");
       const issue = await prisma.bug.findUnique({ where: { id: converted.issueId }, select: { number: true } });
       issueNumber = issue?.number ?? null;
     } else {

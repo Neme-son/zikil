@@ -12,13 +12,15 @@ import { hasLevel } from "@/lib/agents/levels";
 import type { AgentContext } from "@/lib/agents/require-agent";
 import { publish } from "@/lib/agent-api/events";
 import { handleTestVerdictSubmitted } from "@/lib/agent-api/review-offer";
-import { parseGitHubRepoUrl } from "@/lib/github/pull-request-url";
+import { PROJECT_REPOSITORIES_SELECT, repoForPullRequest } from "@/lib/github/project-repositories";
 import { prGate } from "@/lib/agent-api/pr-gate";
 import { gateReport, latestPullRequestReport, notifyAuthor, type StoredPullRequestReport } from "@/lib/agent-api/pull-request-report";
 import { conflictComment } from "@/lib/agent-api/merge-conflict";
 import { refreshJudgedStatus } from "@/lib/agent-api/tested-status";
 import { entryDescription, entryReplySelect, entrySummary, toEntryReplies, type EntryReply } from "@/lib/agent-api/entry-fields";
 import { IssueApiError } from "@/lib/agent-api/errors";
+import { approvedPlanSummary } from "@/lib/agent-api/plan";
+import { storedReceipt, type DeliveryReceipt } from "@/lib/delivery-receipt";
 import { issueIdFor, parseIssueRef } from "@/lib/issue-ref";
 import { canSeeEvidenceFiles, evidenceFilesSchema, evidenceFilesView, uniqueEvidenceFiles, type EvidenceFilesView } from "@/lib/agent-api/evidence-files";
 
@@ -97,7 +99,7 @@ const reviewedBugSelect = {
   reporterId: true,
   createdByAgentId: true,
   createdByAgent: { select: { ownerUserId: true } },
-  project: { select: { repoUrl: true } },
+  project: { select: { repoUrl: true, ...PROJECT_REPOSITORIES_SELECT } },
   claims: {
     select: {
       status: true,
@@ -432,7 +434,7 @@ function readyBlock(
   const gate = prGate(gateReport(report), {
     pullRequestUrl: bug.pullRequestUrl,
     pullRequestHeadSha: bug.pullRequestHeadSha,
-    repo: parseGitHubRepoUrl(bug.project?.repoUrl),
+    repo: repoForPullRequest(bug.project, bug.pullRequestUrl),
   });
   const reason = gate.reason ?? "";
   if (gate.broken) {
@@ -523,6 +525,19 @@ export async function testVerdictEntries(
   }));
 }
 
+/**
+ * The receipt on the delivery being judged (#delivery-receipt): the newest
+ * delivery on the pull request linked now (any delivery, on marketing work).
+ */
+async function currentDeliveryReceipt(bug: { id: string; pullRequestUrl: string | null }): Promise<DeliveryReceipt | null> {
+  const row = await prisma.delivery.findFirst({
+    where: { bugId: bug.id, ...(bug.pullRequestUrl ? { pullRequestUrl: bug.pullRequestUrl } : {}) },
+    orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
+    select: { receipt: true },
+  });
+  return row ? storedReceipt(row.receipt) : null;
+}
+
 /** GET /issues/{id}/test-results: the issue's test verdicts, each with its replies. */
 export async function listTestVerdicts(scope: { organisationId: string; projectId?: string }, issueRef: string, viewer: VerdictViewer | null) {
   const ref = parseIssueRef(issueRef);
@@ -536,6 +551,10 @@ export async function listTestVerdicts(scope: { organisationId: string; projectI
     issueNumber: bug.number,
     pullRequestUrl: bug.pullRequestUrl,
     headSha: bug.pullRequestHeadSha,
+    // #plan-review rule 12: on a complex issue, the approved plan the delivery is judged against.
+    plan: await approvedPlanSummary(bug.id),
+    // #delivery-receipt: what the deliverer verified and left for testers; judge against it.
+    receipt: await currentDeliveryReceipt(bug),
     verdicts: await testVerdictEntries(bug, viewer),
   };
 }

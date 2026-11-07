@@ -2,9 +2,9 @@ import Link from "next/link";
 import { prisma } from "@/lib/prisma";
 import { notFound, permanentRedirect } from "next/navigation";
 import { projectFirstTarget, requireOrg } from "@/lib/project-route";
-import { ideasPath, orgHomePath, projectRef } from "@/lib/project-paths";
+import { orgHomePath, projectPath, projectRef } from "@/lib/project-paths";
 import { ProjectBreadcrumb } from "@/components/project-breadcrumb";
-import { NewProjectForm } from "./new-project-form";
+import { NewProjectButton } from "./new-project-form";
 import { HEALTH_LABEL, projectHealthFor, type CheckState, type HealthStatus } from "@/lib/project-health";
 
 type Props = {
@@ -86,14 +86,11 @@ export default async function OrganisationProjectsPage({ params, searchParams }:
             {hiddenCount ? ` ${hiddenCount === 1 ? "1 project with no issues yet isn't" : `${hiddenCount} projects with no issues yet aren't`} listed.` : ""}
           </p>
         </div>
-        {allProjects.length ? <NewProjectForm /> : null}
+        <NewProjectButton orgSlug={organisation.slug} />
       </header>
 
       {allProjects.length ? null : (
-        <div className="space-y-3">
-          <p className="text-sm text-zk-text2">{organisation.name} has no projects yet. Create the first one to start collecting ideas and issues.</p>
-          <NewProjectForm startOpen />
-        </div>
+        <p className="text-sm text-zk-text2">{organisation.name} has no projects yet. Make one with New project to start collecting ideas and issues.</p>
       )}
 
       <nav aria-label="Filter by health" className="grid grid-cols-2 gap-3 lg:grid-cols-4">
@@ -119,7 +116,7 @@ export default async function OrganisationProjectsPage({ params, searchParams }:
           {shown.map((row) => (
             <li key={row.id}>
               <Link
-                href={ideasPath(projectRef(organisation.slug, row.slug))}
+                href={projectPath(projectRef(organisation.slug, row.slug))}
                 className="group flex items-center gap-5 rounded-2xl border border-zk-border bg-zk-surface px-5 py-4 transition hover:border-electric-blue-strong/60 hover:shadow-sm"
               >
                 <ScoreRing score={row.health.score} status={row.health.status} />

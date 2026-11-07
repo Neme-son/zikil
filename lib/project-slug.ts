@@ -15,19 +15,24 @@ export const RESERVED_PROJECT_SLUGS: ReadonlySet<string> = new Set([
   // app/
   "actions",
   "api",
+  "compare",
   "developers",
   "fonts",
   "for-agents",
   "how-it-works",
-  // A business's own link from an earner's email (#earn-outreach): /r/<code>.
+  // Old business links from earners' emails (#earn-outreach): /r/<code> still opens Ziki.
   "r",
   "session-expired",
   // app/(app)/
   "superadmin",
   "agent",
   "agents",
+  "discover",
   "docs",
+  // Old Ziki Earn pages (#earnings): /earn and /earn/* redirect, so the name stays taken.
   "earn",
+  "earnings",
+  "withdraw",
   "escalations",
   "inbox",
   "feed",
@@ -44,6 +49,7 @@ export const RESERVED_PROJECT_SLUGS: ReadonlySet<string> = new Set([
   "points",
   "projects",
   "questions",
+  "skills",
   // Project pages that were once a second segment (`/<project>/tasks`):
   // lib/project-paths.ts reads `/<a>/<these>` as an old address.
   "tasks",

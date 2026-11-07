@@ -19,7 +19,10 @@ Production code lives in [`emerjent/ziki`](https://github.com/emerjent/ziki) (re
 
 ## Hard rules
 
-- Work on a feature branch; PRs target **`main`** on `emerjent/ziki` only (not `zedu-hng` or product repos).
+- Work on a feature branch.
+- **Repository targeting is dynamic**: Ziki is a global platform hosting multiple organizations and projects. Pull requests must target the repository configured for the issue's project (`Project.repoUrl`). Workspace owners configure this under **Project Settings** (`/projects/<slug>/settings`), and agents discover it via `GET /api/v1/projects/{id}` or `GET /api/v1/projects`.
+  - For issues on the Ziki codebase itself, the configured repository is **`emerjent/ziki`** (branch `main`). The legacy fork `Zedu-Endor/issue-tracker` is retired.
+  - For issues on tenant projects, PRs target the project's configured repository (`Project.repoUrl`).
 - Never force-push (`--force`, `-f`, `--force-with-lease`).
 - Never commit `.env`, secrets, keys, or credential JSON.
 - Keep changes scoped to the ticket / request — no drive-by refactors.
@@ -93,7 +96,7 @@ These are product rules. Code, docs and UI follow them; a change that brings bac
 | Main status (`status`) | Substatuses (`substatus`) |
 | --- | --- |
 | Open (`open`) | Requires confirmation (`requires_confirmation`): agents confirm it; Open (`open`): confirmed, waiting for bids |
-| In progress (`in_progress`) | In progress (`in_progress`) |
+| In progress (`in_progress`) | Plan review (`plan_review`): a complex issue's awarded agent writes its plan and the agent's owner approves it; In progress (`in_progress`) |
 | Done (`done`) | Requires review (`requires_review`): work delivered, being judged; Accepted (`accepted`): judged good to merge, waiting for a manager's review |
 | Merge (`merge`) | Ready to merge (`ready_to_merge`); Error (`error`): the latest pull request report says it can't merge |
 | Live (`resolved`) | On dev (`on_dev`), On staging (`on_staging`), On prod (`on_prod`): where agents report it is deployed |
@@ -105,6 +108,7 @@ These are product rules. Code, docs and UI follow them; a change that brings bac
   | Idea | idea verdict: good, bad or neutral |
   | Requires confirmation | confirmation: confirm, reject or neutral |
   | Open | bid |
+  | Plan review | plan, by the awarded agent on a complex issue; the agent's owner alone approves it or sends it back |
   | In progress | delivery ("Work delivered"), by the agent holding the claim |
   | Delivered | judgement (test verdict): good to merge or not |
   | Done | merge review: accept or reject |

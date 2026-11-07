@@ -18,7 +18,7 @@ export function parseIssueNumber(raw: string): number | null {
   return number > 0 ? number : null;
 }
 
-export type ProjectIssue = { id: string; number: number; ref: ProjectRef; isDeleted: boolean };
+export type ProjectIssue = { id: string; number: number; organisationId: string; ref: ProjectRef; isDeleted: boolean };
 
 export type ProjectIssueLookup =
   /** The issue, in the project the URL names. */
@@ -28,10 +28,10 @@ export type ProjectIssueLookup =
   /** Another organisation the viewer belongs to has it (#519): offer the switch. */
   | { kind: "elsewhere"; issueId: string };
 
-const select = { id: true, number: true, isDeleted: true, project: { select: { slug: true, organisation: { select: { slug: true } } } } } as const;
+const select = { id: true, number: true, organisationId: true, isDeleted: true, project: { select: { slug: true, organisation: { select: { slug: true } } } } } as const;
 
-function toIssue(row: { id: string; number: number; isDeleted: boolean; project: { slug: string; organisation: { slug: string } } }): ProjectIssue {
-  return { id: row.id, number: row.number, ref: refOf(row.project), isDeleted: row.isDeleted };
+function toIssue(row: { id: string; number: number; organisationId: string; isDeleted: boolean; project: { slug: string; organisation: { slug: string } } }): ProjectIssue {
+  return { id: row.id, number: row.number, organisationId: row.organisationId, ref: refOf(row.project), isDeleted: row.isDeleted };
 }
 
 /**
@@ -57,11 +57,13 @@ export const findProjectIssue = cache(async (orgParam: string, projectParam: str
   const inUrl = { slug: projectSlug, organisation: { slug: orgSlug } };
   const scope = await viewerBugScope();
   if (!("organisationId" in scope)) {
-    const rows = await prisma.bug.findMany({ where: { number, project: inUrl }, select, take: 2 });
+    const rows = await prisma.bug.findMany({ where: { number, isDeleted: false, project: { ...inUrl, archivedAt: null }, organisation: { archivedAt: null } }, select, take: 2 });
     return rows.length === 1 ? { kind: "found", issue: toIssue(rows[0]) } : null;
   }
 
-  const row = await prisma.bug.findFirst({ where: { number, ...scope }, select });
+  // The active workspace's issue page also hosts authorized Restore controls.
+  // Keep deleted rows here; cross-workspace previews below still exclude them.
+  const row = await prisma.bug.findFirst({ where: { number, ...scope, project: { archivedAt: null }, organisation: { archivedAt: null } }, select });
   if (row && row.project.slug === projectSlug && row.project.organisation.slug === orgSlug) return { kind: "found", issue: toIssue(row) };
 
   const resolved = await resolveSessionUserId();
@@ -70,14 +72,34 @@ export const findProjectIssue = cache(async (orgParam: string, projectParam: str
       where: {
         number,
         isDeleted: false,
-        project: inUrl,
+        project: { ...inUrl, archivedAt: null },
         ...(typeof scope.organisationId === "string" ? { organisationId: { not: scope.organisationId } } : {}),
-        organisation: { memberships: { some: { userId: resolved.userId } } },
+        organisation: { archivedAt: null, memberships: { some: { userId: resolved.userId } } },
       },
       select: { id: true },
     });
     if (other) return { kind: "elsewhere", issueId: other.id };
   }
 
-  return row ? { kind: "moved", issue: toIssue(row) } : null;
+  if ("userId" in resolved) {
+    const accessible = await prisma.bug.findFirst({
+      where: {
+        number, isDeleted: false,
+        project: {
+          ...inUrl,
+          archivedAt: null,
+          OR: [
+            { visibility: "public" },
+            { memberships: { some: { userId: resolved.userId } } },
+          ],
+        },
+        organisation: { archivedAt: null },
+      }, select,
+    });
+    if (accessible) return { kind: "found", issue: toIssue(accessible) };
+  }
+
+  // Never replace a link into an inaccessible workspace with a same-numbered
+  // issue from the active workspace. Only project moves within the named org.
+  return row && row.project.organisation.slug === orgSlug ? { kind: "moved", issue: toIssue(row) } : null;
 });

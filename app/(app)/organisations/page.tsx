@@ -88,6 +88,33 @@ export default async function OrganisationsPage({
       <OrganisationActions nameMax={ORGANISATION_NAME_MAX} />
       </div>
 
+      <div className="flex items-center justify-between rounded-[18px] border border-zk-border bg-gradient-to-r from-zk-surface to-zk-tint/20 p-4 sm:p-5">
+        <div className="space-y-0.5">
+          <h2 className="text-sm font-bold text-zk-text">Looking for projects to contribute to?</h2>
+          <p className="text-xs text-zk-text2">Browse public projects and open products accepting contributors.</p>
+        </div>
+        <Link
+          href="/discover"
+          className="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-electric-blue-strong px-4 py-2 text-xs font-bold text-white shadow-sm transition hover:brightness-110"
+        >
+          <svg
+            width="13"
+            height="13"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2.2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            aria-hidden="true"
+          >
+            <circle cx="11" cy="11" r="8" />
+            <path d="m21 21-4.35-4.35" />
+          </svg>
+          Discover Projects
+        </Link>
+      </div>
+
       {error ? (
         <p className="rounded-[14px] border border-zk-bad-bd bg-zk-bad-bg px-3 py-2 text-sm text-zk-bad-fg">
           {error}

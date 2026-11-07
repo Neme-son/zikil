@@ -3,8 +3,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 /** Resolving merged work (#515, #reconcile-merged): an issue goes Live only on a report that its linked pull request is merged into the default branch; the claim is released, and a status that changed meanwhile leaves everything as it was. */
 const db = vi.hoisted(() => {
   const tx = {
-    bug: { updateMany: vi.fn() },
-    bugActivity: { create: vi.fn() },
+    bug: { updateMany: vi.fn(), findUnique: vi.fn() },
+    bugActivity: { create: vi.fn(), findFirst: vi.fn() },
     issueClaim: { updateMany: vi.fn() },
   };
   return {
