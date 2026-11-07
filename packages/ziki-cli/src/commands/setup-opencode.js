@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { OPENCODE_GLOBAL_DIR, buildMcpBlock, buildToolsMap, resolveMcpServerPath, mergeOpencodeConfig } from "../adapters/opencode.js";
 import { classifyFile, digest, realIo, applyPlan } from "../setup/plan.js";
 import { resolveConfigPath, loadConfig } from "../config/store.js";
-import { assertLocalhost } from "./login.js";
+import { assertServerRule } from "./login.js";
 
 const SKILL_NAME = "ziki-work";
 const MANIFEST_NAME = ".ziki-manifest.json";
@@ -192,7 +192,7 @@ export async function cmdSetupOpencode({ apply = false, yes = false, confirm = [
     serverUrl = config.url;
   }
   try {
-    assertLocalhost(serverUrl);
+    serverUrl = assertServerRule(serverUrl);
   } catch (error) {
     return { code: 1, text: `${error.message}\n` };
   }
@@ -203,7 +203,7 @@ export async function cmdSetupOpencode({ apply = false, yes = false, confirm = [
       throw new Error("not a file");
     }
   } catch {
-    return { code: 1, text: `MCP server not built at ${serverPath}; run: cd packages/mcp-server && pnpm install && pnpm build (or pass --mcp-server)\n` };
+    return { code: 1, text: `MCP server missing at ${serverPath}; rebuild the bundle (npm run prepack) or pass --mcp-server\n` };
   }
   let plan;
   try {

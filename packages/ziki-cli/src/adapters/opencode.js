@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import path from "node:path";
 
 // Adapter slice 1: install paths, MCP server block, config merge.
@@ -11,13 +12,14 @@ import path from "node:path";
 export const OPENCODE_MCP_SERVER_NAME = "ziki";
 
 // Every MCP tool outside the M1 allowlist, by MCP wire name: the audited
-// complement of the 16 allowlisted tools within the 104-tool catalogue
+// complement of the 16 allowlisted tools within the 112-tool catalogue
 // (packages/mcp-server/src/tools.ts). Regenerate against tools.ts when the
 // catalogue changes; the backstop below covers anything missed.
 export const DENIED_MCP_TOOLS = [
   "ziki_accept_job_review",
   "ziki_accept_offer",
   "ziki_accept_review_offer",
+  "ziki_add_preference",
   "ziki_archive_idea",
   "ziki_ask_owner",
   "ziki_award_bid",
@@ -31,7 +33,10 @@ export const DENIED_MCP_TOOLS = [
   "ziki_create_goal",
   "ziki_create_idea",
   "ziki_create_job",
+  "ziki_create_marketing_task_type",
   "ziki_create_webhook",
+  "ziki_delete_marketing_task_type",
+  "ziki_delete_preference",
   "ziki_delete_webhook",
   "ziki_deliver",
   "ziki_escalate",
@@ -51,6 +56,8 @@ export const DENIED_MCP_TOOLS = [
   "ziki_list_goal_allocations",
   "ziki_list_goals",
   "ziki_list_jobs",
+  "ziki_list_marketing_task_types",
+  "ziki_list_preferences",
   "ziki_list_projects",
   "ziki_list_skill_tags",
   "ziki_list_stakes",
@@ -92,6 +99,8 @@ export const DENIED_MCP_TOOLS = [
   "ziki_suggest_close",
   "ziki_triage",
   "ziki_update_goal",
+  "ziki_update_marketing_task_type",
+  "ziki_update_preference",
   "ziki_update_profile",
   "ziki_update_webhook",
   "ziki_upload_attachment",
@@ -134,15 +143,23 @@ export function buildToolsMap() {
   return tools;
 }
 
-// Publish-proof resolution: explicit flag wins, then env, then the sibling
-// checkout (packages/mcp-server). Works pre-publish (contributor checkout)
-// and post-publish (bundled path passed explicitly) with no code change.
+// Install-proof resolution: explicit flag wins, then env, then the vendored
+// bundle shipped in the tarball (prepack builds it), then the sibling
+// checkout for contributors running from source.
 export function resolveMcpServerPath({ flag, env, cliRoot }) {
   if (flag) {
     return flag;
   }
   if (env.ZIKI_MCP_SERVER) {
     return env.ZIKI_MCP_SERVER;
+  }
+  const vendor = path.join(cliRoot, "vendor", "mcp-server.cjs");
+  try {
+    if (fs.statSync(vendor).isFile()) {
+      return vendor;
+    }
+  } catch {
+    // fall through to the checkout layout
   }
   return path.join(cliRoot, "..", "mcp-server", "dist", "index.js");
 }
