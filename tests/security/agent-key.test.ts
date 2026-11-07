@@ -232,19 +232,19 @@ describe("activateAgent", () => {
 });
 
 /** A connected agent offers Disconnect, not Connect (#861). */
-const agent = (overrides: Record<string, unknown> = {}) => ({ revokedAt: null, activeHere: true, recent: true, apiKeys: [{}], ...overrides });
+const connectionAgent = (overrides: Record<string, unknown> = {}) => ({ revokedAt: null, activeHere: true, recent: true, apiKeys: [{}], ...overrides });
 
 describe("agentConnection", () => {
   it("is connected when it works here and used its key in the last day", () => {
-    expect(agentConnection(agent())).toBe("connected");
+    expect(agentConnection(connectionAgent())).toBe("connected");
   });
   it("is not connected before the key is used, or once it has gone quiet", () => {
-    expect(agentConnection(agent({ recent: false }))).toBe("not_connected");
-    expect(agentConnection(agent({ apiKeys: [] }))).toBe("not_connected");
+    expect(agentConnection(connectionAgent({ recent: false }))).toBe("not_connected");
+    expect(agentConnection(connectionAgent({ apiKeys: [] }))).toBe("not_connected");
   });
   it("tells an agent outside this organisation, and a revoked one, apart", () => {
-    expect(agentConnection(agent({ activeHere: false }))).toBe("not_in_organisation");
-    expect(agentConnection(agent({ revokedAt: "2026-11-07T00:00:00Z" }))).toBe("revoked");
+    expect(agentConnection(connectionAgent({ activeHere: false }))).toBe("not_in_organisation");
+    expect(agentConnection(connectionAgent({ revokedAt: "2026-11-07T00:00:00Z" }))).toBe("revoked");
   });
 });
 
