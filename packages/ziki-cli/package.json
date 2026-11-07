@@ -20,7 +20,7 @@
   "scripts": {
     "prepack": "node scripts/prepack.mjs",
     "prepublishOnly": "node scripts/prepublish.mjs",
-    "test": "node --test tests/store.test.js tests/doctor.test.js tests/status.test.js tests/cli.test.js tests/login.test.js tests/connect.test.js tests/work.test.js tests/adapters/opencode.test.js tests/setup-plan.test.js tests/setup.test.js tests/allowlist.test.js tests/pairing.test.js tests/ask.test.js tests/init.test.js tests/bundle.test.js"
+    "test": "node --test tests/store.test.js tests/doctor.test.js tests/status.test.js tests/cli.test.js tests/login.test.js tests/connect.test.js tests/work.test.js tests/adapters/opencode.test.js tests/setup-plan.test.js tests/setup.test.js tests/allowlist.test.js tests/pairing.test.js tests/ask.test.js tests/init.test.js tests/bundle.test.js tests/adapters/codex.test.js tests/setup-codex.test.js"
   },
   "dependencies": {}
 }

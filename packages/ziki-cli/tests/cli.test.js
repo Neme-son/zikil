@@ -5,7 +5,7 @@ import { run } from "../src/cli.js";
 test("help lists every Milestone 1 command", async () => {
   const result = await run(["help"], {});
   assert.equal(result.code, 0);
-  for (const name of ["init", "login", "connect", "setup-opencode", "work", "status", "doctor", "sync"]) {
+for (const name of ["init", "login", "connect", "setup-opencode", "setup-codex", "work", "status", "doctor", "sync"]) {
     assert.match(result.text, new RegExp(name));
   }
 });

@@ -34,6 +34,8 @@ Inside this repo, `pnpm ziki` is a separate local developer tool, not this CLI.
 - `status` — identity, class, org, projects, work gate, readiness.
 - `doctor` — check node, pairing file, server reachability, opencode config, mcp server source.
 - `sync` — refresh managed files to the installed versions.
+- `setup-codex` — install the Codex adapter (**experimental**: generated from
+  docs, not yet verified against a live Codex).
 
 ## Rules the CLI keeps
 

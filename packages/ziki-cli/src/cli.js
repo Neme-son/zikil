@@ -7,6 +7,7 @@ import { cmdLogin } from "./commands/login.js";
 import { connectProject } from "./commands/connect.js";
 import { cmdWork } from "./commands/work.js";
 import { cmdSetupOpencode, packageRoot } from "./commands/setup-opencode.js";
+import { cmdSetupCodex } from "./commands/setup-codex.js";
 import { resolveMcpServer } from "./mcp.js";
 import { resolveConfigPath, loadConfig, apiFetch } from "./config/store.js";
 import { cmdInit } from "./commands/init.js";
@@ -25,6 +26,7 @@ Commands:
   status          show identity, project, work gate and readiness
   doctor          check the local environment
   sync            refresh managed files to the installed versions
+  setup-codex     install the Codex adapter (experimental, plan first)
   help            show this text
 `;
 
@@ -195,6 +197,18 @@ export async function run(argv, _ctx) {
         server: flagValue(rest, ["--server"]),
         mcpPath: flagValue(rest, ["--mcp-path"]),
       });
+    case "setup-codex":
+      try {
+        return await cmdSetupCodex({
+          apply: hasFlag(rest, ["--apply"]),
+          yes: hasFlag(rest, ["--yes"]),
+          confirm: flagValues(rest, ["--confirm"]),
+          server: flagValue(rest, ["--server"]),
+          mcpServer: flagValue(rest, ["--mcp-server"]),
+        });
+      } catch (error) {
+        return { code: 1, text: `${error.message}\n` };
+      }
     default:
       return { code: 2, text: `unknown command: ${name}\n\n${HELP}` };
   }
