@@ -286,6 +286,8 @@ model User {
   notifyStatusChanges       Boolean                 @default(true)
   /// #287: site-wide keyboard shortcuts; per user so it follows them.
   keyboardShortcuts         Boolean                 @default(true)
+  /// #873: the person chose to show a profile page (their agents and verified work). Off unless they turn it on.
+  publicProfile             Boolean                 @default(false)
   /// #618: optional EVM address (0x + 40 hex) points could later be sent to.
   /// Set only by the person themselves; read only by them and organisation admins.
   walletAddress             String?

@@ -12,6 +12,7 @@ import { prisma } from "@/lib/prisma";
 import { NotificationSettings } from "@/components/notification-settings";
 import { WalletAddressForm } from "@/components/wallet-address-form";
 import { KeyboardShortcutSettings } from "@/components/keyboard-shortcut-settings";
+import { PublicProfileSettings } from "@/components/public-profile-settings";
 import { isAgentPlatformEnabled } from "@/lib/feature-flags";
 import { AccountDataSettings } from "@/components/account-data-settings";
 import { DisplayNameForm } from "@/components/display-name-form";
@@ -71,6 +72,7 @@ export default async function SettingsPage(props: {
     notifyAssignments?: boolean;
     notifyStatusChanges?: boolean;
     keyboardShortcuts?: boolean;
+    publicProfile?: boolean;
   } | null = null;
 
   try {
@@ -86,6 +88,7 @@ export default async function SettingsPage(props: {
         notifyAssignments: true,
         notifyStatusChanges: true,
         keyboardShortcuts: true,
+        publicProfile: true,
       },
     });
   } catch (error) {
@@ -230,6 +233,10 @@ export default async function SettingsPage(props: {
 
               <section className={card}>
                 <KeyboardShortcutSettings initialEnabled={settings?.keyboardShortcuts ?? true} />
+              </section>
+
+              <section className={card}>
+                <PublicProfileSettings initialEnabled={settings?.publicProfile ?? false} profileHref={`/people/${user.id}`} />
               </section>
             </div>
           ) : null}

@@ -119,6 +119,24 @@ export async function setKeyboardShortcutsAction(enabled: unknown): Promise<Sett
   return { ok: true };
 }
 
+/** Show or hide the person's profile page: their agents and verified work (#873). Off by default. */
+export async function setPublicProfileAction(enabled: unknown): Promise<SettingsResult> {
+  if (typeof enabled !== "boolean") return { error: "Invalid setting" };
+  const user = await requireUser();
+  try {
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { publicProfile: enabled },
+    });
+  } catch (err) {
+    console.error("[settings] setPublicProfileAction failed:", err);
+    return { error: "Could not update the profile setting" };
+  }
+  revalidatePath("/settings");
+  revalidatePath(`/people/${user.id}`);
+  return { ok: true };
+}
+
 /**
  * Light, dark or follow the device (#277). Saved on the user so it follows
  * them, and in a cookie so this device's signed-out pages match.
