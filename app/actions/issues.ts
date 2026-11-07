@@ -226,8 +226,15 @@ export async function createBugAction(
     }
   }
 
+  // Confidential security finding intake (Issue #2828)
+  const isSecurity = formData.get("isSecurity") === "true";
+  const securitySeverity = typeof formData.get("securitySeverity") === "string" ? String(formData.get("securitySeverity")) : "medium";
+  const finalTitle = isSecurity && !titleStr.toLowerCase().startsWith("[security]")
+    ? `[Security] ${titleStr}`
+    : titleStr;
+
   const parsed = createBugSchema.safeParse({
-    title: titleStr,
+    title: finalTitle,
     description: formData.get("description"),
     typeId: formData.get("typeId") || "",
     assigneeId: "",
@@ -307,7 +314,10 @@ export async function createBugAction(
     : null;
   const ideaTitle = structured?.title ?? parsed.data.title;
   // #502: mentions resolve only to members of the idea's organisation.
-  const description = await resolveOrganisationMentions(prisma, organisationId, structured?.description ?? parsed.data.description);
+  const resolvedDesc = await resolveOrganisationMentions(prisma, organisationId, structured?.description ?? parsed.data.description);
+  const description = isSecurity
+    ? `> **CONFIDENTIAL SECURITY FINDING**\n> Severity: **${securitySeverity.toUpperCase()}**\n\n${resolvedDesc}`
+    : resolvedDesc;
 
   if (areaId) {
     const area = await prisma.projectArea.findFirst({

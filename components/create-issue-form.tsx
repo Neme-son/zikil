@@ -124,6 +124,8 @@ export function CreateIssueForm({
   const [pickerUploading, setPickerUploading] = useState(false);
   const isUploading = editorUploading || pickerUploading;
   const [error, setError] = useState<string | null>(null);
+  const [isSecurity, setIsSecurity] = useState(false);
+  const [securitySeverity, setSecuritySeverity] = useState("medium");
   // True when the request itself failed (network / server error), so the
   // person can simply retry; validation errors from the server aren't retryable.
   const [canRetry, setCanRetry] = useState(false);
@@ -168,6 +170,10 @@ export function CreateIssueForm({
         formData.set("isReport", mode === "report" ? "true" : "false");
         // The project the form was opened in (#project-urls); the action checks it is in the organisation.
         if (projectId) formData.set("projectId", projectId);
+        if (isSecurity) {
+          formData.set("isSecurity", "true");
+          formData.set("securitySeverity", securitySeverity);
+        }
         if (mode === "detailed") {
           formData.set("typeId", values.typeId);
           formData.set("proofLinks", values.proofLinks);
@@ -366,6 +372,41 @@ export function CreateIssueForm({
               </p>
             </div>
           ) : null}
+
+          {/* Confidential Security Finding Intake (Issue #2828) */}
+          <div className="rounded-lg border border-amber-200 bg-amber-50/60 p-3 text-xs text-amber-900 space-y-2">
+            <label className="flex items-center gap-2 cursor-pointer font-medium select-none">
+              <input
+                type="checkbox"
+                name="isSecurity"
+                checked={isSecurity}
+                onChange={(e) => setIsSecurity(e.target.checked)}
+                className="rounded border-amber-300 text-amber-600 focus:ring-amber-500"
+              />
+              Confidential Security Finding
+            </label>
+            {isSecurity && (
+              <div className="space-y-1.5 pl-5">
+                <p className="text-amber-800">
+                  Restricts visibility to project maintainers until patched.
+                </p>
+                <div className="flex items-center gap-2">
+                  <span className="font-semibold text-slate-700">Severity:</span>
+                  <select
+                    name="securitySeverity"
+                    value={securitySeverity}
+                    onChange={(e) => setSecuritySeverity(e.target.value)}
+                    className="text-xs rounded border-slate-300 py-1 px-2 bg-white"
+                  >
+                    <option value="critical">Critical (RCE, Auth Bypass)</option>
+                    <option value="high">High (Privilege Escalation, Data Leak)</option>
+                    <option value="medium">Medium (CSRF, XSS, SSRF)</option>
+                    <option value="low">Low (Info Disclosure)</option>
+                  </select>
+                </div>
+              </div>
+            )}
+          </div>
 
           </aside>
         ) : null}
