@@ -10,6 +10,7 @@ import { entryReplySelect, toEntryReplies } from "@/lib/agent-api/entry-fields";
 import Image from "next/image";
 import { Suspense } from "react";
 import type { Metadata } from "next";
+import { SITE_NAME } from "@/lib/seo/site";
 import { notFound, permanentRedirect } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { agentMentionId } from "@/lib/mentions";
@@ -111,6 +112,8 @@ import { SelfAssignButton } from "@/components/self-assign-button";
 import { IssueActionsMenu } from "@/components/issue-actions-menu";
 import { CopyIssueSummaryButton } from "@/components/copy-issue-summary-button";
 import { EditableIssueDescription } from "@/components/editable-issue-description";
+import { SecurityFindingPanel } from "@/components/security-finding-panel";
+import { findingForBug, findingView } from "@/lib/security-findings";
 import { IssueLinks } from "@/components/issue-links";
 import { parsePullRequestUrl } from "@/lib/github/pull-request-url";
 import { NextStepBar } from "@/components/next-step-bar";
@@ -258,7 +261,7 @@ export async function generateMetadata({
       description,
       url: canonical,
       type: "article",
-      siteName: "Ziki",
+      siteName: SITE_NAME,
       modifiedTime: bug.updatedAt.toISOString(),
       images: [{ ...SHARE_IMAGE, url: image }],
     },
@@ -313,7 +316,7 @@ export default async function BugDetailPage({ params, searchParams }: BugPagePro
 
     return (
       <div className="issue-detail-scope mx-auto max-w-2xl space-y-4 py-10">
-        <p className="text-sm text-zk-muted">Ziki Issues</p>
+        <p className="text-sm text-zk-muted">Ziki</p>
         <h1 className="text-2xl font-extrabold text-zk-text">{bug.title}</h1>
         <div className="flex flex-wrap gap-2">
           <Badge className={`${issueChipBaseClass} ${issueStatusChipClass[bug.substatus]}`}>
@@ -446,6 +449,11 @@ export default async function BugDetailPage({ params, searchParams }: BugPagePro
     return issueLoadError(loadedBug.reference);
   }
   const bug = loadedBug.bug;
+  // #security-findings: the private details, shown only to who may see them.
+  const securityFinding = bug ? await findingForBug(bug.id) : null;
+  const securityView = bug && securityFinding
+    ? findingView(securityFinding, { kind: "person", userId: user.id, organisationId: bug.organisationId, organisationAdmin: access.admin })
+    : null;
 
   if (!bug || (bug.isDeleted && !canDelete)) {
     notFound();
@@ -2004,12 +2012,13 @@ export default async function BugDetailPage({ params, searchParams }: BugPagePro
 
           {/* #1446: the progress report's stage filters the Conversation (#186). */}
           <IssueStageProvider initialStage={currentStage}>
+          {securityView ? <SecurityFindingPanel view={securityView} canDisclose={access.admin} kind="issue" /> : null}
           <EditableIssueDescription
             bugId={bug.id}
             initialTitle={bug.title}
             initialDescription={bug.description}
             summary={bug.summary}
-            canEdit={canEdit}
+            canEdit={canEdit && !(securityView && !securityView.disclosed)}
             users={users}
             lastEditedAt={lastRevision?.editedAt ?? null}
             historyHref={issueHref(bug, "/history")}
