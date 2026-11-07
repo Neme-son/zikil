@@ -64,3 +64,7 @@ next-env.d.ts
 
 # Local project pointer written by `ziki-cli connect` (per checkout, never committed)
 .ziki.json
+
+# Standalone package installs and alternate pnpm store (never committed)
+packages/*/node_modules/
+.pnpm-store/
