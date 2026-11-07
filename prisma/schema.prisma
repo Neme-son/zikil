@@ -82,6 +82,7 @@ enum ActivityType {
   category_changed
   area_changed
   duplicate_changed
+  blocker_changed
 }
 
 /// A person's role inside an organisation (#423). Everyone who existed when the
@@ -348,6 +349,8 @@ model User {
   closeSuggestions          CloseSuggestion[]       @relation("CloseSuggestionsGiven")
   reportedIdeas             Idea[]                  @relation("IdeaReporter")
   beneficiaryIdeas          Idea[]                  @relation("IdeaBeneficiary")
+  requestedSupportThreads   SupportThread[]         @relation("SupportThreadRequester")
+  threadMessages            ThreadMessage[]         @relation("ThreadMessageAuthor")
   projectMemberships        ProjectMembership[]
   projectJoinRequests       ProjectJoinRequest[]
   projectJoinRequestsReviewed ProjectJoinRequest[]  @relation("JoinRequestReviewer")
@@ -435,6 +438,8 @@ model Bug {
   duplicateOfId             String?
   duplicateOf               Bug?                    @relation("BugDuplicates", fields: [duplicateOfId], references: [id], onDelete: SetNull)
   duplicates                Bug[]                   @relation("BugDuplicates")
+  blockedBy                 IssueBlocker[]          @relation("IssueBlockedBy")
+  blocking                  IssueBlocker[]          @relation("IssueBlocking")
   /// Product or marketing work (`WorkTrack`).
   track                     WorkTrack               @default(product)
   /// How many times this marketing work has been sent back for changes on the
@@ -513,6 +518,7 @@ model Bug {
   auditEvents               AgentAuditEvent[]
   goalAllocations           GoalAllocation[]
   mistakes                  AgentMistake[]
+  supportThreads            SupportThread[]
 
   /// #517: issue numbers are per organisation, so two organisations can both have a #1.
   @@unique([organisationId, number])
@@ -535,6 +541,19 @@ model Bug {
   // so the list can be read in index order instead of sorting every row.
   @@index([isDeleted, isBoosted(sort: Desc), boostedAt(sort: Desc), voteCount(sort: Desc), updatedAt(sort: Desc), createdAt(sort: Desc)], map: "Bug_list_top_votes_idx")
   @@index([isDeleted, isBoosted(sort: Desc), boostedAt(sort: Desc), createdAt(sort: Desc), id(sort: Desc)], map: "Bug_list_newest_idx")
+}
+
+/// A dependency that explains why an issue cannot proceed until another issue is resolved.
+model IssueBlocker {
+  id           String   @id @default(cuid())
+  blockedBugId String
+  blockerBugId String
+  createdAt    DateTime @default(now())
+  blockedBug   Bug      @relation("IssueBlockedBy", fields: [blockedBugId], references: [id], onDelete: Cascade)
+  blockerBug   Bug      @relation("IssueBlocking", fields: [blockerBugId], references: [id], onDelete: Cascade)
+
+  @@unique([blockedBugId, blockerBugId])
+  @@index([blockerBugId])
 }
 
 /// A platform (Desktop, Web, Mobile) inside one organisation.
@@ -807,6 +826,7 @@ model Organisation {
   projectAuditEvents ProjectAuditEvent[]
   jobs               Job[]
   goals              Goal[]
+  supportThreads     SupportThread[]
 }
 
 /// A project inside an organisation (organisation), e.g. Zedu Web or Zedu Desktop.
@@ -1191,6 +1211,8 @@ model Agent {
   stakes            IssueStake[]
   penaltiesGiven    ConfirmationPenalty[] @relation("PenaltiesGiven")
   penaltiesReceived ConfirmationPenalty[] @relation("PenaltiesReceived")
+  assignedSupportThreads SupportThread[]  @relation("SupportThreadAssignee")
+  threadMessages         ThreadMessage[]  @relation("ThreadMessageAgent")
 
   @@index([ownerUserId])
 }
@@ -2475,7 +2497,7 @@ model AgentEvent {
 model AgentInboxItem {
   id        String      @id @default(cuid())
   agentId   String
-  /// offer | reply | mention | answer | message | approval | claim
+  /// offer | reply | mention | answer | message | approval | claim | request
   kind      String
   eventId   String?
   /// The event that put it here, e.g. `claim.offered`.
@@ -2840,6 +2862,58 @@ model AgentPicture {
   data        Bytes
   updatedAt   DateTime @updatedAt
   agent       Agent    @relation(fields: [agentId], references: [id], onDelete: Cascade)
+}
+
+/// Status of a support thread raised about a stuck fix (#requests).
+enum SupportThreadStatus {
+  open
+  taken
+  resolved
+}
+
+/// A question or help request about a stuck fix on an issue (#requests).
+/// Lands in the inbox of eligible manager/merger agents in the tenant until taken.
+model SupportThread {
+  id              String              @id @default(cuid())
+  organisationId  String
+  bugId           String
+  requesterUserId String
+  /// The manager or merger agent that took it; null while open.
+  assigneeAgentId String?
+  status          SupportThreadStatus @default(open)
+  takenAt         DateTime?
+  resolvedAt      DateTime?
+  /// manual | fix_live | issue_closed
+  resolvedReason  String?
+  lastMessageAt   DateTime            @default(now())
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
+  organisation    Organisation        @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  bug             Bug                 @relation(fields: [bugId], references: [id], onDelete: Cascade)
+  requester       User                @relation("SupportThreadRequester", fields: [requesterUserId], references: [id], onDelete: Cascade)
+  assigneeAgent   Agent?              @relation("SupportThreadAssignee", fields: [assigneeAgentId], references: [id], onDelete: SetNull)
+  messages        ThreadMessage[]
+
+  @@index([organisationId, status, lastMessageAt])
+  @@index([bugId, status])
+  @@index([requesterUserId, status])
+  @@index([assigneeAgentId, status])
+}
+
+/// A message inside a support thread (#requests).
+model ThreadMessage {
+  id            String        @id @default(cuid())
+  threadId      String
+  authorUserId  String
+  /// Set when the owner replied as the assigned agent; null for the requester.
+  authorAgentId String?
+  body          String
+  createdAt     DateTime      @default(now())
+  thread        SupportThread @relation(fields: [threadId], references: [id], onDelete: Cascade)
+  authorUser    User          @relation("ThreadMessageAuthor", fields: [authorUserId], references: [id], onDelete: Cascade)
+  authorAgent   Agent?        @relation("ThreadMessageAgent", fields: [authorAgentId], references: [id], onDelete: SetNull)
+
+  @@index([threadId, createdAt])
 }
 
 /// A contributor's skill submission to the skills library (#skill-submissions).

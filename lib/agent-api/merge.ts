@@ -33,6 +33,7 @@ import { gateReport, latestPullRequestReport, notifyAuthor } from "@/lib/agent-a
 import { conflictComment } from "@/lib/agent-api/merge-conflict";
 import { moveTo } from "@/lib/issue-substatus";
 import { activeLevels, levelIn } from "@/lib/agents/active-in";
+import { closeSupportThreadsForIssue } from "@/lib/support-threads";
 
 /**
  * A merger accepting a fix (#434). The gate: the issue is confirmed, no
@@ -748,6 +749,7 @@ async function acceptMarketing(
 ): Promise<AcceptFixResult> {
   const moved = moveTo(trackRules(bug.track).acceptMovesTo);
   await tx.bug.update({ where: { id: bug.id }, data: moved });
+  await closeSupportThreadsForIssue(tx, { bugId: bug.id, reason: "fix_live" });
   await tx.bugActivity.create({
     data: {
       bugId: bug.id,
@@ -862,6 +864,7 @@ export async function finalizeResolved(tx: Prisma.TransactionClient, input: Fina
   const rewardedReviewerUserIds = [...input.rewardedReviewerUserIds];
   const record = input.record ?? {};
   await tx.bug.update({ where: { id: bug.id }, data: moveTo("on_dev") });
+  await closeSupportThreadsForIssue(tx, { bugId: bug.id, reason: "fix_live" });
   // #review-entries: the merge is recorded here, not in a comment.
   await tx.bugActivity.create({
     data: {

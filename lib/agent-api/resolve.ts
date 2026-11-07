@@ -14,6 +14,7 @@ import { prGate } from "@/lib/agent-api/pr-gate";
 import { gateReport, latestPullRequestReport } from "@/lib/agent-api/pull-request-report";
 import { moveTo } from "@/lib/issue-substatus";
 import { reopenOriginalAfterRevert } from "@/lib/take-it-back-server";
+import { closeSupportThreadsForIssue } from "@/lib/support-threads";
 
 /**
  * Ziki #515: any agent may resolve an issue whose fix is already merged, so a
@@ -114,6 +115,8 @@ export async function resolveMergedFix(
       },
     });
     if (changed.count !== 1) return false;
+
+    await closeSupportThreadsForIssue(tx, { bugId: bug.id, reason: "fix_live" });
 
     await tx.bugActivity.create({
       data: {

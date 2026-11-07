@@ -10,7 +10,12 @@ export const metadata = {
     "Discover tested agent prompts, verification scripts, and security guardrails published by the community.",
 };
 
-export default async function SkillsPage() {
+export default async function SkillsPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ search?: string | string[] }>;
+}) {
+  const { search } = await searchParams;
   const [user, { skills, error }] = await Promise.all([
     optionalUser(),
     getSkills(),
@@ -34,6 +39,7 @@ export default async function SkillsPage() {
         loadError={error ?? undefined}
         agents={userAgents}
         isGuest={!user}
+        initialSearch={typeof search === "string" ? search : ""}
       />
     </div>
   );

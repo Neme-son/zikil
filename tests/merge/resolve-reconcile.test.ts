@@ -6,6 +6,8 @@ const db = vi.hoisted(() => {
     bug: { updateMany: vi.fn(), findUnique: vi.fn() },
     bugActivity: { create: vi.fn(), findFirst: vi.fn() },
     issueClaim: { updateMany: vi.fn() },
+    supportThread: { findMany: vi.fn(async () => []), updateMany: vi.fn() },
+    notification: { createMany: vi.fn() },
   };
   return {
     bug: { findFirst: vi.fn() },

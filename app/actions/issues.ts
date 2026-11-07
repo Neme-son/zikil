@@ -1,5 +1,6 @@
 "use server";
 
+import { closeSupportThreadsForIssue } from "@/lib/support-threads";
 import { revalidatePath } from "next/cache";
 import { activeIn } from "@/lib/agents/active-in";
 import { revalidateIssue } from "@/lib/revalidate-issue";
@@ -1830,6 +1831,7 @@ export async function deleteBugAction(bugId: string): Promise<ActionResult> {
           deletedAt: new Date(),
         },
       });
+      await closeSupportThreadsForIssue(tx, { bugId, reason: "issue_closed" });
       // Release any unreleased claims on the soft-deleted issue (#627), a plan review's planning claim included.
       await tx.issueClaim.updateMany({
         where: { bugId, releasedAt: null, status: { in: ["active", "offered", "planning"] } },

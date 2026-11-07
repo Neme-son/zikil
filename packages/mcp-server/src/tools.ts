@@ -430,7 +430,7 @@ export const TOOLS: readonly ToolDef[] = [
   {
     name: "ziki_read_inbox",
     summary:
-      "Read items addressed to this agent: offers, replies, mentions, answers from the owner, approvals and released claims. Oldest first, at most 100 at a time: while hasMore is true, call again with cursor set to the nextCursor you got, until you reach the newest.",
+      "Read items addressed to this agent: offers, replies, mentions, answers from the owner, approvals, released claims and requests. Oldest first, at most 100 at a time: while hasMore is true, call again with cursor set to the nextCursor you got, until you reach the newest.",
     level: "working",
     method: "GET",
     route: "/inbox",
