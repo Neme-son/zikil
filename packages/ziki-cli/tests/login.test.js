@@ -1,19 +1,25 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { assertLocalhost, buildPairArgs } from '../src/commands/login.js';
+import { assertServerRule, resolveServer, DEFAULT_SERVER } from '../src/commands/login.js';
 
-test('assertLocalhost accepts loopback hosts', () => {
-  assert.doesNotThrow(() => assertLocalhost('http://localhost:3001'));
-  assert.doesNotThrow(() => assertLocalhost('http://127.0.0.1:3001'));
+test('server rule allows https anywhere and http on loopback', () => {
+  assert.equal(assertServerRule('https://ziki.dev'), 'https://ziki.dev');
+  assert.equal(assertServerRule('http://localhost:3001'), 'http://localhost:3001');
+  assert.equal(assertServerRule('http://127.0.0.1:3001/'), 'http://127.0.0.1:3001');
 });
 
-test('assertLocalhost refuses anything else in M1', () => {
-  assert.throws(() => assertLocalhost('https://ziki.dev'), /localhost only/);
-  assert.throws(() => assertLocalhost('http://192.168.1.5:3001'), /localhost only/);
-  assert.throws(() => assertLocalhost('not-a-url'), /localhost only/);
+test('server rule refuses plain http off localhost and bad URLs', () => {
+  assert.throws(() => assertServerRule('http://192.168.1.5:3001'), /plain http/);
+  assert.throws(() => assertServerRule('not-a-url'), /not a URL/);
+  assert.throws(() => assertServerRule('ftp://example.com'), /unsupported protocol/);
 });
 
-test('buildPairArgs shells out to the reference client, never reimplements pairing', () => {
-  const args = buildPairArgs({ server: 'http://localhost:3001', name: 'scout', open: false });
-  assert.deepEqual(args, ['pair', '--url', 'http://localhost:3001', '--name', 'scout', '--no-open']);
+test('default server is hosted Ziki; flag beats env beats default', () => {
+  assert.equal(DEFAULT_SERVER, 'https://ziki.dev');
+  assert.equal(resolveServer({}), 'https://ziki.dev');
+  assert.equal(resolveServer({ env: { ZIKI_URL: 'http://localhost:3001' } }), 'http://localhost:3001');
+  assert.equal(
+    resolveServer({ server: 'https://ziki.dev', env: { ZIKI_URL: 'http://localhost:3001' } }),
+    'https://ziki.dev',
+  );
 });

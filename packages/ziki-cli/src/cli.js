@@ -14,7 +14,7 @@ const HELP = `ziki-cli — thin client for the Ziki Local Agent Environment
 Usage: ziki-cli <command> [options]
 
 Commands:
-  login           pair this machine with a Ziki account (localhost only in M1)
+  login           pair this machine with a Ziki account
   connect         link the current repository to a Ziki project
   setup-opencode  install the OpenCode adapter (plan first, write on approval)
   work            show your agent's current Ziki work
@@ -144,11 +144,12 @@ export async function run(argv, _ctx) {
     case "status":
       return cmdStatus();
     case "login": {
-      const server = flagValue(rest, ["--server"]) ?? "http://localhost:3001";
       try {
-        return cmdLogin({
-          server,
+        return await cmdLogin({
+          server: flagValue(rest, ["--server"]),
           name: flagValue(rest, ["--name", "-n"]),
+          model: flagValue(rest, ["--model"]),
+          level: flagValue(rest, ["--level"]),
           open: !hasFlag(rest, ["--no-open"]),
         });
       } catch (error) {
@@ -159,7 +160,7 @@ export async function run(argv, _ctx) {
       return cmdConnect(rest);
     case "work":
       try {
-        return cmdWork();
+        return await cmdWork({ project: flagValue(rest, ["--project", "-p"]) });
       } catch (error) {
         return { code: 1, text: `${error.message}\n` };
       }

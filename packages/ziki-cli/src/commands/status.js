@@ -3,7 +3,7 @@
 // not report (today: paused) is shown only when present, never assumed.
 export function renderStatus(me) {
   const lines = [];
-  const identity = me.username ?? "(unknown)";
+  const identity = me.username ?? me.name ?? "(unknown)";
   const klass = me.level ?? me.class ?? "unknown class";
   lines.push(`agent: ${identity} (${klass})`);
   if (me.org_slug) {

@@ -1,18 +1,45 @@
-import { spawnSync } from "node:child_process";
-import { referenceClientPath } from "./login.js";
+import fs from "node:fs";
+import path from "node:path";
+import { loadConfig, resolveConfigPath, apiFetch } from "../config/store.js";
 
-export function buildWorkArgs({ project } = {}) {
+// Follow the project's own workUrl from GET /api/v1/agents/me. Keys are
+// organisation-scoped, so the project pointer (connect) or --project picks
+// which feed; otherwise the first project wins.
+export function pickWorkProject(me, { pointer, project } = {}) {
+  const projects = me?.projects ?? [];
   if (project) {
-    throw new Error("--project is not supported in M1: the reference explicit-project URL predates org routes; keys are project-scoped so the default feed is already yours");
+    const found = projects.find((p) => p.slug === project || p.id === project);
+    if (!found) throw new Error(`no project "${project}" on this key`);
+    return found;
   }
-  return ["work"];
+  if (pointer && (pointer.projectId || pointer.projectSlug)) {
+    const found = projects.find((p) => p.id === pointer.projectId || p.slug === pointer.projectSlug);
+    if (found) return found;
+  }
+  if (projects.length === 0) throw new Error("this key has no projects");
+  return projects[0];
 }
 
-// Delegates to the reference client, whose default path follows the
-// server-provided org-aware work_url. No --project passthrough in M1.
-export function cmdWork() {
-  const res = spawnSync(process.execPath, [referenceClientPath(), ...buildWorkArgs({})], {
-    stdio: "inherit",
+export function readPointer(cwd = process.cwd()) {
+  try {
+    return JSON.parse(fs.readFileSync(path.join(cwd, ".ziki.json"), "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+export async function cmdWork({ project, keyFile, env = process.env, cwd } = {}, { fetchImpl = globalThis.fetch } = {}) {
+  const file = keyFile ?? resolveConfigPath(env);
+  const config = loadConfig(file);
+  const meRes = await apiFetch(config, "/api/v1/agents/me", { fetchImpl });
+  if (!meRes.ok) throw new Error(`work: server answered ${meRes.status}`);
+  const me = await meRes.json();
+  const picked = pickWorkProject(me, { pointer: readPointer(cwd), project });
+  if (!picked.workUrl) throw new Error("work: project has no workUrl");
+  const feedRes = await fetchImpl(picked.workUrl, {
+    headers: { Authorization: `Bearer ${config.apiKey}`, Accept: "application/json" },
   });
-  return { code: res.status ?? 1, text: "" };
+  if (!feedRes.ok) throw new Error(`work: feed answered ${feedRes.status}`);
+  const feed = await feedRes.json();
+  return { code: 0, text: `${JSON.stringify(feed, null, 2)}\n` };
 }

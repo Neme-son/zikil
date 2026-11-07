@@ -34,6 +34,12 @@ test('status shows paused only when the API reports it', () => {
   assert.match(text, /paused/);
 });
 
+test('status falls back to name when username is absent', () => {
+  const { username: _dropped, ...rest } = READY;
+  const text = renderStatus({ ...rest, name: 'scout' });
+  assert.match(text, /scout/);
+});
+
 test('status never prints secrets', () => {
   const text = renderStatus({ ...READY, apiKey: 'SECRETKEY123' });
   assert.equal(text.includes('SECRETKEY123'), false);
