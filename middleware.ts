@@ -61,6 +61,10 @@ export function isPublicPath(
     pathWithoutBase.startsWith("/join/") ||
     pathWithoutBase === "/discover" ||
     pathWithoutBase.startsWith("/discover?") ||
+    // Opt-in public project profiles, guest report forms and private tracking links (#3464).
+    pathWithoutBase === "/p" ||
+    pathWithoutBase.startsWith("/p/") ||
+    pathWithoutBase.startsWith("/api/public/") ||
     pathWithoutBase.startsWith("/api/auth") ||
     pathWithoutBase.startsWith("/api/health") ||
     // The scheduler calls the platform sweeps with Bearer CRON_SECRET and no
