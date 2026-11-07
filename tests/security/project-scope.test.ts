@@ -3,6 +3,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("typesense", () => ({ default: class {} }));
 
 const findFirst = vi.hoisted(() => vi.fn());
+const findMany = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/prisma", () => ({ prisma: { project: { findFirst }, skillSubmission: { findMany } } }));
 const publishedTasks = vi.hoisted(() => vi.fn());
 const taskCounts = vi.hoisted(() => vi.fn());
 const proposalCount = vi.hoisted(() => vi.fn());
@@ -19,6 +21,8 @@ const projectJoinRequestUpsert = vi.hoisted(() => vi.fn());
 const projectMembershipUpsert = vi.hoisted(() => vi.fn());
 const projectJoinRequestUpdateMany = vi.hoisted(() => vi.fn());
 const bugCount = vi.hoisted(() => vi.fn());
+const bugFindFirst = vi.hoisted(() => vi.fn());
+const ideaFindFirst = vi.hoisted(() => vi.fn());
 const notificationCreateMany = vi.hoisted(() => vi.fn().mockResolvedValue({ count: 1 }));
 const membershipFindMany = vi.hoisted(() => vi.fn());
 const bugFindUnique = vi.hoisted(() => vi.fn());
@@ -30,8 +34,8 @@ const skillSubmissionUpdate = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/prisma", () => ({
   prisma: {
     project: { findFirst, findUnique: projectFindUnique },
-    bug: { findUnique: bugFindUnique, findMany: publishedTasks, groupBy: taskCounts, count: bugCount },
-    idea: { count: proposalCount, findMany: proposals },
+    bug: { findUnique: bugFindUnique, findMany: publishedTasks, groupBy: taskCounts, count: bugCount, findFirst: bugFindFirst },
+    idea: { count: proposalCount, findMany: proposals, findFirst: ideaFindFirst },
     ideaVerdict: { groupBy: proposalVotes, findMany: myVerdicts },
     agent: { findMany: proposalAgents },
     membership: { findUnique: membershipFindUnique, findMany: membershipFindMany },
@@ -86,11 +90,11 @@ import { readRejectedIdeas } from "@/app/(app)/[org]/[project]/marketing/ideas/r
 import { parseTaskView } from "@/components/marketing/tasks/model";
 import { marketingTabHref } from "@/lib/header-nav";
 import { issueProject } from "@/lib/agent-api/issues";
+import { getSkills, CORE_SKILL_TEMPLATES } from "@/app/(app)/skills/skills-data";
 import { projectRef } from "@/lib/project-paths";
 import { canManageProject } from "@/lib/project-permissions";
 import { joinOpenProjectAction } from "@/app/actions/project-join-requests";
 import { requireUser } from "@/lib/auth-helpers";
-import { getSkills, CORE_SKILL_TEMPLATES } from "@/app/(app)/skills/skills-data";
 import { reviewSkillSubmissionAction } from "@/app/actions/skill-submissions";
 import IssueHistoryPage from "@/app/(app)/[org]/[project]/[number]/history/page";
 import ProjectIssueLayout from "@/app/(app)/[org]/[project]/[number]/layout";
@@ -374,7 +378,18 @@ describe("joinOpenProjectAction (#earnings)", () => {
   it("opens the project's Ideas when it has no marketing tasks waiting", async () => {
     findFirst.mockResolvedValue(open);
     bugCount.mockResolvedValue(0);
+    // Product work in it: an ordinary project.
+    bugFindFirst.mockImplementation(async ({ where }: { where: { track: string } }) => (where.track === "product" ? { id: "b" } : null));
+    ideaFindFirst.mockResolvedValue(null);
     expect(await joinOpenProjectAction("p-1")).toEqual({ ok: true, href: "/ziki/ziki-marketing/ideas" });
+  });
+
+  it("opens an all-marketing project's Marketing tab while its tasks are all still ideas (#marketing-home)", async () => {
+    findFirst.mockResolvedValue(open);
+    bugCount.mockResolvedValue(0);
+    bugFindFirst.mockResolvedValue(null);
+    ideaFindFirst.mockImplementation(async ({ where }: { where: { track: string } }) => (where.track === "marketing" ? { id: "i" } : null));
+    expect(await joinOpenProjectAction("p-1")).toEqual({ ok: true, href: "/ziki/ziki-marketing/marketing" });
   });
 
   it("refuses a project that isn't open, or isn't public, and adds nobody", async () => {

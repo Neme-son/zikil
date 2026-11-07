@@ -1,3 +1,6 @@
+import { optionalUser } from "@/lib/auth-helpers";
+import { prisma } from "@/lib/prisma";
+
 import { getSkills } from "./skills-data";
 import { SkillsDirectory } from "./skills-directory";
 import { optionalUser } from "@/lib/auth-helpers";
@@ -6,7 +9,7 @@ import { prisma } from "@/lib/prisma";
 export const metadata = {
   title: "Agent Skills Library — Ziki",
   description:
-    "Discover agent prompts, scripts, and security guardrails published by the community and approved by a reviewer.",
+    "Discover tested agent prompts, verification scripts, and security guardrails published by the community.",
 };
 
 export default async function SkillsPage() {

@@ -7,9 +7,9 @@ import { withdrawDetailsAction, type WithdrawDetails } from "@/app/(app)/earning
 
 const money = (n: number) => `$${n.toFixed(2)}`;
 const PRIMARY =
-  "inline-flex min-h-11 items-center justify-center rounded-full bg-electric-blue-strong px-5 text-sm font-bold text-white shadow-[0_8px_20px_rgba(46,111,239,0.30)] transition hover:bg-[#2552af] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-electric-blue focus-visible:ring-offset-2";
+  "inline-flex min-h-11 items-center justify-center rounded-full bg-electric-blue-strong px-5 text-sm font-bold whitespace-nowrap text-white max-sm:px-2 max-sm:text-[13px] shadow-[0_8px_20px_rgba(46,111,239,0.30)] transition hover:bg-[#2552af] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-electric-blue focus-visible:ring-offset-2";
 const SECONDARY =
-  "inline-flex min-h-11 items-center justify-center rounded-full border border-zk-border bg-zk-surface px-5 text-sm font-bold text-zk-text transition hover:bg-zk-chip focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-electric-blue focus-visible:ring-offset-2";
+  "inline-flex min-h-11 items-center justify-center rounded-full border border-zk-border bg-zk-surface px-5 text-sm font-bold whitespace-nowrap text-zk-text max-sm:px-2 max-sm:text-[13px] transition hover:bg-zk-chip focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-electric-blue focus-visible:ring-offset-2";
 
 /**
  * The withdraw bar, as Earn always drew it: what you've earned (green), what Ziki is still checking (yellow
@@ -25,7 +25,7 @@ function WithdrawBar({ earned: raw, checking: rawChecking }: { earned: number; c
   const pct = (value: number) => `${(value / total) * 100}%`;
   const parts = [
     { key: "earned", value: earned, shown: Math.max(0, raw), bar: "bg-zk-ok-fg", dot: "bg-zk-ok-fg", text: "font-bold text-zk-text", label: "earned" },
-    { key: "checking", value: checking, shown: rawChecking, bar: "bg-[repeating-linear-gradient(45deg,#f2c14e_0,#f2c14e_6px,#f7d98a_6px,#f7d98a_12px)]", dot: "bg-[#f2c14e]", text: "font-bold text-zk-warn-fg", label: "Ziki is checking" },
+    { key: "checking", value: checking, shown: rawChecking, bar: "bg-[repeating-linear-gradient(45deg,#f2c14e_0,#f2c14e_6px,#f7d98a_6px,#f7d98a_12px)]", dot: "bg-[#f2c14e]", text: "font-bold text-zk-warn-fg", label: "being checked" },
     { key: "togo", value: toGo, shown: toGo, bar: "bg-zk-accent/35", dot: "bg-zk-accent/40", text: "font-bold text-zk-accent", label: "to go" },
   ];
 
@@ -54,7 +54,8 @@ function WithdrawBar({ earned: raw, checking: rawChecking }: { earned: number; c
       </div>
       <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-zk-text2">
         {parts.map((part) =>
-          part.key === "earned" || part.shown > 0 ? (
+          // Earned always shows; "being checked" and "to go" only while the bar isn't full yet.
+          part.key === "earned" || (!ready && part.shown > 0) ? (
             <span key={part.key} className="inline-flex items-center gap-1.5">
               <span aria-hidden="true" className={`h-2 w-2 rounded-full ${part.dot}`} />
               <span className={part.text}>{money(part.shown)}</span> {part.label}
@@ -68,11 +69,11 @@ function WithdrawBar({ earned: raw, checking: rawChecking }: { earned: number; c
 
 /**
  * Withdraw (#earnings, Mark's review): always a window in the middle of the page you are on, never a trip to another
- * page, the way Earn showed it. It shows the threshold and your balance against it on the withdraw bar, with a link
- * to Your earnings. Payouts aren't built yet: at $30 or more it says the money is ready and that taking it out is
+ * page, the way Earn showed it. It shows the threshold and what you earned in the workspace you're in against it on
+ * the withdraw bar (not your total across workspaces), with a link to Your earnings for that workspace. Payouts aren't built yet: at $30 or more it says the money is ready and that taking it out is
  * coming.
  */
-export function WithdrawWindow({ earned, className, children }: { earned: number; className: string; children: React.ReactNode }) {
+export function WithdrawWindow({ earned, organisationId, className, children }: { earned: number; organisationId: string | null; className: string; children: React.ReactNode }) {
   const [open, setOpen] = useState(false);
   const [details, setDetails] = useState<WithdrawDetails | null>(null);
   const dialogRef = useRef<HTMLDialogElement>(null);
@@ -85,7 +86,7 @@ export function WithdrawWindow({ earned, className, children }: { earned: number
 
   function show() {
     setOpen(true);
-    withdrawDetailsAction().then(setDetails, () => undefined);
+    withdrawDetailsAction(organisationId).then(setDetails, () => undefined);
   }
   function close() {
     setOpen(false);
@@ -117,9 +118,20 @@ export function WithdrawWindow({ earned, className, children }: { earned: number
           }}
           className="m-auto w-[min(32rem,calc(100vw-2rem))] rounded-[20px] border border-zk-border bg-zk-surface p-6 text-zk-text shadow-xl backdrop:bg-black/40"
         >
-          <h2 id="withdraw-title" className="text-xl font-extrabold tracking-tight text-zk-text">
-            {ready ? `You’ve reached $${WITHDRAW_THRESHOLD}` : `Withdrawals open at $${WITHDRAW_THRESHOLD}`}
-          </h2>
+          <div className="flex items-start justify-between gap-3">
+            <h2 id="withdraw-title" className="text-xl font-extrabold tracking-tight text-zk-text">
+              {ready ? `You’ve reached $${WITHDRAW_THRESHOLD}` : `Withdrawals open at $${WITHDRAW_THRESHOLD}`}
+            </h2>
+            {/* × closes it, like the app's other panels (the site URL panel). */}
+            <button
+              type="button"
+              onClick={close}
+              aria-label="Close"
+              className="-mr-1 -mt-1 flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-xl leading-none text-zk-muted transition hover:bg-zk-chip hover:text-zk-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-electric-blue"
+            >
+              ×
+            </button>
+          </div>
           <p className="mt-1 text-sm text-zk-text2">
             {ready ? "Your money is ready. We’re still working out how payouts will work, and we’ll tell you as soon as you can take it out." : `You have ${money(available)}. ${money(left)} to go.`}
           </p>
@@ -132,9 +144,9 @@ export function WithdrawWindow({ earned, className, children }: { earned: number
             <WithdrawBar earned={available} checking={checking} />
           </div>
 
-          <div className="mt-6 flex flex-wrap justify-end gap-2">
-            <button type="button" onClick={close} className={SECONDARY}>Close</button>
-            <Link href="/earnings" onClick={() => setOpen(false)} className={SECONDARY}>See my earnings</Link>
+          {/* Side by side on every screen: two equal columns on phones, right-aligned from sm up. */}
+          <div className="mt-6 grid grid-cols-2 gap-2 sm:flex sm:justify-end">
+            <Link href={details?.workspaceSlug ? `/earnings?in=${encodeURIComponent(details.workspaceSlug)}` : "/earnings"} onClick={() => setOpen(false)} className={SECONDARY}>See my earnings</Link>
             {ready ? (
               <Link href="/settings?section=finance" onClick={() => setOpen(false)} className={PRIMARY}>Add your wallet</Link>
             ) : (

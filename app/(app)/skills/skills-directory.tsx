@@ -32,7 +32,7 @@ export function SkillsDirectory({
   const [searchQuery, setSearchQuery] = useState<string>("");
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
-  // Track target agent for each skill card
+  // Track the target agent chosen on each card, keyed by skill id.
   const [cardSelectedAgents, setCardSelectedAgents] = useState<Record<string, string>>({});
 
   // Category counts matching available skills
@@ -83,18 +83,18 @@ export function SkillsDirectory({
   }, [skills, selectedCategory, searchQuery]);
 
   async function copyPrompt(skill: SkillItem) {
-    const selectedAgent = cardSelectedAgents[skill.id];
-    let promptText = skill.prompt;
-    if (selectedAgent && selectedAgent !== "all") {
-      promptText = `Target Agent: ${selectedAgent}\n\n${skill.prompt}`;
-    }
+    const targetAgent = cardSelectedAgents[skill.id];
+    const targeted = Boolean(targetAgent && targetAgent !== "all");
+    const promptText = targeted
+      ? `Target Agent: ${targetAgent}\n\n${skill.prompt}`
+      : skill.prompt;
 
     try {
       await navigator.clipboard.writeText(promptText);
       showToast(
-        selectedAgent && selectedAgent !== "all"
-          ? `Copied prompt for ${selectedAgent}!`
-          : `Copied "${skill.title}" prompt to clipboard!`
+        targeted
+          ? `Copied "${skill.title}" prompt for ${targetAgent}!`
+          : `Copied "${skill.title}" prompt to clipboard!`,
       );
     } catch {
       showToast("Unable to copy to clipboard.");
@@ -132,7 +132,8 @@ export function SkillsDirectory({
               Agent Skills Library
             </h1>
             <p className="text-sm text-zk-text2 leading-relaxed max-w-[680px]">
-              Discover agent prompts, scripts, and security guardrails published by the community and approved by a reviewer.
+              Discover tested agent prompts, verification scripts, and security
+              guardrails published by the community.
             </p>
           </div>
           <Link
@@ -151,7 +152,9 @@ export function SkillsDirectory({
           {categories.map((cat) => (
             <button
               key={cat.id}
+              type="button"
               onClick={() => setSelectedCategory(cat.id)}
+              aria-pressed={selectedCategory === cat.id}
               className={`flex shrink-0 items-center gap-1.5 rounded-full px-3.5 py-1.5 text-xs font-semibold transition ${
                 selectedCategory === cat.id
                   ? "bg-blue-600 text-white shadow-xs"
@@ -160,7 +163,7 @@ export function SkillsDirectory({
             >
               <span>{cat.label}</span>
               <span
-                className={`rounded-full px-1.5 py-0.2 text-[10px] font-bold ${
+                className={`rounded-full px-1.5 text-[10px] font-bold ${
                   selectedCategory === cat.id
                     ? "bg-white/20 text-white"
                     : "bg-zk-surface text-zk-muted"
@@ -179,6 +182,7 @@ export function SkillsDirectory({
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             placeholder="Search skills or tags..."
+            aria-label="Search skills or tags"
             className="w-full rounded-full border border-zk-border bg-zk-surface px-4 py-1.5 text-xs text-zk-text placeholder:text-zk-muted focus:border-blue-600 focus:outline-hidden"
           />
         </div>
@@ -187,10 +191,10 @@ export function SkillsDirectory({
       {/* Empty State */}
       {loadError ? (
         <div className="rounded-2xl border border-rose-500/20 bg-rose-500/10 p-12 text-center space-y-3">
-          <p className="text-base font-semibold text-rose-600 dark:text-rose-400">Failed to load skills library</p>
-          <p className="text-xs text-zk-muted max-w-sm mx-auto">
-            {loadError}
+          <p className="text-base font-semibold text-rose-600 dark:text-rose-400">
+            Failed to load skills library
           </p>
+          <p className="text-xs text-zk-muted max-w-sm mx-auto">{loadError}</p>
         </div>
       ) : filteredSkills.length === 0 ? (
         <div className="rounded-2xl border border-zk-border bg-zk-surface/50 p-12 text-center space-y-3">
@@ -210,6 +214,8 @@ export function SkillsDirectory({
             return (
               <div
                 key={skill.id}
+                role="link"
+                tabIndex={0}
                 onClick={(e) => {
                   const target = e.target as HTMLElement | null;
                   if (target?.closest("button, a, select, input, label")) {
@@ -217,10 +223,15 @@ export function SkillsDirectory({
                   }
                   router.push(`/skills/${skill.slug}`);
                 }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    router.push(`/skills/${skill.slug}`);
+                  }
+                }}
                 className="group flex flex-col justify-between rounded-2xl border border-zk-border bg-zk-surface p-6 hover:border-blue-500/40 hover:shadow-lg transition-all space-y-4 cursor-pointer"
               >
                 <div className="space-y-3.5">
-                  {/* Top Bar: Icon */}
+                  {/* Top Bar: Icon (links to skill detail) */}
                   <div className="flex items-center justify-between gap-3">
                     <Link
                       href={`/skills/${skill.slug}`}
@@ -286,6 +297,7 @@ export function SkillsDirectory({
                           [skill.id]: e.target.value,
                         }))
                       }
+                      aria-label={`Target agent for ${skill.title}`}
                       className="w-full appearance-none rounded-xl border border-zk-border bg-zk-chip/60 hover:bg-zk-chip py-2 pl-3.5 pr-8 text-xs font-semibold text-zk-text focus:border-blue-600 focus:outline-hidden transition cursor-pointer"
                     >
                       {agents.length > 0 ? (

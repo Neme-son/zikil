@@ -15,10 +15,29 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("@/lib/prisma", () => ({
-  prisma: { skillSubmission: { findFirst: mocks.findFirst, findUnique: mocks.findUnique, update: mocks.update, create: mocks.create } },
+  prisma: {
+    skillSubmission: {
+      findFirst: mocks.findFirst,
+      findUnique: mocks.findUnique,
+      update: mocks.update,
+      create: mocks.create,
+    },
+  },
 }));
-vi.mock("@/lib/session-user", () => ({ resolveSessionUserId: async () => ({ userId: "user-1" }) }));
-vi.mock("@/lib/rate-limit", () => ({ checkRateLimit: () => ({ allowed: true, retryAfterMs: 0, remaining: 4, resetAfterMs: 0 }) }));
+vi.mock("@/lib/session-user", () => ({
+  resolveSessionUserId: async () => ({ userId: "user-1" }),
+}));
+vi.mock("@/lib/auth-helpers", () => ({
+  requireSuperAdmin: async () => ({ id: "user-1", role: "super_admin" }),
+}));
+vi.mock("@/lib/rate-limit", () => ({
+  checkRateLimit: () => ({
+    allowed: true,
+    retryAfterMs: 0,
+    remaining: 4,
+    resetAfterMs: 0,
+  }),
+}));
 
 import { POST } from "@/app/api/v1/skills/submissions/route";
 
@@ -42,7 +61,11 @@ describe("POST /api/v1/skills/submissions (revision)", () => {
   });
 
   it("persists revised tags and checklist and resets status to pending", async () => {
-    mocks.findFirst.mockResolvedValue({ id: "sub-1", submittedById: "user-1", status: "rejected" });
+    mocks.findFirst.mockResolvedValue({
+      id: "sub-1",
+      submittedById: "user-1",
+      status: "rejected",
+    });
     mocks.update.mockResolvedValue({
       id: "sub-1",
       slug: "login-button-broken",
@@ -77,7 +100,11 @@ describe("POST /api/v1/skills/submissions (revision)", () => {
   });
 
   it("does not revise when the target submission is not rejected", async () => {
-    mocks.findFirst.mockResolvedValue({ id: "sub-2", submittedById: "user-1", status: "approved" });
+    mocks.findFirst.mockResolvedValue({
+      id: "sub-2",
+      submittedById: "user-1",
+      status: "approved",
+    });
     mocks.create.mockResolvedValue({
       id: "sub-new",
       slug: "login-button-broken",

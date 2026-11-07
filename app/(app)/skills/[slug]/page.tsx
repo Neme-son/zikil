@@ -1,9 +1,27 @@
 import { notFound } from "next/navigation";
 import Link from "next/link";
 import { JsonLd } from "@/components/json-ld";
-import { getSkillBySlug } from "../skills-data";
-import type { SkillItem } from "../skills-data";
+import { getSkillBySlug, SkillUnavailableError, type SkillItem } from "../skills-data";
 import { CopyPromptButton, CopyCommandButton } from "./copy-button";
+
+/** GAP 3: a failing database renders this instead of a misleading 404. */
+function SkillUnavailableBanner() {
+  return (
+    <div className="mx-auto max-w-3xl space-y-4 py-16 text-center">
+      <h1 className="text-2xl font-extrabold tracking-tight text-zk-text">Skill unavailable</h1>
+      <p role="alert" className="text-sm text-zk-text2">
+        The skills library is temporarily unavailable, so this skill can&apos;t be loaded right now. Please try
+        again in a moment.
+      </p>
+      <Link
+        href="/skills"
+        className="inline-flex items-center justify-center rounded-xl border border-zk-border bg-zk-chip px-4 py-2 text-xs font-semibold text-zk-text hover:bg-zk-tint transition"
+      >
+        ← Back to Library
+      </Link>
+    </div>
+  );
+}
 
 export async function generateMetadata({
   params,
@@ -11,13 +29,15 @@ export async function generateMetadata({
   params: Promise<{ slug: string }>;
 }) {
   const { slug } = await params;
+
   let skill: SkillItem | undefined;
   try {
     skill = await getSkillBySlug(slug);
-  } catch {
+  } catch (error) {
+    if (!(error instanceof SkillUnavailableError)) throw error;
     return {
-      title: "Skill Unavailable — Skills Library — Ziki",
-      description: "The requested skill could not be loaded right now.",
+      title: "Skills Library Unavailable — Ziki",
+      description: "The skills library is temporarily unavailable. Please try again shortly.",
     };
   }
 
@@ -50,27 +70,13 @@ export default async function SkillDetailPage({
   params: Promise<{ slug: string }>;
 }) {
   const { slug } = await params;
+
   let skill: SkillItem | undefined;
-  let loadError: string | null = null;
   try {
     skill = await getSkillBySlug(slug);
   } catch (error) {
-    loadError = error instanceof Error ? error.message : "Unable to load this skill right now.";
-    skill = undefined;
-  }
-
-  if (loadError) {
-    return (
-      <div className="mx-auto max-w-5xl space-y-8 pb-16">
-        <div className="rounded-2xl border border-rose-500/20 bg-rose-500/10 p-6 sm:p-8 text-center space-y-3">
-          <p className="text-base font-semibold text-rose-600 dark:text-rose-400">Skill unavailable</p>
-          <p className="text-xs text-zk-muted max-w-sm mx-auto">{loadError}</p>
-          <Link href="/skills" className="inline-block text-xs font-bold text-zk-accent hover:underline">
-            ← Back to Library
-          </Link>
-        </div>
-      </div>
-    );
+    if (!(error instanceof SkillUnavailableError)) throw error;
+    return <SkillUnavailableBanner />;
   }
 
   if (!skill) {

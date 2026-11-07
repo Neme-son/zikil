@@ -58,9 +58,9 @@ export function parseWeeklyGoal(raw: unknown): number | null {
   return value > 0 && value <= MAX_WEEKLY_GOAL ? value : null;
 }
 
-/** Everything a person has earned, across every organisation. */
-export async function totalEarned(db: Db, userId: string): Promise<number> {
-  const sum = await db.pointEntry.aggregate({ where: { userId }, _sum: { points: true } });
+/** What a person has earned: in one workspace when `organisationId` is given, else across every one. */
+export async function totalEarned(db: Db, userId: string, organisationId: string | null = null): Promise<number> {
+  const sum = await db.pointEntry.aggregate({ where: { userId, ...(organisationId ? { organisationId } : {}) }, _sum: { points: true } });
   return pointsNumber(sum._sum.points);
 }
 
@@ -74,22 +74,23 @@ export const WORK_ROLES: PointRole[] = ["solver", "reviewer", "triager", "submis
  * project from Discover. Posting ideas, verdicts, votes, upvoted comments and the sign-up bonus don't count. Null
  * hides it.
  */
-export async function headerEarnings(db: Db, userId: string): Promise<number | null> {
+export async function headerEarnings(db: Db, userId: string, organisationId: string | null = null): Promise<number | null> {
   const [entry, joined] = await Promise.all([
     db.pointEntry.findFirst({ where: { userId, role: { in: WORK_ROLES }, points: { gt: 0 } }, select: { id: true } }),
     db.projectMembership.findFirst({ where: { userId }, select: { id: true } }),
   ]);
   if (!entry && !joined) return null;
-  return entry ? totalEarned(db, userId) : 0;
+  // What you earned in the workspace you're in (Chloe's call); Withdraw still shows your total.
+  return entry ? totalEarned(db, userId, organisationId) : 0;
 }
 
 /** A held award, as lib/points/payout.ts keeps it on the issue. */
 type HeldAward = { userId?: unknown; points?: unknown };
 
 /** Money won on live issues that is waiting for the deploy reports before it is paid. */
-export async function beingChecked(db: Db, userId: string): Promise<number> {
+export async function beingChecked(db: Db, userId: string, organisationId: string | null = null): Promise<number> {
   const bugs = await db.bug.findMany({
-    where: { payoutReleasedAt: null, heldPayout: { not: Prisma.AnyNull } },
+    where: { payoutReleasedAt: null, heldPayout: { not: Prisma.AnyNull }, ...(organisationId ? { organisationId } : {}) },
     select: { heldPayout: true },
     take: 500,
   });
@@ -164,16 +165,19 @@ export async function taskScopeFor(db: Db, userId: string, selected: string | nu
 }
 
 export async function earningsSummary(db: Db, userId: string, scope: TaskScope | null = null) {
+  // Everything on the page is for the selected workspace only (Chloe's call: no total across workspaces).
+  const inOrg = scope?.organisationId ?? null;
+  const here = inOrg ? { organisationId: inOrg } : {};
   const weekStart = startOfWeek();
   const [total, checking, week, goalRow, byRole, solvedCount, latest, projectMemberships] = await Promise.all([
-    totalEarned(db, userId),
-    beingChecked(db, userId),
-    db.pointEntry.aggregate({ where: { userId, createdAt: { gte: weekStart } }, _sum: { points: true } }),
+    totalEarned(db, userId, inOrg),
+    beingChecked(db, userId, inOrg),
+    db.pointEntry.aggregate({ where: { userId, ...here, createdAt: { gte: weekStart } }, _sum: { points: true } }),
     db.user.findUnique({ where: { id: userId }, select: { weeklyEarningsGoal: true } }),
-    db.pointEntry.groupBy({ by: ["role"], where: { userId }, _sum: { points: true } }),
-    db.pointEntry.count({ where: { userId, role: "solver", points: { gt: 0 } } }),
+    db.pointEntry.groupBy({ by: ["role"], where: { userId, ...here }, _sum: { points: true } }),
+    db.pointEntry.count({ where: { userId, ...here, role: "solver", points: { gt: 0 } } }),
     db.pointEntry.findMany({
-      where: { userId },
+      where: { userId, ...here },
       orderBy: [{ createdAt: "desc" }, { id: "desc" }],
       take: 6,
       select: {

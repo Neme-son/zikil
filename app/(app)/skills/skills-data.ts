@@ -16,6 +16,19 @@ export function getCategoryLabel(category: string): string {
   return CATEGORY_LABELS[category as SkillCategory] || "General";
 }
 
+/**
+ * The skills database is unreachable or erroring, as opposed to a slug that
+ * genuinely does not exist. Callers show an "unavailable" banner for this and
+ * keep `notFound()` for the missing-skill case (GAP 3).
+ */
+export class SkillUnavailableError extends Error {
+  constructor(cause?: unknown) {
+    super("The skills library is temporarily unavailable.");
+    this.name = "SkillUnavailableError";
+    this.cause = cause;
+  }
+}
+
 export interface SkillItem {
   id: string;
   slug: string;
@@ -59,7 +72,7 @@ function mapSubmissionToSkill(sub: {
   slug: string;
   title: string;
   category: string;
-  categoryLabel?: string;
+  categoryLabel: string;
   summary: string;
   tags: string[];
   prompt: string;
@@ -79,7 +92,7 @@ function mapSubmissionToSkill(sub: {
     title: sub.title,
     icon: resolveIcon(sub.title, sub.category),
     category,
-    categoryLabel: getCategoryLabel(category),
+    categoryLabel: sub.categoryLabel || getCategoryLabel(category),
     description: sub.summary,
     tags: Array.isArray(sub.tags) ? sub.tags : [],
     prompt: sub.prompt,
@@ -119,7 +132,7 @@ Before executing:
 3. Build scripts or dev servers (pnpm run dev, next, vite, node)
 
 Prepend the command with the snare gate:
-  snare gate -- <the exact command>
+snare gate -- <the exact command>
 
 Rules:
 - Exit code 0: The command is clean. Proceed with execution.
@@ -148,7 +161,7 @@ Rules:
     title: "Playwright E2E Browser Inspector",
     icon: "browser",
     category: "testing",
-    categoryLabel: "Testing & QA",
+    categoryLabel: CATEGORY_LABELS.testing,
     description:
       "Automates headless Chromium browser user flows, inspects console logs for unhandled errors, and asserts responsive component states.",
     tags: ["playwright", "e2e", "browser", "testing", "qa"],
@@ -162,7 +175,7 @@ When validating web applications or new user journeys:
 4. Capture traces and screenshots on assertion failures to provide actionable bug repros.
 
 Execution command:
-  pnpm exec playwright test`,
+pnpm exec playwright test`,
     spec: {
       overview:
         "Runs headless Chromium and mobile emulation suites to catch rendering bugs, broken form submissions, and uncaught browser exceptions before release.",
@@ -187,7 +200,7 @@ Execution command:
     title: "WCAG 2.1 AA Accessibility Auditor",
     icon: "a11y",
     category: "testing",
-    categoryLabel: "Testing & QA",
+    categoryLabel: CATEGORY_LABELS.testing,
     description:
       "Automated compliance checks ensuring interactive controls, forms, focus outlines, and color contrast meet WCAG 2.1 AA standards.",
     tags: ["accessibility", "a11y", "wcag", "axe-core", "testing"],
@@ -201,7 +214,7 @@ When reviewing frontend components or user interfaces:
 4. Validate modal focus traps and Esc key dismissal behaviors.
 
 Audit command:
-  pnpm exec axe-core-cli http://localhost:3000`,
+pnpm exec axe-core-cli http://localhost:3000`,
     spec: {
       overview:
         "Comprehensive accessibility inspection rules to prevent a11y regressions and guarantee compliance with global WCAG 2.1 AA criteria.",
@@ -226,7 +239,7 @@ Audit command:
     title: "Tailwind Design System & Token Validator",
     icon: "figma",
     category: "design",
-    categoryLabel: "Design & UI",
+    categoryLabel: CATEGORY_LABELS.design,
     description:
       "Audits arbitrary hardcoded hex codes, enforces CSS variable theme tokens, and checks responsive spacing scales across UI components.",
     tags: ["tailwind", "css", "design-system", "ui", "tokens"],
@@ -240,7 +253,7 @@ When building or reviewing frontend user interfaces:
 4. Verify micro-interactions have appropriate transition durations (150ms-200ms) and accessible focus rings.
 
 Audit command:
-  pnpm exec tailwindcss --check`,
+pnpm exec tailwindcss --check`,
     spec: {
       overview:
         "Guarantees interface visual consistency and maintainability by enforcing Tailwind CSS theme tokens instead of ad-hoc arbitrary styles.",
@@ -265,7 +278,7 @@ Audit command:
     title: "PostgreSQL & Prisma Schema Guard",
     icon: "database",
     category: "backend",
-    categoryLabel: "Backend & Database",
+    categoryLabel: CATEGORY_LABELS.backend,
     description:
       "Validates relational constraints, checks composite indexes on frequent query paths, and guards against N+1 query patterns.",
     tags: ["postgresql", "prisma", "database", "sql", "performance"],
@@ -279,7 +292,7 @@ When reviewing data schemas, migrations, or database queries:
 4. Ensure schema migrations are backward-compatible and safe for zero-downtime deployment.
 
 Validation command:
-  pnpm exec prisma validate`,
+pnpm exec prisma validate`,
     spec: {
       overview:
         "Ensures high-performance database interactions and prevents table locking or indexing oversights in Prisma and PostgreSQL.",
@@ -304,7 +317,7 @@ Validation command:
     title: "Next.js SEO & Schema.org JSON-LD Validator",
     icon: "seo",
     category: "marketing",
-    categoryLabel: "SEO & Content",
+    categoryLabel: CATEGORY_LABELS.marketing,
     description:
       "Validates OpenGraph social cards, canonical link tags, robots directives, and Schema.org JSON-LD structured data for search engines.",
     tags: ["seo", "nextjs", "metadata", "schema-org", "opengraph"],
@@ -318,7 +331,7 @@ When implementing or auditing page routes:
 4. Verify robots.txt and sitemap.xml rules allow intended search engine indexation.
 
 Verification check:
-  Inspect <head> tags for canonical link, og:image, and JSON-LD schema syntax.`,
+Inspect <head> tags for canonical link, og:image, and JSON-LD schema syntax.`,
     spec: {
       overview:
         "Maximizes search discovery and rich social sharing cards by verifying Next.js App Router metadata and JSON-LD schemas.",
@@ -355,28 +368,25 @@ export async function getSkills(): Promise<GetSkillsResult> {
     });
 
     const communitySkills = approved.map(mapSubmissionToSkill);
-    // Show approved community skills first, followed by official core starter templates
+    // Approved community skills first, then the official core starter templates.
     return { skills: [...communitySkills, ...CORE_SKILL_TEMPLATES] };
   } catch (error) {
     console.error("[skills] failed to load approved skills from db:", error);
-    // When DB is unreachable or cold, safely serve the core starter templates
-    return {
-      skills: CORE_SKILL_TEMPLATES,
-      error: null,
-    };
+    // A cold or unreachable database must not blank the library.
+    return { skills: CORE_SKILL_TEMPLATES, error: null };
   }
 }
 
 export async function getSkillBySlug(slug: string): Promise<SkillItem | undefined> {
   const normalized = slug.trim().toLowerCase();
 
-  // 1. Check core starter templates
+  // 1. Core starter templates always resolve, even without a database.
   const coreMatch = CORE_SKILL_TEMPLATES.find(
-    (s) => s.slug.toLowerCase() === normalized || s.id === slug
+    (s) => s.slug.toLowerCase() === normalized || s.id === normalized,
   );
   if (coreMatch) return coreMatch;
 
-  // 2. Query database for approved community submissions
+  // 2. Approved community submissions.
   try {
     const sub = await prisma.skillSubmission.findFirst({
       where: {
@@ -392,6 +402,9 @@ export async function getSkillBySlug(slug: string): Promise<SkillItem | undefine
     return mapSubmissionToSkill(sub);
   } catch (error) {
     console.error("[skills] failed to load skill by slug", error);
-    throw new Error("Unable to load skill from the database. Please try again later.");
+    // A broken database is not a missing skill: the page shows a banner instead
+    // of a misleading 404 (GAP 3).
+    throw new SkillUnavailableError(error);
   }
 }
+

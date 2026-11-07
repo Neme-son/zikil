@@ -9,6 +9,7 @@ import {
 } from "@/lib/validations/skill";
 
 export async function POST(req: NextRequest) {
+  // GAP 4: an API route answers with a JSON 401 instead of redirecting to /login.
   const session = await resolveSessionUserId();
   if ("error" in session) {
     return NextResponse.json({ error: "Not signed in" }, { status: 401 });

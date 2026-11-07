@@ -201,9 +201,13 @@ export default async function AppLayout({
     }
   }
 
-  // Earnings (#earnings): everything this person has earned, on every project, shown with Withdraw on every page to
-  // anyone who works on projects (not to people who only post them). A failed read hides it rather than the page.
-  const earned = await headerEarnings(prisma, user.id).catch((error) => {
+  // Earnings (#earnings): what this person has earned in the workspace they're in, shown with Withdraw on every page
+  // to anyone who works on projects (not to people who only post them). The workspace is the one in the address
+  // (one they belong to, or one they joined a project of), else their active one. A failed read hides it.
+  const routeSlug = requestPath.split("/").filter(Boolean)[0] ?? null;
+  const earningsOrganisationId =
+    (routeSlug ? externalProjects.find((project) => project.organisationSlug === routeSlug)?.organisationId : null) ?? organisationId;
+  const earned = await headerEarnings(prisma, user.id, earningsOrganisationId).catch((error) => {
     console.error("[layout] earnings total failed", error);
     return null;
   });
@@ -239,6 +243,7 @@ export default async function AppLayout({
           activeOrganisationId={activeOrganisationId}
           defaultProjectSlug={defaultProjectSlug}
           earned={earned}
+          earningsOrganisationId={earningsOrganisationId}
           version={appVersionLabel()}
         />
         <main
