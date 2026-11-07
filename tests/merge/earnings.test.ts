@@ -57,8 +57,8 @@ describe("who sees $ and Withdraw in the header (#earnings)", () => {
     expect(await headerEarnings(db(false, false), "poster")).toBeNull();
   });
 
-  it("shows $0 to someone who just joined a project, and their total once they earn", async () => {
-    expect(await headerEarnings(db(false, true), "joiner")).toBe(0);
+  it("shows someone who just joined a project their real total, the signup bonus included, and the same once they earn", async () => {
+    expect(await headerEarnings(db(false, true), "joiner")).toBe(4.5);
     expect(await headerEarnings(db(true, true), "earner")).toBe(4.5);
   });
 });

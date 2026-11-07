@@ -1,4 +1,4 @@
-import type { Prisma } from "@prisma/client";
+import { Prisma } from "@prisma/client";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { audit } from "@/lib/agents/audit";
@@ -14,12 +14,13 @@ import { IssueApiError } from "@/lib/agent-api/errors";
 import { parseIssueRef } from "@/lib/issue-ref";
 import { parsePullRequestUrl, sameRepo } from "@/lib/github/pull-request-url";
 import { PROJECT_REPOSITORIES_SELECT, repoForPullRequest } from "@/lib/github/project-repositories";
-import { standingAcceptance } from "@/lib/accepted-fix";
+import { acceptedFixGate, releaseAcceptedFix } from "@/lib/accepted-fix";
 import { latestPullRequestReport } from "@/lib/agent-api/pull-request-report";
 import { moveTo } from "@/lib/issue-substatus";
 import { deliverableText, marketingDeliveryBodySchema } from "@/lib/validations/marketing";
 import { linkAttachments } from "@/lib/attachment-link";
 import { MAX_ATTACHMENTS_PER_ITEM } from "@/lib/attachments";
+import { deliveryReceiptSchema, storedReceipt, type DeliveryReceipt } from "@/lib/delivery-receipt";
 
 /**
  * Work delivered (#delivered-step): the In progress step's entry. The agent
@@ -40,6 +41,11 @@ import { MAX_ATTACHMENTS_PER_ITEM } from "@/lib/attachments";
  * replaces this agent's delivery and returns the issue to Delivered; only
  * judgements on the delivered pull request count.
  *
+ * A delivery may carry a receipt (#delivery-receipt, lib/delivery-receipt.ts):
+ * what the agent verified and how, what it did not verify and why, and what
+ * the reviewer should test. It is shown under the delivery and handed to
+ * testers with GET /issues/{id}/test-results, so judgements answer it.
+ *
  * Agents report pull requests and Ziki reads them on GitHub (#pr-reports, #github-status): the delivery records the pull request
  * and the head commit the deliverer names. When an independent agent's latest
  * report on that pull request says it is merged, closed or missing, it can't be
@@ -57,6 +63,8 @@ export const deliveryBodySchema = z
     description: entryDescription,
     screenshots: z.array(z.string().trim().min(1).max(2048)).max(20).optional(),
     testResults: z.union([z.string().trim().min(1).max(20_000), z.record(z.string(), z.unknown())]).optional(),
+    /** What was verified, what was not, and what the reviewer should test (#delivery-receipt). Both tracks. */
+    receipt: deliveryReceiptSchema.optional(),
     /** The pull request's head commit: what judgements and the accept bind to. Product work only. */
     headSha: z.string().trim().regex(/^[0-9a-f]{7,64}$/i, "headSha must be a hexadecimal commit SHA.").optional(),
     /** The finished work as Markdown, shown as a file. Marketing work only. */
@@ -91,6 +99,8 @@ export type DeliveryEntry = {
   headSha: string | null;
   screenshots: string[];
   testResults: string | null;
+  /** The delivery receipt (#delivery-receipt), or null when the delivery carried none. */
+  receipt: DeliveryReceipt | null;
   /** On the pull request linked now: the work being judged. */
   current: boolean;
   createdAt: Date;
@@ -126,6 +136,7 @@ export async function deliveryEntries(bug: { id: string; pullRequestUrl: string 
       headSha: true,
       screenshots: true,
       testResults: true,
+      receipt: true,
       createdAt: true,
       updatedAt: true,
       agent: { select: { name: true } },
@@ -133,8 +144,9 @@ export async function deliveryEntries(bug: { id: string; pullRequestUrl: string 
       replies: entryReplySelect,
     },
   });
-  return rows.map(({ agent, beneficiary, replies, ...row }) => ({
+  return rows.map(({ agent, beneficiary, replies, receipt, ...row }) => ({
     ...row,
+    receipt: storedReceipt(receipt),
     agentName: agent.name,
     by: beneficiary.name ?? "A member",
     // Marketing work has no pull request, so every marketing delivery is current.
@@ -288,6 +300,8 @@ export async function deliverWork(
   // Marketing work stops here: no pull request, repository, report or head commit.
   const pullRequestUrl = marketing ? null : body.pullRequestUrl!;
   const headSha = marketing ? null : body.headSha ?? null;
+  /** Set when this delivery replaces an accepted pull request that was closed unmerged (#replacement-pr). */
+  let replacing: { acceptanceId: string; previous: string } | null = null;
   if (!marketing) {
     const ref = parsePullRequestUrl(pullRequestUrl!)!;
     const repo = repoForPullRequest(bug.project, pullRequestUrl);
@@ -295,13 +309,18 @@ export async function deliverWork(
       return { status: 422, error: "wrong_repository", message: "That pull request is not in this project's repository.", field: "pullRequestUrl" };
     }
     // #489: an accepted fix is bound to the pull request that was reviewed.
-    const accepted = await standingAcceptance(prisma, bug.id);
-    if (accepted && bug.pullRequestUrl && bug.pullRequestUrl !== pullRequestUrl) {
-      return {
-        status: 409,
-        error: "accepted_pull_request",
-        message: "This issue's accepted fix is bound to a different pull request: deliver the accepted one.",
-      };
+    // #replacement-pr: unless that pull request was closed without merging, so it
+    // can never merge: then a replacement is delivered and review starts again.
+    const gate = await acceptedFixGate(bug.id, bug.pullRequestUrl);
+    if (gate.acceptance && bug.pullRequestUrl && bug.pullRequestUrl !== pullRequestUrl) {
+      if (!gate.replaceable) {
+        return {
+          status: 409,
+          error: "accepted_pull_request",
+          message: "This issue's accepted fix is bound to a different pull request: deliver the accepted one. (A replacement is accepted only when the accepted pull request is reported closed without merging.)",
+        };
+      }
+      replacing = { acceptanceId: gate.acceptance.id, previous: bug.pullRequestUrl };
     }
 
     // The pull request has to be open: the latest independent report on it says
@@ -346,6 +365,8 @@ export async function deliverWork(
       headSha,
       screenshots,
       testResults,
+      // Delivering again replaces the delivery, its receipt included.
+      receipt: body.receipt ?? Prisma.JsonNull,
     };
     const saved = existing
       ? await tx.delivery.update({ where: { id: existing.id }, data, select: { id: true } })
@@ -371,17 +392,27 @@ export async function deliverWork(
         data: { pullRequestUrl: pullRequestUrl! },
       });
     }
+    // #replacement-pr: the accepted pull request is closed unmerged; the acceptance goes
+    // with it and the replacement is reviewed afresh.
+    if (replacing) {
+      await releaseAcceptedFix(tx, { bugId: bug.id, acceptanceId: replacing.acceptanceId, previous: replacing.previous, next: pullRequestUrl!, actorUserId: agent.ownerId });
+    }
     await tx.bugActivity.create({
       data: {
         bugId: bug.id,
         actorId: agent.ownerId,
         type: "status_changed",
-        summary: marketing ? "delivered the work" : `delivered the work in ${pullRequestUrl}`,
+        summary: marketing
+          ? "delivered the work"
+          : replacing
+            ? `delivered the work in ${pullRequestUrl}, replacing ${replacing.previous}`
+            : `delivered the work in ${pullRequestUrl}`,
         metadata: {
           field: "status",
           from,
           to: "requires_review",
           deliveryId: saved.id,
+          ...(replacing ? { replacesPullRequestUrl: replacing.previous } : {}),
           ...(marketing
             ? { deliverableUrls: body.deliverableUrls ?? [], attachmentIds }
             : { pullRequestUrl: pullRequestUrl! }),
@@ -397,6 +428,9 @@ export async function deliverWork(
       ...(marketing ? { deliverableUrls: body.deliverableUrls ?? [] } : { pullRequestUrl: pullRequestUrl!, headSha }),
       summary: body.summary,
       agentId: agent.agentId,
+      ...(replacing ? { replacesPullRequestUrl: replacing.previous } : {}),
+      // #delivery-receipt: the receipt travels with the event, so a listener can judge against it.
+      ...(body.receipt ? { receipt: body.receipt } : {}),
       // #stranded-delivery: a manager agent filed it for the person credited.
       ...(onBehalfOf ? { onBehalfOf: true, filedBy: agent.agentId, creditedUserId: beneficiaryUserId! } : {}),
     };

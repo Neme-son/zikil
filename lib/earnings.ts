@@ -80,8 +80,9 @@ export async function headerEarnings(db: Db, userId: string, organisationId: str
     db.projectMembership.findFirst({ where: { userId }, select: { id: true } }),
   ]);
   if (!entry && !joined) return null;
-  // What you earned in the workspace you're in (Chloe's call); Withdraw still shows your total.
-  return entry ? totalEarned(db, userId, organisationId) : 0;
+  // What you earned in the workspace you're in (Chloe's call); Withdraw still shows your total. Once it shows, it is
+  // the real amount, the signup bonus included: someone who just joined sees their $0.67, not $0.
+  return totalEarned(db, userId, organisationId);
 }
 
 /** A held award, as lib/points/payout.ts keeps it on the issue. */

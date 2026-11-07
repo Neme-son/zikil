@@ -6,15 +6,21 @@ type Db = PrismaClient | Prisma.TransactionClient;
 
 /**
  * Whether a project is all marketing (#marketing-home): it has marketing work
- * and no product work, like Ziki's Marketing project. A product project that
- * also has a few marketing tasks is not one.
+ * and no product work, like Ziki's Marketing project. Work is its ideas and its
+ * issues (they are kept apart), so a project whose marketing tasks are all
+ * still ideas counts. A product project that also has a few marketing tasks
+ * is not one.
  */
 export async function isMarketingProject(db: Db, projectId: string): Promise<boolean> {
-  const [marketing, product] = await Promise.all([
-    db.bug.findFirst({ where: { projectId, isDeleted: false, ...MARKETING_TRACK }, select: { id: true } }),
-    db.bug.findFirst({ where: { projectId, isDeleted: false, ...PRODUCT_TRACK }, select: { id: true } }),
+  const marketing = { projectId, isDeleted: false, ...MARKETING_TRACK };
+  const product = { projectId, isDeleted: false, ...PRODUCT_TRACK };
+  const [marketingIdea, marketingIssue, productIdea, productIssue] = await Promise.all([
+    db.idea.findFirst({ where: marketing, select: { id: true } }),
+    db.bug.findFirst({ where: marketing, select: { id: true } }),
+    db.idea.findFirst({ where: product, select: { id: true } }),
+    db.bug.findFirst({ where: product, select: { id: true } }),
   ]);
-  return Boolean(marketing) && !product;
+  return Boolean(marketingIdea || marketingIssue) && !productIdea && !productIssue;
 }
 
 /** Where a project opens (`/<org>/<project>`): its Marketing tab when it is all marketing, else its Ideas. */
