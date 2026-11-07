@@ -159,7 +159,7 @@ test('command refuses when the MCP server is not built', async () => {
       { home, root: CLI_ROOT },
     );
     assert.equal(result.code, 1);
-    assert.match(result.text, /not built/);
+    assert.match(result.text, /MCP server missing/);
   } finally {
     fs.rmSync(home, { recursive: true, force: true });
   }
