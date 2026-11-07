@@ -296,7 +296,7 @@ export function AuthSplitFrame({
   mark?: boolean;
 }) {
   return (
-    <div className="zk-motion ziki-auth-frame flex min-h-screen flex-col bg-zk-bg text-zk-text lg:flex-row">
+    <div className="zk-motion ziki-auth-frame flex min-h-0 flex-1 flex-col bg-zk-bg text-zk-text lg:flex-row">
       <BrandPanel />
       <section
         aria-label={panelLabel}

@@ -204,7 +204,7 @@
 .ziki-homepage .footer-links b { font-family: var(--font-inter), sans-serif; font-size: 12px; margin-bottom: 4px; }
 .ziki-homepage .footer-links a { color: #7a857f; font-size: 11px; }
 .ziki-homepage .footer-links a:hover { color: var(--green); }
-.ziki-homepage .footer-bottom { border-top: 1px solid var(--line); color: #929b96; display: flex; font-size: 10px; grid-column: 1 / -1; justify-content: space-between; margin-top: 48px; padding-top: 24px; }
+.ziki-homepage .footer-bottom { border-top: 1px solid var(--line); color: #929b96; display: flex; flex-wrap: wrap; font-size: 10px; gap: 10px 18px; grid-column: 1 / -1; justify-content: space-between; margin-top: 48px; padding-top: 24px; }
 
 /* Dark theme surface tuning */
 :root[data-theme='dark'] .ziki-homepage { background: var(--white); }

@@ -25,6 +25,8 @@ import { MarketingReviewsPanel } from "@/components/marketing/marketing-reviews-
 import { createWebhookAction, listWebhooksAction } from "@/app/actions/webhooks";
 import { OnScreenGuide } from "@/components/support-guide/on-screen-guide";
 import { getPageGuidance, searchSupportAnswers } from "@/components/support-guide/support-guide-data";
+import { VersionFooter } from "@/components/version-footer";
+import { appVersionLabel } from "@/lib/deployed-version";
 import { projectRef } from "@/lib/project-paths";
 
 vi.mock("@/app/(app)/[org]/[project]/marketing/settings/actions", () => ({
@@ -347,6 +349,33 @@ describe("component accessibility (axe)", () => {
       }
     }
   }, 15000);
+
+  describe("Deployment version footer", () => {
+    it("copies the deployed version and never claims a failed copy", async () => {
+      const writeText = vi.fn().mockResolvedValue(undefined);
+      vi.stubGlobal("navigator", { clipboard: { writeText } });
+
+      const { container } = render(<VersionFooter />);
+      await expectNoA11yViolations(container);
+
+      const copy = screen.getByRole("button", { name: /Copy version/i });
+      fireEvent.click(copy);
+      await waitFor(() =>
+        expect(writeText).toHaveBeenCalledWith(expect.stringContaining(appVersionLabel())),
+      );
+      await waitFor(() =>
+        expect(screen.getByText("Version copied to the clipboard.")).toBeInTheDocument(),
+      );
+
+      writeText.mockRejectedValueOnce(new Error("denied"));
+      fireEvent.click(copy);
+      await waitFor(() =>
+        expect(
+          screen.getByText("Could not copy the version. Select the text instead."),
+        ).toBeInTheDocument(),
+      );
+    });
+  });
 
   describe("Customer Support Guide", () => {
     it("resolves route context guidance for homepage, issues, ideas, and tickets", () => {

@@ -19,6 +19,7 @@ import { organisationsForUser } from "@/lib/organisations";
 import { countPendingEscalations } from "@/lib/agent-questions";
 import { loadOwnAgents } from "@/lib/dashboard-overview";
 import { AgentsDock, type DockAgent } from "@/components/agents-dock";
+import { VersionFooter } from "@/components/version-footer";
 import { appVersionLabel } from "@/lib/deployed-version";
 import { agentActivity, agentEarnings } from "@/lib/points/agent-earnings";
 import { headerEarnings } from "@/lib/earnings";
@@ -76,6 +77,7 @@ export default async function AppLayout({
         <main id={MAIN_CONTENT_ID} className={`${PAGE_CONTAINER_CLASS} flex-1 py-8`}>
           {children}
         </main>
+        <VersionFooter className="border-t border-zk-divider px-4 py-4" />
       </div>
     );
   }
@@ -251,11 +253,13 @@ export default async function AppLayout({
           /* Focusable so the skip link and the route announcer can move focus
              here; -1 keeps it out of the normal tab order. */
           tabIndex={-1}
-          // Below lg the bottom nav strip covers the last ~4.5rem of the screen.
-          className={`${PAGE_CONTAINER_CLASS} min-w-0 flex-1 overflow-x-clip py-6 outline-none max-lg:pb-28 max-sm:px-2 max-sm:pt-2.5 sm:px-6 sm:py-8 max-lg:sm:pb-28`}
+          className={`${PAGE_CONTAINER_CLASS} min-w-0 flex-1 overflow-x-clip py-6 outline-none max-sm:px-2 max-sm:pt-2.5 sm:px-6 sm:py-8`}
         >
           {children}
         </main>
+        {/* Below lg the bottom nav strip covers the last ~4.5rem of the screen,
+            so the footer carries that clearance itself. */}
+        <VersionFooter className="border-t border-zk-divider px-4 pt-4 pb-28 lg:pb-4" />
       </div>
       {/* The agents dock keeps the page's foot clear of its floor line itself, as tall as what stands on it, and draws nothing (no spacer either) where it doesn't help. */}
       <AgentsDock agents={dockAgents} defaultProjectSlug={defaultProjectSlug} memberCount={memberCount} />
