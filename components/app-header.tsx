@@ -330,6 +330,8 @@ export function AppHeader({
   }
 
   const realRole = realRoleOf({ isRealSuperAdmin, isRealAdmin });
+  // The workspace the header $ is for, named so the amount is never read as the total (#862).
+  const earningsWorkspaceName = organisationOptions.find((organisation) => organisation.id === earningsOrganisationId)?.name ?? null;
 
   return (
     // Sticky only from lg: on phones and tablets the toolbar wraps onto rows,
@@ -366,10 +368,11 @@ export function AppHeader({
               <Link
                 href={projectSlug ? `/earnings?in=${projectSlug}` : "/earnings"}
                 aria-current={isNavItemActive(pathname, "/earnings") ? "page" : undefined}
+                title={earningsWorkspaceName ? `Earned in ${earningsWorkspaceName}. Your earnings adds up every workspace.` : undefined}
                 className={`rounded-full px-2.5 py-1 text-sm font-bold tabular-nums text-zk-text hover:bg-zk-chip ${linkFocus}`}
               >
                 {formatZ(earned)}
-                <span className="sr-only"> earned: Your earnings</span>
+                <span className="sr-only"> earned{earningsWorkspaceName ? ` in ${earningsWorkspaceName}` : ""}: Your earnings</span>
               </Link>
               <WithdrawWindow earned={earned} organisationId={earningsOrganisationId} className={`inline-flex items-center justify-center rounded-full bg-electric-blue-strong px-3 py-1.5 text-xs font-bold text-white hover:bg-[#2552af] max-sm:h-8 max-sm:w-8 max-sm:p-0 ${linkFocus}`}>
                 {/* Phones: a wallet icon; tablets and up: the word. Either way it is called Withdraw. */}
@@ -428,6 +431,10 @@ export function AppHeader({
                 </MenuLink>
                 <MenuLink href="/docs" active={isNavItemActive(pathname, "/docs")}>
                   Documentation
+                </MenuLink>
+                {/* The skills library is public, but signed-in people look for it here (GAP 1). */}
+                <MenuLink href="/skills" active={isNavItemActive(pathname, "/skills")}>
+                  Skills library
                 </MenuLink>
                 <div className="mx-2 h-px bg-zk-divider" />
                 <SignOutButton

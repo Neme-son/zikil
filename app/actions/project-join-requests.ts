@@ -4,7 +4,9 @@ import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/prisma";
 import { requireUser } from "@/lib/auth-helpers";
 import { canManageProject } from "@/lib/project-permissions";
-import { ideasPath, marketingPath, orgPath, projectPath, projectRef } from "@/lib/project-paths";
+import { marketingPath, orgPath, projectPath, projectRef } from "@/lib/project-paths";
+import { projectHomePath } from "@/lib/marketing/project-home";
+import { awardSignupBonus } from "@/lib/points/signup-bonus";
 
 export type JoinRequestActionResult = {
   ok?: boolean;
@@ -178,8 +180,8 @@ export type JoinOpenProjectResult = { ok: true; href: string } | { ok: false; er
 /**
  * Joins a project that is open for contributors straight away (#earnings): no request to wait on and nobody to
  * accept it, because opening the project to contributors already said yes. Any earlier request is marked accepted.
- * Returns where to go next: the project's Marketing tab when it has marketing tasks waiting for bids (Ziki
- * Marketing), else its Ideas.
+ * Returns where to go next: the project's Marketing tab when it has marketing tasks waiting for bids or is all
+ * marketing (#marketing-home), else its Ideas.
  */
 export async function joinOpenProjectAction(projectId: string): Promise<JoinOpenProjectResult> {
   const user = await requireUser();
@@ -198,6 +200,12 @@ export async function joinOpenProjectAction(projectId: string): Promise<JoinOpen
       create: { projectId: project.id, userId: user.id },
       update: {},
     });
+    // Joining a project puts you in that project only, not its organisation (Chloe's call, reverting #531): you
+    // see and work in just what you joined. A brand-new person (in no organisation) still gets the signup bonus,
+    // paid in the joined project's organisation: once per account (its source key is the account), so it is never
+    // paid twice, and someone who already has an organisation got theirs, or comes in another way.
+    const inAnOrganisation = await tx.membership.findFirst({ where: { userId: user.id }, select: { id: true } });
+    if (!inAnOrganisation) await awardSignupBonus(tx, user.id, project.organisationId);
     await tx.projectJoinRequest.updateMany({
       where: { projectId: project.id, userId: user.id, status: "pending" },
       data: { status: "accepted", reviewedAt: new Date() },
@@ -210,5 +218,6 @@ export async function joinOpenProjectAction(projectId: string): Promise<JoinOpen
   });
   revalidatePath("/discover");
   revalidatePath(orgPath(pRef, "members"));
-  return { ok: true, href: marketingTasks > 0 ? marketingPath(pRef) : ideasPath(pRef) };
+  const href = marketingTasks > 0 ? marketingPath(pRef) : await projectHomePath(prisma, project.id, pRef);
+  return { ok: true, href };
 }
