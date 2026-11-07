@@ -16,6 +16,7 @@ import { generateApiKey, hashSecret } from "@/lib/agents/keys";
 import { AgentLevelError } from "@/lib/agents/levels";
 import { AgentAuthError, agentErrorResponse, requireAgent } from "@/lib/agents/require-agent";
 import { activateAgent } from "@/lib/agents/registry";
+import { agentConnection } from "@/lib/agents/connection-state";
 
 const KEY = "ziki_valid-key-for-tests";
 const request = (authorization?: string) => ({
@@ -226,5 +227,22 @@ describe("activateAgent", () => {
     });
     expect(tx.agentApiKey.updateMany.mock.calls[0][0].where).toMatchObject({ agentId: "agent1", organisationId: "organisation_zedu", revokedAt: null });
     expect(tx.agentApiKey.create.mock.calls[0][0].data).toMatchObject({ agentId: "agent1", organisationId: "organisation_zedu" });
+  });
+});
+
+/** A connected agent offers Disconnect, not Connect (#861). */
+const agent = (overrides: Record<string, unknown> = {}) => ({ revokedAt: null, activeHere: true, recent: true, apiKeys: [{}], ...overrides });
+
+describe("agentConnection", () => {
+  it("is connected when it works here and used its key in the last day", () => {
+    expect(agentConnection(agent())).toBe("connected");
+  });
+  it("is not connected before the key is used, or once it has gone quiet", () => {
+    expect(agentConnection(agent({ recent: false }))).toBe("not_connected");
+    expect(agentConnection(agent({ apiKeys: [] }))).toBe("not_connected");
+  });
+  it("tells an agent outside this organisation, and a revoked one, apart", () => {
+    expect(agentConnection(agent({ activeHere: false }))).toBe("not_in_organisation");
+    expect(agentConnection(agent({ revokedAt: "2026-11-07T00:00:00Z" }))).toBe("revoked");
   });
 });

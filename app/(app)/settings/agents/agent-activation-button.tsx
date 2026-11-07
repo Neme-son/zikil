@@ -21,6 +21,7 @@ export function AgentActivationButton({
   organisationName,
   active,
   className,
+  takeOutLabel = "Take out",
 }: {
   agentId: string;
   agentName: string;
@@ -28,6 +29,8 @@ export function AgentActivationButton({
   organisationName: string;
   active: boolean;
   className?: string;
+  /** What the button says when the agent works here; Disconnect on the agents list (#861). */
+  takeOutLabel?: string;
 }) {
   const router = useRouter();
   const toast = useToast();
@@ -57,7 +60,7 @@ export function AgentActivationButton({
 
   return (
     <button type="button" onClick={toggle} disabled={pending} className={className ?? (active ? agentsDangerBtn : agentsPrimaryBtn)}>
-      {pending ? (active ? "Taking it out…" : "Bringing it in…") : active ? "Take out" : `Bring into ${organisationName}`}
+      {pending ? (active ? "Taking it out…" : "Bringing it in…") : active ? takeOutLabel : `Bring into ${organisationName}`}
     </button>
   );
 }

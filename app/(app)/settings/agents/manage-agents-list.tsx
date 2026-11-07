@@ -6,6 +6,7 @@ import { setAgentPaused } from "@/app/actions/agent-steering";
 import Link from "next/link";
 import type { AgentLevel } from "@prisma/client";
 import { AGENT_LEVEL_LABELS } from "@/lib/agents/levels";
+import { agentConnection } from "@/lib/agents/connection-state";
 import { agentPageHref } from "@/lib/header-nav";
 import { AgentPortrait } from "@/components/agent-portrait";
 import { colorFor, faceColorKeyFor, lookFor, useDockPrefs } from "@/components/agents-dock-prefs";
@@ -214,7 +215,7 @@ export function ManageAgentsList({
                         />
                       ))
                     : null}
-                  {/* Two buttons: Copy key (above, one per live key) and Connect agent. A new key and Delete are in its settings. */}
+                  {/* Copy key above (one per live key), then Connect agent, or Disconnect once the agent is connected. */}
                   {agent.revokedAt ? (
                     <AgentDeleteButton agentId={agent.id} agentName={agent.name} />
                   ) : organisation && !agent.activeHere ? (
@@ -225,6 +226,22 @@ export function ManageAgentsList({
                       organisationName={organisation.name}
                       active={false}
                     />
+                  ) : organisation && agentConnection(agent) === "connected" ? (
+                    <>
+                      <span className="inline-flex min-h-11 items-center gap-1.5 rounded-full border border-zk-border px-3.5 text-xs font-semibold text-zk-text2">
+                        <span className="h-2 w-2 rounded-full bg-emerald-500" aria-hidden />
+                        Connected
+                      </span>
+                      <AgentActivationButton
+                        agentId={agent.id}
+                        agentName={agent.name}
+                        organisationId={organisation.id}
+                        organisationName={organisation.name}
+                        active
+                        takeOutLabel="Disconnect agent"
+                        className={agentsSecondaryBtn}
+                      />
+                    </>
                   ) : (
                     <ConnectAgentModalButton
                       agentId={agent.id}
