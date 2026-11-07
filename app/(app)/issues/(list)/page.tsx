@@ -16,6 +16,7 @@ import {
   type RowPill,
 } from "@/components/issue-row-meta";
 import { VoteButton } from "@/components/vote-button";
+import { ConfirmationTallyBox } from "@/components/confirmation-tally-box";
 import {
   severityLabels,
   statusClass,
@@ -85,7 +86,7 @@ import { PlatformTabs, type PlatformTab } from "@/components/platform-tabs";
 import { LoadError } from "@/components/load-error";
 import { logLoadFailure } from "@/lib/load-error";
 import { AREA_PARAM, parseProjectAreaFilter, projectAreaFilterWhere } from "@/lib/project-area-filter";
-import { intakeDetail, intakeLabel, openIssueStages, parseIssueStageView, type IssueStage } from "@/lib/issue-stage";
+import { intakeDetail, intakeLabel, openIssueStages, openIssueTallies, parseIssueStageView, type ConfirmationTally, type IssueStage } from "@/lib/issue-stage";
 import { issuePath } from "@/lib/issue-ref";
 
 /* Distinct browser-tab title; the root layout appends "· Ziki". */
@@ -311,19 +312,30 @@ export default async function BugsPage({
 
   const stageView = isDeletedView ? null : parseIssueStageView(toSingleQueryParam(params.stage));
   let stages = new Map<string, IssueStage>();
+  // #741: per-issue approval/rejection tallies for the Requires confirmation list.
+  let tallies = new Map<string, ConfirmationTally>();
   let allIdeaIds: string[] = [];
   let reportedCount = 0;
   let confirmedCount = 0;
   let readyCount = 0;
 
   if (!isDeletedView) {
+    const { categoryId: _c, status: _s, ...allOpenWhere } = where;
+    void _c;
+    void _s;
     try {
-      const { categoryId: _c, status: _s, ...allOpenWhere } = where;
-      void _c;
-      void _s;
       stages = await openIssueStages(prisma, allOpenWhere);
     } catch (error) {
       console.error("[bugs] issue stage lookup failed", error);
+    }
+    // #741: the side-box tallies are only needed on the Requires confirmation
+    // list; a missing validation table just leaves the box off.
+    if (stageView === "reported") {
+      try {
+        tallies = await openIssueTallies(prisma, allOpenWhere);
+      } catch (error) {
+        console.error("[bugs] issue tally lookup failed", error);
+      }
     }
 
     reportedCount = [...stages.values()].filter((stage) => stage === "reported").length;
@@ -965,6 +977,13 @@ export default async function BugsPage({
                           readOnly={isDeletedView}
                         />
                       </div>
+                      {/* #741: on the Requires confirmation list, each row's side
+                          box also shows the issue's approvals and rejections. */}
+                      {stageView === "reported" && tallies.has(bug.id) ? (
+                        <div className="shrink-0 pt-0.5">
+                          <ConfirmationTallyBox tally={tallies.get(bug.id)!} />
+                        </div>
+                      ) : null}
                       <Link
                         href={issuePath(bug.number)}
                         data-issue-link=""

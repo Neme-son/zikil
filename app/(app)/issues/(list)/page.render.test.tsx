@@ -36,6 +36,7 @@ vi.mock("@/lib/tenant-context", async (importOriginal) => ({
 vi.mock("@/lib/issue-stage", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/issue-stage")>()),
   openIssueStages: vi.fn(async () => new Map([["bug-1", "reported"]])),
+  openIssueTallies: vi.fn(async () => new Map([["bug-1", { approvals: 2, rejections: 1 }]])),
 }));
 vi.mock("@/lib/voter-summaries", () => ({
   fetchVoterSummaries: vi.fn(async () =>
@@ -147,6 +148,16 @@ describe("issue list layout", () => {
     await renderList({ stage: "reported" });
     const listQuery = findMany.mock.calls.at(-1)![0];
     expect(listQuery.where.id).toEqual({ in: ["bug-1"] });
+  });
+
+  it("shows the approval/rejection tally box on the Requires confirmation list (#741)", async () => {
+    const reported = await renderList({ stage: "reported" });
+    expect(reported).toContain('data-testid="confirmation-tally"');
+    expect(reported).toContain("approvals lead");
+
+    // Not on the other views; the box is specific to the confirmation list.
+    const all = await renderList();
+    expect(all).not.toContain('data-testid="confirmation-tally"');
   });
 
   it("is one centred column without the stats card (#1056)", async () => {

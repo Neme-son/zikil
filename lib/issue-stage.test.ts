@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { confirmationCount, intakeKind, isConfirmedCount, issueStage, parseIssueStageView } from "./issue-stage";
+import { confirmationCount, confirmationTally, intakeKind, isConfirmedCount, issueStage, parseIssueStageView, tallyLead } from "./issue-stage";
 
 const bug = { beneficiaryUserId: "beneficiary", reporterId: "reporter", createdByAgent: null, claims: [] };
 
@@ -76,5 +76,61 @@ describe("parseIssueStageView", () => {
     expect(parseIssueStageView("ready")).toBe("ready");
     expect(parseIssueStageView("ideas")).toBe("ideas");
     expect(parseIssueStageView(undefined)).toBeNull();
+  });
+});
+
+describe("confirmationTally (#741)", () => {
+  const rev = (
+    id: string,
+    verdict: string,
+    agentId: string,
+    ownerUserId: string,
+    createdAt = new Date("2026-11-01T00:00:00Z"),
+  ) => ({ id, verdict, agentId, ownerUserId, createdAt });
+
+  it("counts independent owners per side, excluding the filer, undone and pre-edit reviews", () => {
+    const tally = confirmationTally({
+      createdByAgentId: "filer",
+      undoneIds: new Set(["gone"]),
+      revisionCutoff: new Date("2026-10-31T00:00:00Z"),
+      bug,
+      reviews: [
+        rev("a1", "accept", "a", "one"), // 1 approval
+        rev("a2", "accept", "b", "one"), // same owner: still 1 approval
+        rev("r1", "reject", "c", "two"), // 1 rejection
+        rev("r2", "reject", "d", "three"), // 2 rejections
+        rev("f", "accept", "filer", "four"), // the filer's own agent: ignored
+        rev("gone", "accept", "e", "five"), // undone: ignored
+        rev("old", "reject", "g", "six", new Date("2026-10-30T00:00:00Z")), // before the edit: ignored
+        rev("n", "neutral", "h", "seven"), // neutral: adds to neither
+      ],
+    });
+    expect(tally).toEqual({ approvals: 1, rejections: 2 });
+  });
+
+  it("ignores a reviewer whose owner owns the ticket", () => {
+    const tally = confirmationTally({
+      createdByAgentId: null,
+      undoneIds: new Set(),
+      revisionCutoff: null,
+      bug,
+      reviews: [rev("x", "accept", "x", "reporter"), rev("y", "reject", "y", "two")],
+    });
+    expect(tally).toEqual({ approvals: 0, rejections: 1 });
+  });
+
+  it("is 0/0 with no reviews", () => {
+    expect(
+      confirmationTally({ createdByAgentId: null, reviews: [], undoneIds: new Set(), revisionCutoff: null, bug }),
+    ).toEqual({ approvals: 0, rejections: 0 });
+  });
+});
+
+describe("tallyLead (#741)", () => {
+  it("names the side that leads, and a tie otherwise", () => {
+    expect(tallyLead({ approvals: 2, rejections: 1 })).toBe("approvals");
+    expect(tallyLead({ approvals: 1, rejections: 2 })).toBe("rejections");
+    expect(tallyLead({ approvals: 1, rejections: 1 })).toBe("tie");
+    expect(tallyLead({ approvals: 0, rejections: 0 })).toBe("tie");
   });
 });

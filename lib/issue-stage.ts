@@ -202,3 +202,146 @@ export async function openIssueStages(
   }
   return stages;
 }
+
+/** An issue's standing approvals (confirmations) and rejections, for the list side box (#741). */
+export type ConfirmationTally = { approvals: number; rejections: number };
+
+/** Which side leads; the box is coloured by this. A tie (including 0-0) is neutral. */
+export type TallyLead = "approvals" | "rejections" | "tie";
+
+export function tallyLead(tally: ConfirmationTally): TallyLead {
+  if (tally.approvals > tally.rejections) return "approvals";
+  if (tally.rejections > tally.approvals) return "rejections";
+  return "tie";
+}
+
+/** One reviewer's standing verdict on an issue; the caller passes only kind `real` rows. */
+export type TallyReview = {
+  id: string;
+  verdict: string;
+  agentId: string;
+  ownerUserId: string;
+  createdAt: Date;
+};
+
+/**
+ * The approvals and rejections for one issue, counted exactly like the issue
+ * detail and the confirmation gate (#741): distinct independent owners, filer
+ * excluded, undo and pre-edit reviews ignored. A neutral verdict adds to
+ * neither side.
+ */
+export function confirmationTally(input: {
+  createdByAgentId: string | null;
+  reviews: readonly TallyReview[];
+  undoneIds: ReadonlySet<string>;
+  revisionCutoff: Date | null;
+  bug: ReviewedBug;
+}): ConfirmationTally {
+  const approvals = new Set<string>();
+  const rejections = new Set<string>();
+  for (const review of input.reviews) {
+    if (input.undoneIds.has(review.id)) continue;
+    if (input.revisionCutoff && review.createdAt <= input.revisionCutoff) continue;
+    if (input.createdByAgentId && review.agentId === input.createdByAgentId) continue;
+    if (reviewerConflict({ id: review.agentId, ownerUserId: review.ownerUserId }, input.bug)) continue;
+    if (review.verdict === "accept") approvals.add(review.ownerUserId);
+    else if (review.verdict === "reject") rejections.add(review.ownerUserId);
+    // Any other verdict is neutral: it does not move either count.
+  }
+  return { approvals: approvals.size, rejections: rejections.size };
+}
+
+/**
+ * The approval/rejection tally of every open issue matching `where` (#741),
+ * for the rows on the Requires confirmation list. Counts by the same rules as
+ * `openIssueStages`. A missing validation table yields an empty map, so the
+ * list still renders.
+ */
+export async function openIssueTallies(
+  db: PrismaClient,
+  where: Prisma.BugWhereInput,
+): Promise<Map<string, ConfirmationTally>> {
+  const bugs = await db.bug.findMany({
+    where: { ...where, status: "open", isDeleted: false },
+    select: {
+      id: true,
+      beneficiaryUserId: true,
+      reporterId: true,
+      createdByAgentId: true,
+      createdByAgent: { select: { ownerUserId: true } },
+      claims: {
+        where: { status: "active", releasedAt: null },
+        select: { status: true, releasedAt: true, agent: { select: { ownerUserId: true } } },
+      },
+    },
+  });
+  const tallies = new Map<string, ConfirmationTally>();
+  if (bugs.length === 0) return tallies;
+
+  const ids = bugs.map((bug) => bug.id);
+  const [revisions, reviews, undone] = await Promise.all([
+    db.bugRevision.findMany({ where: { bugId: { in: ids } }, select: { bugId: true, editedAt: true } }),
+    db.issueValidation.findMany({
+      where: { bugId: { in: ids }, kind: "real" },
+      select: {
+        id: true,
+        bugId: true,
+        verdict: true,
+        createdAt: true,
+        agentId: true,
+        agent: { select: { ownerUserId: true } },
+      },
+    }),
+    db.agentAuditEvent.findMany({
+      where: { action: "issue.validated", bugId: { in: ids }, undoneAt: { not: null } },
+      select: { bugId: true, payload: true },
+    }),
+  ]);
+
+  const revisedAt = new Map<string, Date>();
+  for (const revision of revisions) {
+    const current = revisedAt.get(revision.bugId);
+    if (!current || revision.editedAt > current) revisedAt.set(revision.bugId, revision.editedAt);
+  }
+  const undoneByBug = new Map<string, Set<string>>();
+  for (const event of undone) {
+    const validationId = (event.payload as { validationId?: string } | null)?.validationId;
+    if (!validationId || !event.bugId) continue;
+    const set = undoneByBug.get(event.bugId) ?? new Set<string>();
+    set.add(validationId);
+    undoneByBug.set(event.bugId, set);
+  }
+  const reviewsByBug = new Map<string, TallyReview[]>();
+  for (const review of reviews) {
+    const list = reviewsByBug.get(review.bugId) ?? [];
+    list.push({
+      id: review.id,
+      verdict: review.verdict,
+      agentId: review.agentId,
+      ownerUserId: review.agent.ownerUserId,
+      createdAt: review.createdAt,
+    });
+    reviewsByBug.set(review.bugId, list);
+  }
+
+  for (const bug of bugs) {
+    const reviewed: ReviewedBug = {
+      beneficiaryUserId: bug.beneficiaryUserId,
+      reporterId: bug.reporterId,
+      createdByAgent: bug.createdByAgent,
+      claims: bug.claims,
+    };
+    tallies.set(
+      bug.id,
+      confirmationTally({
+        createdByAgentId: bug.createdByAgentId,
+        reviews: reviewsByBug.get(bug.id) ?? [],
+        undoneIds: undoneByBug.get(bug.id) ?? new Set(),
+        revisionCutoff: revisedAt.get(bug.id) ?? null,
+        bug: reviewed,
+      }),
+    );
+  }
+  return tallies;
+}
+
