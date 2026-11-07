@@ -156,6 +156,8 @@ export type WorkFeed = {
    */
   waiting: { kind: WorkKind; count: number; minimumRole: AgentLevel; what: string }[];
   items: WorkItem[];
+  /** Present when the request paged or filtered the feed (`limit`, `after`, `kind`, `canAct`; lib/agent-api/work-page.ts). */
+  page?: { total: number; returned: number; hasMore: boolean; nextCursor: string | null };
 };
 
 /** How each kind of class-gated work reads in a sentence, for one item and for several. */

@@ -17,12 +17,13 @@ vi.mock("@/lib/prisma", () => {
   return { prisma };
 });
 
-import { clearWorkCache, itemsFor, projectWork, workEtag, workFeed, type AgentWork, type ProjectWork, type WorkFeed } from "@/lib/agent-api/work";
+import { clearWorkCache, itemsFor, projectWork, workEtag, workFeed, type AgentWork, type ProjectWork, type WorkFeed, type WorkItem } from "@/lib/agent-api/work";
 import { parseTrackFilter } from "@/lib/marketing/track";
 import { parseEventFilters } from "@/lib/agent-api/events";
 import { webhookBody } from "@/lib/webhooks/deliver";
 import { prGate } from "@/lib/agent-api/pr-gate";
 import type { StoredPullRequestReport } from "@/lib/agent-api/pull-request-report";
+import { pageWorkFeed, parseWorkPageQuery, WorkCursorError } from "@/lib/agent-api/work-page";
 
 /** The work feed (#work-feed, #owner-agents): each agent sees the work it can act on, manager and merger work is shown but not actionable below those classes, and the feed's ETag follows its content. */
 const REPO = { owner: "emerjent", repo: "ziki" };
@@ -467,5 +468,62 @@ describe("track parameter parsing and event/webhook payloads", () => {
     };
     const body = webhookBody(event);
     expect(body.track).toBe("marketing");
+  });
+});
+
+/** Paging and filtering for the work feed (#863). */
+const item = (key: string, kind: string, canAct = true) => ({ kind, key, title: key, detail: "", minimumRole: "working", canAct, actions: [] }) as unknown as WorkItem;
+const feed = (items: WorkItem[]) => ({ project: { id: "p", slug: "web", name: "Web", orgSlug: "ziki" }, items, counts: { idea: 3 }, waiting: [], ask: [] }) as unknown as WorkFeed;
+const query = (qs: string) => {
+  const parsed = parseWorkPageQuery(new URLSearchParams(qs));
+  if (!parsed.ok) throw new Error(parsed.message);
+  return parsed.query;
+};
+
+describe("parseWorkPageQuery", () => {
+  it("is null with no paging parameters, so the feed stays whole", () => {
+    expect(query("track=product")).toBeNull();
+  });
+  it("reads limit, after, kind and canAct", () => {
+    expect(query("limit=20&after=k1&kind=idea,test_fix&canAct=true")).toEqual({ limit: 20, after: "k1", kinds: ["idea", "test_fix"], canAct: true });
+  });
+  it("refuses a bad limit, canAct or empty kind, naming the field", () => {
+    expect(parseWorkPageQuery(new URLSearchParams("limit=501"))).toMatchObject({ ok: false, field: "limit" });
+    expect(parseWorkPageQuery(new URLSearchParams("limit=-1"))).toMatchObject({ ok: false, field: "limit" });
+    expect(parseWorkPageQuery(new URLSearchParams("canAct=yes"))).toMatchObject({ ok: false, field: "canAct" });
+    expect(parseWorkPageQuery(new URLSearchParams("kind=,"))).toMatchObject({ ok: false, field: "kind" });
+  });
+});
+
+describe("pageWorkFeed", () => {
+  const all = feed(["a", "b", "c", "d", "e"].map((key, index) => item(key, index % 2 ? "test_fix" : "idea", index !== 4)));
+
+  it("returns the feed untouched when nothing is asked", () => {
+    expect(pageWorkFeed(all, null)).toBe(all);
+  });
+  it("pages in order and hands back a cursor until the end", () => {
+    const first = pageWorkFeed(all, query("limit=2"));
+    expect(first.items.map((i) => i.key)).toEqual(["a", "b"]);
+    expect(first.page).toEqual({ total: 5, returned: 2, hasMore: true, nextCursor: "b" });
+    const second = pageWorkFeed(all, query("limit=2&after=b"));
+    expect(second.items.map((i) => i.key)).toEqual(["c", "d"]);
+    const last = pageWorkFeed(all, query("limit=2&after=d"));
+    expect(last.items.map((i) => i.key)).toEqual(["e"]);
+    expect(last.page).toEqual({ total: 5, returned: 1, hasMore: false, nextCursor: null });
+  });
+  it("filters by kind and canAct before paging, and keeps counts for the whole feed", () => {
+    const filtered = pageWorkFeed(all, query("kind=idea&canAct=true"));
+    expect(filtered.items.map((i) => i.key)).toEqual(["a", "c"]);
+    expect(filtered.page?.total).toBe(2);
+    expect(filtered.counts).toEqual({ idea: 3 });
+  });
+  it("limit=0 returns the counts and no items", () => {
+    const counts = pageWorkFeed(all, query("limit=0"));
+    expect(counts.items).toEqual([]);
+    expect(counts.page).toMatchObject({ total: 5, returned: 0, hasMore: true, nextCursor: null });
+    expect(counts.counts).toEqual({ idea: 3 });
+  });
+  it("refuses a cursor that is not in the list", () => {
+    expect(() => pageWorkFeed(all, query("limit=2&after=zzz"))).toThrow(WorkCursorError);
   });
 });

@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { createMethodNotAllowed, createOptions } from "@/lib/agent-api/http-errors";
 import { agentIssueRequest, IssueApiError } from "@/lib/agent-api/issues";
 import { workEtag, workFeed } from "@/lib/agent-api/work";
+import { pageWorkFeed, parseWorkPageQuery, WorkCursorError } from "@/lib/agent-api/work-page";
 import { parseTrackFilter } from "@/lib/marketing/track";
 import { prisma } from "@/lib/prisma";
 
@@ -14,6 +15,8 @@ import { prisma } from "@/lib/prisma";
  *
  * Query parameters:
  * - `track` — "product" (default) or "marketing". Anything else answers 400.
+ * - `limit` (0-500), `after`, `kind`, `canAct` — page and filter the items (lib/agent-api/work-page.ts). With none
+ *   of them the feed is the whole list.
  *
  * Poll it about every `pollAfterSeconds` with `If-None-Match`; an unchanged
  * feed answers 304 with no body. Each call spends one read from the agent's
@@ -39,7 +42,19 @@ export async function GET(request: NextRequest, context: { params: Promise<{ org
       });
     }
 
-    const feed = await workFeed(agent, { id: project.id, slug: project.slug, name: project.name, orgSlug: project.organisation.slug }, trackResult.track);
+    const pageResult = parseWorkPageQuery(request.nextUrl.searchParams);
+    if (!pageResult.ok) {
+      throw new IssueApiError(400, pageResult.message, { error: "invalid_request", message: pageResult.message, field: pageResult.field });
+    }
+
+    const full = await workFeed(agent, { id: project.id, slug: project.slug, name: project.name, orgSlug: project.organisation.slug }, trackResult.track);
+    let feed;
+    try {
+      feed = pageWorkFeed(full, pageResult.query);
+    } catch (error) {
+      if (!(error instanceof WorkCursorError)) throw error;
+      throw new IssueApiError(400, error.message, { error: "invalid_request", message: error.message, field: "after" });
+    }
     const etag = workEtag(feed);
     // Agent responses stay `no-store`; the agent sends this ETag back itself.
     const headers = { ETag: etag };

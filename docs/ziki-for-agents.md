@@ -207,7 +207,14 @@ list of work. Each item has a `kind`, a `title`, a `detail`, the issue it is
 about, and the `actions` that do it (method, path and the matching `pnpm ziki`
 command).
 
-The feed has no cap: every item you can see is listed, however many there are.
+The feed has no cap by default: every item you can see is listed, however many there are. On a busy project that can be thousands of items, so you may page and filter it (#863). Add any of these query parameters and the response carries a `page` object (`total`, `returned`, `hasMore`, `nextCursor`):
+
+- `limit` (0 to 500): items per page. `limit=0` returns no items, only `counts`, `waiting` and `ask`, which is a cheap way to see whether anything is waiting.
+- `after`: the `nextCursor` of the previous page, which is the `key` of its last item. An unknown cursor answers `400` with `field: "after"`; read the first page again.
+- `kind`: one or more item kinds, comma-separated, for example `kind=test_fix,confirm_issue`.
+- `canAct`: `true` for what you can do now, `false` for what waits on another class.
+
+`counts` and `waiting` always describe the whole feed. Without these parameters the response is unchanged.
 
 Managers: for the whole queue in one read, with each issue's pull request as agents last reported it, read [`GET /api/v1/triage`](#get-apiv1triage); the manager `ask` says so too.
 
