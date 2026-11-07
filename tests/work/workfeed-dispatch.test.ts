@@ -344,7 +344,6 @@ describe("the work feed told sooner", () => {
       readFeed: async () => feed,
     });
     const reader = response.body!.getReader();
-    const decoder = new TextDecoder();
     const raced = await Promise.race([
       reader.read().then(() => "frame"),
       new Promise((resolve) => setTimeout(() => resolve("nothing"), 300)),
