@@ -17,6 +17,7 @@ import { AgentLevelError } from "@/lib/agents/levels";
 import { AgentAuthError, agentErrorResponse, requireAgent } from "@/lib/agents/require-agent";
 import { activateAgent } from "@/lib/agents/registry";
 import { agentConnection } from "@/lib/agents/connection-state";
+import { agentCapSummary } from "@/lib/agents/registry-limits";
 
 const KEY = "ziki_valid-key-for-tests";
 const request = (authorization?: string) => ({
@@ -244,5 +245,25 @@ describe("agentConnection", () => {
   it("tells an agent outside this organisation, and a revoked one, apart", () => {
     expect(agentConnection(agent({ activeHere: false }))).toBe("not_in_organisation");
     expect(agentConnection(agent({ revokedAt: "2026-11-07T00:00:00Z" }))).toBe("revoked");
+  });
+});
+
+/** The agents page counts live agents, paused ones included, because the cap does (#860, #511). */
+const agent = (paused: boolean, revoked = false) => ({ pausedAt: paused ? "2026-11-07T00:00:00Z" : null, revokedAt: revoked ? "2026-11-07T00:00:00Z" : null });
+
+describe("agentCapSummary", () => {
+  it("counts live agents, paused included, and leaves revoked ones out", () => {
+    const summary = agentCapSummary([agent(false), agent(true), agent(true, true)], 5);
+    expect(summary).toMatchObject({ live: 2, paused: 1, running: 1, over: 0, max: 5, note: null });
+  });
+  it("says pausing doesn't free a slot at the limit", () => {
+    const summary = agentCapSummary(Array.from({ length: 5 }, (_, i) => agent(i % 2 === 0)), 5);
+    expect(summary.note).toContain("at the limit");
+    expect(summary.note).toContain("Pausing doesn't free a slot");
+  });
+  it("names how far over the limit an owner is", () => {
+    const over = agentCapSummary(Array.from({ length: 10 }, (_, i) => agent(i >= 6)), 5);
+    expect(over).toMatchObject({ live: 10, paused: 4, running: 6, over: 5 });
+    expect(over.note).toContain("5 over the limit");
   });
 });
