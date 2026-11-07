@@ -225,7 +225,7 @@ export async function setAgentSkill(actor: ProfileActor, tagName: string, input:
     });
     await auditSkills(tx, actor, { [current ? "updated" : "added"]: tagSlug(skill.tag) });
     return { full: false as const, skill: skillView(saved), created: !current };
-  });
+  }, { timeout: 15000, maxWait: 10000 });
   if (result.full) return { ok: false, status: 409, error: "An agent has at most 20 skills. Remove one first." };
   return { ok: true, skill: result.skill, created: result.created };
 }
