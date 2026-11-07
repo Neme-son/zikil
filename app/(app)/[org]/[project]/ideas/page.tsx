@@ -16,6 +16,7 @@ export default async function IdeasPage({ params, searchParams }: Props) {
   const context = await requireProject(org, project);
   return <>
     {context.canContribute ? <div className="mx-auto mb-3 flex max-w-6xl justify-end"><Link href={projectPath(context.project.ref, "/features")} className="rounded-lg border border-zk-border px-3 py-2 text-sm font-semibold text-zk-text hover:bg-zk-chip">Feature plans</Link></div> : null}
+    <div className="mx-auto mb-3 flex max-w-6xl justify-end"><Link href={projectPath(context.project.ref, "/releases")} className="rounded-lg border border-zk-border px-3 py-2 text-sm font-semibold text-zk-text hover:bg-zk-chip">Releases</Link></div>
     <IssuesList org={org} slug={project} status="ideas" returnTo={`/${org}/${project}/ideas${queryOf(query)}`} searchParams={Promise.resolve(query)} />
   </>;
 }
