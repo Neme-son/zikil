@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/prisma", () => ({ prisma: {} }));
 
-import { beingChecked, headerEarnings, parseWeeklyGoal, totalEarned, weeklyGoalState } from "@/lib/earnings";
+import { beingChecked, earningsSummary, headerEarnings, parseWeeklyGoal, totalEarned, weeklyGoalState } from "@/lib/earnings";
 
 /** Earnings (#earnings): the header's $ and the Earnings page read the ledger across every organisation. */
 describe("earnings across every project (#earnings)", () => {
@@ -57,8 +57,8 @@ describe("who sees $ and Withdraw in the header (#earnings)", () => {
     expect(await headerEarnings(db(false, false), "poster")).toBeNull();
   });
 
-  it("shows $0 to someone who just joined a project, and their total once they earn", async () => {
-    expect(await headerEarnings(db(false, true), "joiner")).toBe(0);
+  it("shows someone who just joined a project their real total, the signup bonus included, and the same once they earn", async () => {
+    expect(await headerEarnings(db(false, true), "joiner")).toBe(4.5);
     expect(await headerEarnings(db(true, true), "earner")).toBe(4.5);
   });
 });
@@ -71,5 +71,45 @@ describe("earnings in one workspace (#earnings)", () => {
     expect(aggregate).toHaveBeenLastCalledWith({ where: { userId: "earner", organisationId: "org-ziki" }, _sum: { points: true } });
     await totalEarned({ pointEntry: { aggregate } } as never, "earner");
     expect(aggregate).toHaveBeenLastCalledWith({ where: { userId: "earner" }, _sum: { points: true } });
+  });
+});
+
+/** Your earnings (#earnings, Chloe's call): everything, in every workspace and project you're in. */
+describe("Your earnings covers everywhere you work", () => {
+  const base = (memberships: string[], joined: string[], yourTasks: unknown[]) => {
+    const findMany = vi.fn(async ({ where }: { where: { OR?: unknown; status?: string } }) => where.status !== "open" ? [] : (where.OR ? yourTasks : [{ id: "open-1", number: 9, title: "Open to join", reward: 3, _count: { bids: 0 }, project: { name: "Docs", slug: "docs", organisation: { slug: "demo" } } }]));
+    const db = {
+      pointEntry: {
+        aggregate: vi.fn(async () => ({ _sum: { points: 1.5 } })),
+        groupBy: vi.fn(async () => []),
+        count: vi.fn(async () => 0),
+        findMany: vi.fn(async () => []),
+      },
+      bug: { findMany: vi.fn(async () => []) },
+      user: { findUnique: vi.fn(async () => ({ weeklyEarningsGoal: null })) },
+      projectMembership: { findMany: vi.fn(async () => joined.map((projectId) => ({ projectId }))) },
+      membership: { findMany: vi.fn(async () => memberships.map((organisationId) => ({ organisationId }))) },
+    };
+    db.bug.findMany = findMany as never;
+    return { db: db as never, findMany, aggregate: db.pointEntry.aggregate };
+  };
+
+  it("adds up money from every workspace, and lists tasks from every workspace and joined project", async () => {
+    const task = { id: "t-1", number: 4, title: "Post about Ziki", reward: 5, _count: { bids: 1 }, project: { name: "Marketing", slug: "ziki-marketing", organisation: { slug: "ziki" } } };
+    const { db, findMany, aggregate } = base(["org-zedu"], ["p-marketing"], [task]);
+    const summary = await earningsSummary(db, "earner");
+    // No workspace filter on the money.
+    expect(aggregate).toHaveBeenCalledWith({ where: { userId: "earner" }, _sum: { points: true } });
+    const taskQuery = findMany.mock.calls.map((call) => call[0].where).find((where) => where.OR);
+    expect(taskQuery?.OR).toEqual([{ organisationId: { in: ["org-zedu"] } }, { projectId: { in: ["p-marketing"] } }]);
+    expect(summary.tasksAreYours).toBe(true);
+    expect(summary.tasks.map((t) => t.title)).toEqual(["Post about Ziki"]);
+  });
+
+  it("falls back to projects open to join when there is nothing to do where you are", async () => {
+    const { db } = base([], [], []);
+    const summary = await earningsSummary(db, "newcomer");
+    expect(summary.tasksAreYours).toBe(false);
+    expect(summary.tasks.map((t) => t.title)).toEqual(["Open to join"]);
   });
 });

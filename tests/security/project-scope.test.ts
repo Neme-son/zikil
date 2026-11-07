@@ -22,6 +22,9 @@ const projectMembershipUpsert = vi.hoisted(() => vi.fn());
 const projectJoinRequestUpdateMany = vi.hoisted(() => vi.fn());
 const bugCount = vi.hoisted(() => vi.fn());
 const bugFindFirst = vi.hoisted(() => vi.fn());
+const membershipUpsert = vi.hoisted(() => vi.fn());
+const txMembershipFindFirst = vi.hoisted(() => vi.fn());
+const awardSignupBonus = vi.hoisted(() => vi.fn());
 const ideaFindFirst = vi.hoisted(() => vi.fn());
 const notificationCreateMany = vi.hoisted(() => vi.fn().mockResolvedValue({ count: 1 }));
 const membershipFindMany = vi.hoisted(() => vi.fn());
@@ -44,10 +47,12 @@ vi.mock("@/lib/prisma", () => ({
     notification: { createMany: notificationCreateMany },
     skillSubmission: { findMany: skillSubmissionFindMany, findUnique: skillSubmissionFindUnique, update: skillSubmissionUpdate },
     $transaction: async (run: (tx: unknown) => Promise<unknown>) =>
-      run({ projectMembership: { upsert: projectMembershipUpsert }, projectJoinRequest: { updateMany: projectJoinRequestUpdateMany } }),
+      run({ projectMembership: { upsert: projectMembershipUpsert }, membership: { upsert: membershipUpsert, findFirst: txMembershipFindFirst }, projectJoinRequest: { updateMany: projectJoinRequestUpdateMany } }),
   },
 }));
 vi.mock("@/components/marketing/tasks/tasks-board", () => ({ TasksBoard: () => null }));
+vi.mock("@/lib/points/signup-bonus", () => ({ awardSignupBonus }));
+vi.mock("@/lib/organisation-next-step-load", () => ({ loadOrganisationNextStep: vi.fn(async () => null) }));
 vi.mock("@/lib/workflow", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/workflow")>()),
   workflowFor: vi.fn(async () => ({ ideaThreshold: 3, revisionLimit: 2 })),
@@ -372,6 +377,8 @@ describe("joinOpenProjectAction (#earnings)", () => {
     const res = await joinOpenProjectAction("p-1");
     expect(res).toEqual({ ok: true, href: "/ziki/ziki-marketing/marketing" });
     expect(projectMembershipUpsert).toHaveBeenCalledWith(expect.objectContaining({ create: { projectId: "p-1", userId: "user-1" } }));
+    // Joining puts you in that project only, never in its whole organisation.
+    expect(membershipUpsert).not.toHaveBeenCalled();
     expect(projectJoinRequestUpsert).not.toHaveBeenCalled();
   });
 
@@ -392,12 +399,27 @@ describe("joinOpenProjectAction (#earnings)", () => {
     expect(await joinOpenProjectAction("p-1")).toEqual({ ok: true, href: "/ziki/ziki-marketing/marketing" });
   });
 
+  it("pays the signup bonus to a brand-new person (in no organisation), and not to someone already in one", async () => {
+    findFirst.mockResolvedValue(open);
+    bugCount.mockResolvedValue(1);
+    txMembershipFindFirst.mockResolvedValue(null);
+    await joinOpenProjectAction("p-1");
+    expect(awardSignupBonus).toHaveBeenCalledWith(expect.anything(), "user-1", "t-1");
+
+    awardSignupBonus.mockClear();
+    txMembershipFindFirst.mockResolvedValue({ id: "m-1" });
+    await joinOpenProjectAction("p-1");
+    expect(awardSignupBonus).not.toHaveBeenCalled();
+    expect(membershipUpsert).not.toHaveBeenCalled();
+  });
+
   it("refuses a project that isn't open, or isn't public, and adds nobody", async () => {
     findFirst.mockResolvedValue({ ...open, isOpenForContributors: false });
     expect(await joinOpenProjectAction("p-1")).toEqual({ ok: false, error: expect.any(String) });
     findFirst.mockResolvedValue({ ...open, visibility: "private" });
     expect(await joinOpenProjectAction("p-1")).toEqual({ ok: false, error: expect.any(String) });
     expect(projectMembershipUpsert).not.toHaveBeenCalled();
+    expect(membershipUpsert).not.toHaveBeenCalled();
   });
 });
 
