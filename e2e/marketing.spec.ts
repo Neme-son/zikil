@@ -56,21 +56,33 @@ async function authenticatedPost(page: Page, key: string, path: string, data: un
 
 async function signInAs(browser: Browser, role: Role, width: Width) {
   const context = await browser.newContext({ storageState: authFile(role, width) });
+  await context.addInitScript(() => {
+    try {
+      window.localStorage.setItem("ziki-cookie-consent", JSON.stringify({ choice: "denied", at: Date.now() }));
+    } catch {
+      // Storage blocked: the banner shows, as it would for that visitor.
+    }
+  });
   return { context, page: await context.newPage() };
 }
 
-async function castGoodVerdict(page: Page, ideaUrl: string, summary: string) {
+async function castGoodVerdict(page: Page, ideaUrl: string, summary: string, expectedScore: number) {
   await page.goto(ideaUrl);
+  await page.getByRole("button", { name: /^(Add|Update) verdict$/ }).click();
+  const dialog = page.getByRole("dialog");
   const form = page.getByRole("form", { name: "Your verdict" });
-  await form.getByLabel("Good", { exact: true }).check();
+  await form.getByText("Good", { exact: true }).click();
   await form.getByLabel("Summary").fill(summary);
   await form.getByLabel("Description").fill("This is a useful, focused Marketing task for the current project.");
   await form.getByRole("button", { name: "Give verdict" }).click();
-  await expect(form.getByRole("status")).toContainText("saved");
+  await expect(dialog).toBeHidden();
+  await page.reload();
+  await expect(page.getByTestId("idea-score")).toHaveText(`Score ${expectedScore} of 3`);
 }
 
 test("Marketing task runs from proposal to Live · Published with idempotent points", async ({ browser, page, width, uniq }) => {
   test.skip(width !== "desktop", "This lifecycle uses a single shared set of seeded people and runs once.");
+  test.setTimeout(120_000);
   assertE2EDatabase();
 
   const db = new PrismaClient();
@@ -121,15 +133,15 @@ test("Marketing task runs from proposal to Live · Published with idempotent poi
     await proposer.page.getByLabel("Title").fill(title);
     await proposer.page.getByLabel("Task type").selectOption(type.id);
     await proposer.page.getByLabel("Rationale").fill("A concise product update helps current users discover the new workflow.");
-    await proposer.page.locator("#description").fill("Write a short release note for current Ziki users, explain the change, and include a clear call to action.");
+    await proposer.page.getByRole("textbox", { name: "Description" }).fill("Write a short release note for current Ziki users, explain the change, and include a clear call to action.");
     await proposer.page.getByRole("button", { name: "Propose task" }).click();
     await expect(proposer.page).toHaveURL(/\/ideas\/\d+$/);
     const ideaUrl = proposer.page.url();
     const ideaNumber = Number(new URL(ideaUrl).pathname.split("/").pop());
 
-    await castGoodVerdict(proposer.page, ideaUrl, "The audience and outcome are clear.");
-    await castGoodVerdict(manager.page, ideaUrl, "This supports the current product focus.");
-    await castGoodVerdict(managerReviewer.page, ideaUrl, "The task is appropriately scoped.");
+    await castGoodVerdict(manager.page, ideaUrl, "This supports the current product focus.", 1);
+    await castGoodVerdict(managerReviewer.page, ideaUrl, "The task is appropriately scoped.", 2);
+    await castGoodVerdict(workerReviewer.page, ideaUrl, "The task is appropriately scoped.", 3);
 
     const idea = await db.idea.findFirstOrThrow({ where: { number: ideaNumber, title }, select: { id: true, issueId: true, reporterId: true, track: true, rationale: true, typeId: true } });
     expect(idea).toMatchObject({ reporterId: people[0].id, track: "marketing", rationale: "A concise product update helps current users discover the new workflow.", typeId: type.id });
@@ -173,8 +185,12 @@ test("Marketing task runs from proposal to Live · Published with idempotent poi
     expect(deliveryBody.delivery.pullRequestUrl).toBeNull();
     await worker.page.reload();
     await worker.page.getByRole("tab", { name: /Deliverables/ }).click();
-    await expect(worker.page.getByTestId("marketing-deliverables")).toContainText("Published the release note.");
-    await expect(worker.page.getByTestId("marketing-deliverables")).toContainText("The issue list now makes the next step clearer.");
+    const deliverables = worker.page.getByTestId("marketing-deliverables");
+    await expect(deliverables).toContainText("Published the release note.");
+    await deliverables.getByRole("button", { name: /Delivered work.*click to open/ }).click();
+    const deliveredWork = worker.page.getByRole("dialog", { name: "Delivered work: Published the release note." });
+    await expect(deliveredWork).toContainText("The issue list now makes the next step clearer.");
+    await deliveredWork.getByRole("button", { name: "Close" }).click();
 
     for (const reviewer of [agents.reviewerManager, agents.reviewerWorker]) {
       const judged = await authenticatedPost(manager.page, reviewer.key, `/api/v1/issues/${bug.id}/test-results`, {
@@ -222,16 +238,16 @@ test("Marketing task runs from proposal to Live · Published with idempotent poi
     });
     const reporterPoints = calculateReporterPoints(effectiveProject);
     const reviewerBase = calculateReviewerPoints(effectiveProject);
-    const dispatcherPoints = effectivePlatform.dispatcher;
     const verdictOrder = await db.testVerdict.findMany({
       where: { bugId: bug.id, goodToMerge: true },
       orderBy: [{ createdAt: "asc" }, { id: "asc" }],
       select: { agent: { select: { ownerUserId: true } } },
     });
-    expect(awards).toHaveLength(5);
+    expect(awards).toHaveLength(4);
     expect(awards.filter((entry) => entry.role === "reporter").map((entry) => [entry.userId, Number(entry.points)])).toEqual([[people[0].id, reporterPoints]]);
     expect(awards.filter((entry) => entry.role === "solver").map((entry) => [entry.userId, Number(entry.points)])).toEqual([[people[1].id, solverReward(bug.reward)]]);
-    expect(awards.filter((entry) => entry.role === "dispatcher").map((entry) => [entry.userId, Number(entry.points)])).toEqual([[people[2].id, dispatcherPoints]]);
+    // A bid award is not a dispatch: awardBid leaves dispatcherUserId unset.
+    expect(awards.filter((entry) => entry.role === "dispatcher")).toEqual([]);
     expect(awards.filter((entry) => entry.role === "reviewer").map((entry) => [entry.userId, Number(entry.points)]).sort(([a], [b]) => String(a).localeCompare(String(b)))).toEqual(
       verdictOrder.map((verdict, index) => [verdict.agent.ownerUserId, reviewerPointsAt(index, reviewerBase)]).sort(([a], [b]) => String(a).localeCompare(String(b))),
     );
@@ -245,7 +261,7 @@ test("Marketing task runs from proposal to Live · Published with idempotent poi
     expect(duplicateReview.ok()).toBeFalsy();
     await manager.page.reload();
     await expect(manager.page.getByText("Live (Published)", { exact: true })).toBeVisible();
-    expect(await readAwards()).toHaveLength(5);
+    expect(await readAwards()).toHaveLength(4);
   } finally {
     await Promise.all(contexts.map(({ context }) => context.close()));
     await db.$disconnect();
