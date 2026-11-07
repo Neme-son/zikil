@@ -8,6 +8,7 @@ import { connectProject } from "./commands/connect.js";
 import { cmdWork } from "./commands/work.js";
 import { cmdSetupOpencode, packageRoot } from "./commands/setup-opencode.js";
 import { cmdSetupCodex } from "./commands/setup-codex.js";
+import { cmdSetupClaude } from "./commands/setup-claude.js";
 import { resolveMcpServer } from "./mcp.js";
 import { resolveConfigPath, loadConfig, apiFetch } from "./config/store.js";
 import { cmdInit } from "./commands/init.js";
@@ -27,6 +28,7 @@ Commands:
   doctor          check the local environment
   sync            refresh managed files to the installed versions
   setup-codex     install the Codex adapter (experimental, plan first)
+  setup-claude    install the Claude adapter (experimental, plan first)
   help            show this text
 `;
 
@@ -200,6 +202,18 @@ export async function run(argv, _ctx) {
     case "setup-codex":
       try {
         return await cmdSetupCodex({
+          apply: hasFlag(rest, ["--apply"]),
+          yes: hasFlag(rest, ["--yes"]),
+          confirm: flagValues(rest, ["--confirm"]),
+          server: flagValue(rest, ["--server"]),
+          mcpServer: flagValue(rest, ["--mcp-server"]),
+        });
+      } catch (error) {
+        return { code: 1, text: `${error.message}\n` };
+      }
+    case "setup-claude":
+      try {
+        return await cmdSetupClaude({
           apply: hasFlag(rest, ["--apply"]),
           yes: hasFlag(rest, ["--yes"]),
           confirm: flagValues(rest, ["--confirm"]),

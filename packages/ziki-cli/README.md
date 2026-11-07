@@ -36,6 +36,9 @@ Inside this repo, `pnpm ziki` is a separate local developer tool, not this CLI.
 - `sync` — refresh managed files to the installed versions.
 - `setup-codex` — install the Codex adapter (**experimental**: generated from
   docs, not yet verified against a live Codex).
+- `setup-claude` — print the Claude attach command and settings snippet
+  (**experimental**: generated from docs, not yet verified against a live
+  Claude; `--apply` writes only the settings merge).
 
 ## Rules the CLI keeps
 
