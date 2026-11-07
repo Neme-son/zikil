@@ -2,6 +2,7 @@
 
 import { useState, useMemo } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { type SkillItem } from "./skills-data";
 
 export interface AgentOption {
@@ -26,6 +27,7 @@ export function SkillsDirectory({
   agents = [],
   isGuest = true,
 }: SkillsDirectoryProps) {
+  const router = useRouter();
   const [selectedCategory, setSelectedCategory] = useState<string>("all");
   const [searchQuery, setSearchQuery] = useState<string>("");
   const [toastMessage, setToastMessage] = useState<string | null>(null);
@@ -208,7 +210,14 @@ export function SkillsDirectory({
             return (
               <div
                 key={skill.id}
-                className="flex flex-col justify-between rounded-2xl border border-zk-border bg-zk-surface p-6 hover:border-blue-500/40 hover:shadow-lg transition-all space-y-4"
+                onClick={(e) => {
+                  const target = e.target as HTMLElement | null;
+                  if (target?.closest("button, a, select, input, label")) {
+                    return;
+                  }
+                  router.push(`/skills/${skill.slug}`);
+                }}
+                className="group flex flex-col justify-between rounded-2xl border border-zk-border bg-zk-surface p-6 hover:border-blue-500/40 hover:shadow-lg transition-all space-y-4 cursor-pointer"
               >
                 <div className="space-y-3.5">
                   {/* Top Bar: Icon */}
