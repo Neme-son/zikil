@@ -297,10 +297,9 @@ export function SkillsDirectory({
                 <div
                   className="space-y-2.5 border-t border-zk-divider pt-4"
                   data-prevent-card-click="true"
-                  onClick={(e) => e.stopPropagation()}
                 >
                   {/* Agent Target Dropdown */}
-                  <div className="relative" onClick={(e) => e.stopPropagation()}>
+                  <div className="relative">
                     <select
                       value={selectedAgent}
                       onClick={(e) => e.stopPropagation()}
