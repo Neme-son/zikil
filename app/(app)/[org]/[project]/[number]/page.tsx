@@ -2110,7 +2110,7 @@ export default async function BugDetailPage({ params, searchParams }: BugPagePro
             canEdit={canTriage && !bug.isDeleted}
           />
 
-          <IssueTimeTracking bugId={bug.id} canEdit={canUpdateStatus && !bug.isDeleted} />
+          <IssueTimeTracking bugId={bug.id} />
 
           {deliveredBanner ? <DeliveredBanner {...deliveredBanner} /> : null}
 

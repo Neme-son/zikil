@@ -1,9 +1,9 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useState, useTransition, type FormEvent } from "react";
-import { addTimeEntryAction, deleteTimeEntryAction } from "@/app/actions/time-tracking";
-import { formatDuration, MAX_TIME_ENTRY_MINUTES, parseMinutesInput } from "@/lib/time-tracking";
+import { useState, useTransition, useEffect, useRef } from "react";
+import { deleteTimeEntryAction } from "@/app/actions/time-tracking";
+import { formatDuration } from "@/lib/time-tracking";
 
 export type TimeEntryView = {
   id: string;
@@ -12,43 +12,57 @@ export type TimeEntryView = {
   spentOnLabel: string;
   userId: string;
   userName: string;
+  source: string;
 };
 
 type Props = {
   bugId: string;
-  canEdit: boolean;
   isAdmin: boolean;
-  viewerId: string;
   entries: TimeEntryView[];
+  /** Whether the issue is currently in progress (show live tracking). */
+  isTracking: boolean;
+  /** Active minutes tracked so far (live). */
+  activeMinutes: number;
+  /** When tracking started (ISO string). */
+  startedAt: string | null;
 };
 
-export function TimeTrackingPanel({ bugId, canEdit, isAdmin, viewerId, entries }: Props) {
+export function TimeTrackingPanel({
+  bugId,
+  isAdmin,
+  entries,
+  isTracking,
+  activeMinutes,
+  startedAt,
+}: Props) {
   const router = useRouter();
-  const [minutes, setMinutes] = useState("");
-  const [note, setNote] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
+  const heartbeatRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
   const total = entries.reduce((sum, entry) => sum + entry.minutes, 0);
 
-  const submit = (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    setError(null);
-    const parsed = parseMinutesInput(minutes);
-    if (parsed === null) {
-      setError(`Enter whole minutes between 1 and ${MAX_TIME_ENTRY_MINUTES}.`);
-      return;
-    }
-    startTransition(async () => {
-      const result = await addTimeEntryAction(bugId, parsed, note);
-      if (result.error) {
-        setError(result.error);
-        return;
-      }
-      setMinutes("");
-      setNote("");
-      router.refresh();
-    });
-  };
+  // Send heartbeat every 5 minutes while in progress and tab is visible.
+  useEffect(() => {
+    if (!isTracking) return;
+
+    const sendHeartbeat = () => {
+      if (document.visibilityState !== "visible") return;
+      fetch("/api/heartbeat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ bugId }),
+      }).catch(() => {});
+    };
+
+    // Send one immediately, then on interval.
+    sendHeartbeat();
+    heartbeatRef.current = setInterval(sendHeartbeat, 5 * 60 * 1000);
+
+    return () => {
+      if (heartbeatRef.current) clearInterval(heartbeatRef.current);
+    };
+  }, [isTracking, bugId]);
 
   const remove = (entryId: string) => {
     setError(null);
@@ -62,6 +76,17 @@ export function TimeTrackingPanel({ bugId, canEdit, isAdmin, viewerId, entries }
     });
   };
 
+  // Live tracking duration (computed in effect to keep render pure).
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!isTracking) return;
+    const id = setInterval(() => setNow(Date.now()), 30000);
+    return () => clearInterval(id);
+  }, [isTracking]);
+  const liveMinutes = startedAt
+    ? Math.floor((now - new Date(startedAt).getTime()) / 60000)
+    : 0;
+
   return (
     <section aria-label="Time tracking" data-testid="time-tracking-panel" className="rounded-[20px] border border-zk-border bg-zk-surface px-4 py-3.5">
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -71,13 +96,33 @@ export function TimeTrackingPanel({ bugId, canEdit, isAdmin, viewerId, entries }
         </span>
       </div>
 
+      {/* Live tracking indicator */}
+      {isTracking ? (
+        <div className="mt-2 flex items-center gap-2 rounded-lg bg-zk-tint px-3 py-2 text-sm text-zk-accent">
+          <span className="relative flex h-2 w-2">
+            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-zk-accent opacity-75" />
+            <span className="relative inline-flex h-2 w-2 rounded-full bg-zk-accent" />
+          </span>
+          <span>
+            Tracking... {formatDuration(Math.max(activeMinutes, liveMinutes > 0 ? liveMinutes : 0))} active
+          </span>
+          <span className="text-xs text-zk-muted">(auto-stops when issue is resolved)</span>
+        </div>
+      ) : null}
+
       {entries.length ? (
         <ul className="mt-3 space-y-2 text-sm text-zk-text2">
           {entries.map((entry) => {
-            const canRemove = canEdit && (isAdmin || entry.userId === viewerId);
+            const canRemove = isAdmin;
+            const isAuto = entry.source === "auto";
             return (
               <li key={entry.id} className="flex flex-wrap items-baseline gap-x-2 gap-y-1 border-b border-zk-border/60 pb-2 last:border-b-0 last:pb-0">
                 <span className="font-semibold tabular-nums text-zk-text">{formatDuration(entry.minutes)}</span>
+                {isAuto ? (
+                  <span className="rounded-full bg-zk-tint px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-zk-accent">Auto</span>
+                ) : (
+                  <span className="rounded-full bg-zk-chip px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-zk-muted">Manual</span>
+                )}
                 <span className="text-zk-muted">{entry.userName}</span>
                 <span className="text-zk-muted">· {entry.spentOnLabel}</span>
                 {entry.note ? <span className="w-full text-zk-text2">{entry.note}</span> : null}
@@ -91,39 +136,10 @@ export function TimeTrackingPanel({ bugId, canEdit, isAdmin, viewerId, entries }
           })}
         </ul>
       ) : (
-        <p className="m-0 mt-2 text-sm text-zk-muted">No time logged yet.</p>
+        <p className="m-0 mt-2 text-sm text-zk-muted">
+          {isTracking ? "Time will be logged automatically when this issue is resolved." : "No time tracked yet. Time is logged automatically when work is in progress."}
+        </p>
       )}
-
-      {canEdit ? (
-        <form onSubmit={submit} className="mt-4 flex flex-wrap items-end gap-2 border-t border-zk-border pt-3">
-          <label className="text-xs font-medium text-zk-muted">
-            Minutes
-            <input
-              type="number"
-              min={1}
-              max={MAX_TIME_ENTRY_MINUTES}
-              step={1}
-              value={minutes}
-              onChange={(event) => setMinutes(event.target.value)}
-              placeholder="60"
-              className="mt-1 block w-24 rounded-lg border border-zk-border bg-zk-bg px-3 py-2 text-sm text-zk-text placeholder:text-zk-muted focus:outline-none focus:ring-2 focus:ring-zk-accent"
-            />
-          </label>
-          <label className="min-w-[12rem] flex-1 text-xs font-medium text-zk-muted">
-            What did you work on?
-            <input
-              value={note}
-              onChange={(event) => setNote(event.target.value)}
-              maxLength={500}
-              placeholder="Optional note"
-              className="mt-1 block w-full rounded-lg border border-zk-border bg-zk-bg px-3 py-2 text-sm text-zk-text placeholder:text-zk-muted focus:outline-none focus:ring-2 focus:ring-zk-accent"
-            />
-          </label>
-          <button type="submit" disabled={pending || !minutes.trim()} className="rounded-lg border border-zk-border px-3 py-2 text-sm font-semibold text-zk-text disabled:opacity-50">
-            {pending ? "Saving…" : "Log time"}
-          </button>
-        </form>
-      ) : null}
 
       {error ? <p role="alert" className="m-0 mt-2 text-sm text-zk-bad-fg">{error}</p> : null}
     </section>

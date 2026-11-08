@@ -565,9 +565,32 @@ export async function updateBugAction(
     isBoosted?: boolean;
     boostedAt?: Date | null;
     priority?: string;
+    inProgressStartedAt?: Date | null;
+    inProgressStartedBy?: string | null;
+    lastHeartbeatAt?: Date | null;
+    activeMinutes?: number;
   } = {};
 
   if (parsed.data.status && parsed.data.status !== existing.status) Object.assign(data, moveTo(entrySubstatus(existing.track, parsed.data.status)));
+
+  // #auto-time: automated time tracking from status transitions.
+  const newStatus = parsed.data.status;
+  const wasInProgress = existing.status === "in_progress";
+  const nowInProgress = newStatus === "in_progress";
+  const leavingInProgress = wasInProgress && newStatus !== undefined && newStatus !== "in_progress";
+  const enteringInProgress = !wasInProgress && nowInProgress;
+
+  if (enteringInProgress) {
+    data.inProgressStartedAt = new Date();
+    data.inProgressStartedBy = userId;
+    data.lastHeartbeatAt = new Date();
+    data.activeMinutes = 0;
+  }
+  if (leavingInProgress) {
+    data.inProgressStartedAt = null;
+    data.inProgressStartedBy = null;
+    data.lastHeartbeatAt = null;
+  }
   if (admin) {
     if (parsed.data.typeId !== undefined) {
       data.typeId = parsed.data.typeId === "" ? null : parsed.data.typeId;
@@ -745,6 +768,36 @@ export async function updateBugAction(
           where: { id: bugId },
           data,
         });
+      }
+
+      // #auto-time: create auto TimeEntry when leaving in_progress.
+      if (leavingInProgress && existing.inProgressStartedAt) {
+        const elapsed = Math.floor((Date.now() - new Date(existing.inProgressStartedAt).getTime()) / 60000);
+        const active = existing.activeMinutes ?? 0;
+        const minutes = Math.min(Math.max(1, active > 0 ? active : elapsed), 8 * 60);
+        const note = active > 0 && active !== elapsed
+          ? `Auto-tracked: ${minutes}m active of ${Math.min(elapsed, 8 * 60)}m total`
+          : `Auto-tracked: ${minutes}m`;
+        if (typeof tx.timeEntry?.create === "function") {
+          await tx.timeEntry.create({
+            data: {
+              bugId,
+              userId: existing.inProgressStartedBy ?? userId,
+              minutes,
+              note,
+              source: "auto",
+            },
+          });
+          await tx.bugActivity.create({
+            data: {
+              bugId,
+              actorId: userId,
+              type: "commented",
+              summary: `auto-tracked ${minutes}m on this issue`,
+              metadata: { field: "time", minutes, source: "auto" },
+            },
+          });
+        }
       }
       if (data.status === "resolved" || data.status === "closed") {
         const activeClaims = typeof tx.issueClaim?.findMany === "function"

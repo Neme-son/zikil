@@ -16,8 +16,8 @@ function revalidate() {
 }
 
 /**
- * Log time against an issue. Only the issue's assignee or an organisation
- * admin may log time, matching who may change the issue's planning fields.
+ * Add a manual time correction entry (admin only). Normal time tracking is
+ * fully automated from status transitions and heartbeats.
  */
 export async function addTimeEntryAction(
   bugId: string,
@@ -40,9 +40,8 @@ export async function addTimeEntryAction(
   });
   if (!bug) return { error: "This issue no longer exists or was deleted." };
 
-  const isAssignee = bug.assigneeId === user.id;
-  if (!access.admin && !isAssignee) {
-    return { error: "Only the assignee or an admin can log time on this issue." };
+  if (!access.admin) {
+    return { error: "Only an admin can add a manual time correction." };
   }
 
   try {

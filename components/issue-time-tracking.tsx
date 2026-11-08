@@ -9,14 +9,19 @@ const dayFormat = new Intl.DateTimeFormat("en-GB", {
   year: "numeric",
 });
 
-/**
- * The issue's time entries, read by the page so the panel itself stays a
- * small client component. Only the most recent 100 entries are shown; the
- * total is the sum of the entries that are displayed.
- */
-export async function IssueTimeTracking({ bugId, canEdit }: { bugId: string; canEdit: boolean }) {
+export async function IssueTimeTracking({ bugId }: { bugId: string }) {
   const user = await requireUser();
   const access = await currentOrganisationAccess(user.id, user.role);
+
+  const bug = await prisma.bug.findUnique({
+    where: { id: bugId },
+    select: {
+      status: true,
+      inProgressStartedAt: true,
+      activeMinutes: true,
+    },
+  });
+
   const entries = await prisma.timeEntry.findMany({
     where: { bugId },
     orderBy: [{ spentOn: "desc" }, { createdAt: "desc" }],
@@ -26,17 +31,21 @@ export async function IssueTimeTracking({ bugId, canEdit }: { bugId: string; can
       minutes: true,
       note: true,
       spentOn: true,
+      source: true,
       userId: true,
       user: { select: { name: true } },
     },
   });
 
+  const isTracking = bug?.status === "in_progress" && !!bug.inProgressStartedAt;
+
   return (
     <TimeTrackingPanel
       bugId={bugId}
-      canEdit={canEdit}
       isAdmin={access.admin}
-      viewerId={user.id}
+      isTracking={isTracking}
+      activeMinutes={bug?.activeMinutes ?? 0}
+      startedAt={bug?.inProgressStartedAt?.toISOString() ?? null}
       entries={entries.map((entry) => ({
         id: entry.id,
         minutes: entry.minutes,
@@ -44,6 +53,7 @@ export async function IssueTimeTracking({ bugId, canEdit }: { bugId: string; can
         spentOnLabel: dayFormat.format(entry.spentOn),
         userId: entry.userId,
         userName: entry.user.name,
+        source: entry.source,
       }))}
     />
   );
