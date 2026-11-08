@@ -8,12 +8,14 @@ import { connectProject } from "./commands/connect.js";
 import { cmdWork } from "./commands/work.js";
 import { cmdSetupOpencode } from "./commands/setup-opencode.js";
 import { resolveConfigPath, loadConfig, apiFetch } from "./config/store.js";
+import { cmdInit } from "./commands/init.js";
 
 const HELP = `ziki-cli — thin client for the Ziki Local Agent Environment
 
 Usage: ziki-cli <command> [options]
 
 Commands:
+  init            guided first-time setup (login, connect, setup-opencode)
   login           pair this machine with a Ziki account
   connect         link the current repository to a Ziki project
   setup-opencode  install the OpenCode adapter (plan first, write on approval)
@@ -156,6 +158,12 @@ export async function run(argv, _ctx) {
         return { code: 1, text: `${error.message}\n` };
       }
     }
+    case "init":
+      try {
+        return await cmdInit({ server: flagValue(rest, ["--server"]) });
+      } catch (error) {
+        return { code: 1, text: `${error.message}\n` };
+      }
     case "connect":
       return cmdConnect(rest);
     case "work":

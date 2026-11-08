@@ -6,8 +6,13 @@ Node 20+. Milestone 1 covers OpenCode only and is report-only: the agent
 investigates and implements locally, then writes a delivery report. Nothing
 submits to Ziki.
 
+First time here? Run `ziki-cli init` — it pairs, links this checkout, and
+installs the OpenCode adapter, asking before it writes anything.
+
 ## Commands
 
+- `init [--server URL]` — guided first-time setup: login, connect, then
+  setup-opencode. Asks before writing anything.
 - `login [--server URL] [--name N] [--model M] [--level L] [--no-open]` — pair
   with a Ziki account (device code; default server is https://ziki.dev, plain
   http is localhost-only).
