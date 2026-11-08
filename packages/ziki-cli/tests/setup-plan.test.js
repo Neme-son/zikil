@@ -38,3 +38,26 @@ test('apply refuses unwritten confirmations and writes nothing', () => {
   assert.throws(() => applyPlan(plan, { confirm: [], io: { writeFile: (p) => writes.push(p) } }), /--confirm/);
   assert.deepEqual(writes, []);
 });
+
+test('apply refuses replace entries without replace approval, writes with it', () => {
+  const writes = [];
+  const io = { writeFile: (p) => writes.push(p) };
+  const plan = {
+    files: [
+      {
+        path: 'opencode.json',
+        absolutePath: '/tmp/opencode.json',
+        status: 'update',
+        reason: 'foreign',
+        requiresConfirmation: true,
+        requiresReplace: true,
+        desiredText: 'x',
+      },
+    ],
+  };
+  assert.throws(() => applyPlan(plan, { confirm: ['opencode.json'], io }), /replace approval/);
+  assert.deepEqual(writes, []);
+  const written = applyPlan(plan, { confirm: ['opencode.json'], io, replaceOwned: true });
+  assert.deepEqual(written, ['opencode.json']);
+  assert.deepEqual(writes, ['/tmp/opencode.json']);
+});

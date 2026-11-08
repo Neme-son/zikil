@@ -59,10 +59,14 @@ export function realIo() {
   };
 }
 
-export function applyPlan(plan, { confirm = [], io }) {
+export function applyPlan(plan, { confirm = [], io, replaceOwned = false }) {
   const blocked = plan.files.filter((file) => file.status === "blocked");
   if (blocked.length > 0) {
     throw new Error(`refusing to apply: blocked entries present (${blocked.map((f) => f.path).join(", ")})`);
+  }
+  const replaced = plan.files.filter((file) => file.requiresReplace === true && file.status !== "unchanged");
+  if (replaced.length > 0 && replaceOwned !== true) {
+    throw new Error(`refusing to replace without replace approval (${replaced.map((f) => f.path).join(", ")})`);
   }
   const confirmed = new Set(confirm);
   const changed = plan.files.filter((file) => file.status !== "unchanged");

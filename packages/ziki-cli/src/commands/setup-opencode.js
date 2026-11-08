@@ -13,6 +13,10 @@ const SKILL_NAME = "ziki-work";
 const MANIFEST_NAME = ".ziki-manifest.json";
 const MAX_PERSONA_BYTES = 64 * 1024;
 
+// Asked in a terminal before a foreign ziki entry is replaced. Scripts pass
+// --replace-ziki with --apply --yes --confirm <path> instead.
+export const REPLACE_QUESTION = "Replace the existing ziki entry? A backup is made first. [y/N] ";
+
 // Strip // and /* */ comments (block comments become one space so tokens
 // never join) and trailing commas. Both passes are string-aware.
 export function stripJsonc(text) {
@@ -243,15 +247,41 @@ export function buildSetupPlan({ home, cliRoot, serverUrl, mcpServerPath, person
     if (existing === null || typeof existing !== "object") {
       files.push(blockedEntry(activePath, "invalid-json", `${path.basename(activePath)} is not valid JSON or JSONC. ${handMerge}`, true));
     } else {
-      try {
-        const merged = mergeOpencodeConfig(existing, { ziki: block }, tools);
-        const entry = pushFile(activePath, `${JSON.stringify(merged, null, 2)}\n`);
+      // A differing ziki entry is ours to update when the manifest proves we
+      // wrote the file; anyone else's entry needs an explicit replace
+      // approval, and the plan shows only that entry as a diff. Owned tool
+      // denials follow the same rule: ours update, foreign need replace.
+      const ours = typeof recorded[activePath] === "string";
+      const filename = path.basename(activePath);
+      const markJsonc = (entry) => {
         if (isJsonc) {
-          entry.reason = "jsonc";
-          entry.existingText = activeTarget.text;
+          entry.isJsonc = true;
+          if (entry.reason !== "foreign") {
+            entry.reason = "jsonc";
+            entry.existingText = activeTarget.text;
+          }
         }
-      } catch (error) {
-        files.push(blockedEntry(activePath, "conflict", error.message, true));
+      };
+      let merged = null;
+      try {
+        merged = mergeOpencodeConfig(existing, { ziki: block }, tools, { filename });
+      } catch {
+        merged = null;
+      }
+      if (merged !== null) {
+        markJsonc(pushFile(activePath, `${JSON.stringify(merged, null, 2)}\n`));
+      } else if (ours) {
+        const forced = mergeOpencodeConfig(existing, { ziki: block }, tools, { force: true, filename });
+        markJsonc(pushFile(activePath, `${JSON.stringify(forced, null, 2)}\n`));
+      } else {
+        const forced = mergeOpencodeConfig(existing, { ziki: block }, tools, { force: true, filename });
+        const entry = pushFile(activePath, `${JSON.stringify(forced, null, 2)}\n`);
+        entry.reason = "foreign";
+        entry.requiresReplace = true;
+        const oldEntry = existing && typeof existing.mcp === "object" && existing.mcp !== null ? existing.mcp.ziki : undefined;
+        entry.replaceOld = oldEntry === undefined ? "(absent)" : JSON.stringify(oldEntry, null, 2);
+        entry.replaceNew = JSON.stringify(block, null, 2);
+        markJsonc(entry);
       }
     }
   } else {
@@ -293,31 +323,48 @@ export function formatPlan(plan) {
   for (const file of plan.files) {
     const reason = file.reason ? ` (${file.reason})` : "";
     const confirm = file.requiresConfirmation ? " [needs --confirm]" : "";
-    lines.push(`${file.status}  ${file.path}${reason}${confirm}`);
+    const replace = file.requiresReplace === true ? " [needs --replace-ziki]" : "";
+    lines.push(`${file.status}  ${file.path}${reason}${confirm}${replace}`);
     if (file.status === "blocked" && file.detail) {
       for (const detailLine of file.detail.split("\n")) {
         lines.push(`  ${detailLine}`);
       }
     }
-    if (file.reason === "jsonc" && typeof file.existingText === "string") {
+    if (file.reason === "foreign" && typeof file.replaceOld === "string" && typeof file.replaceNew === "string") {
+      // Only the ziki entry, never the whole file: the rest stays untouched.
+      if (file.replaceOld !== file.replaceNew) {
+        for (const diffLine of diffLines(file.replaceOld, file.replaceNew)) {
+          lines.push(`  ${diffLine}`);
+        }
+      }
+    }
+    if (file.isJsonc === true) {
       lines.push("  warning: comments and formatting in this file will be removed; a backup is made before writing");
-      for (const diffLine of diffLines(file.existingText, file.desiredText)) {
-        lines.push(`  ${diffLine}`);
+      if (file.reason !== "foreign" && typeof file.existingText === "string") {
+        for (const diffLine of diffLines(file.existingText, file.desiredText)) {
+          lines.push(`  ${diffLine}`);
+        }
       }
     }
   }
   const needConfirm = plan.files.filter((f) => f.requiresConfirmation && f.status !== "unchanged");
+  const needReplace = plan.files.some((f) => f.requiresReplace === true && f.status !== "unchanged");
   if (needConfirm.length > 0) {
-    lines.push(`re-run with: --apply --yes ${needConfirm.map((f) => `--confirm "${f.path}"`).join(" ")}`);
+    lines.push(`re-run with: --apply --yes${needReplace ? " --replace-ziki" : ""} ${needConfirm.map((f) => `--confirm "${f.path}"`).join(" ")}`);
   } else if (plan.files.some((f) => f.status !== "unchanged")) {
     lines.push("re-run with: --apply --yes");
   }
   return lines.join("\n");
 }
 
-export function applySetupPlan(plan, { confirm = [], yes = false, io = realIo(), now = () => new Date() } = {}) {
+export function applySetupPlan(plan, { confirm = [], yes = false, replaceZiki = false, io = realIo(), now = () => new Date() } = {}) {
   if (yes !== true) {
     throw new Error("refusing to write without approval; re-run with --apply --yes (plus --confirm <path> for existing files)");
+  }
+  const replaced = plan.files.filter((file) => file.requiresReplace === true && file.status !== "unchanged");
+  if (replaced.length > 0 && replaceZiki !== true) {
+    const flags = replaced.map((file) => `--confirm "${file.path}"`).join(" ");
+    throw new Error(`refusing to replace the existing ziki entry without approval; re-run with --replace-ziki --apply --yes ${flags}`);
   }
   const confirmed = new Set(confirm);
   const changed = plan.files.filter((file) => file.status !== "unchanged");
@@ -331,17 +378,17 @@ export function applySetupPlan(plan, { confirm = [], yes = false, io = realIo(),
     const stamp = now().toISOString().replace(/[:.]/g, "-");
     fs.copyFileSync(configEntry.absolutePath, `${configEntry.absolutePath}.ziki-backup-${stamp}`);
   }
-  return applyPlan(plan, { confirm, io });
+  return applyPlan(plan, { confirm, io, replaceOwned: replaceZiki });
 }
 
-export async function cmdSetupOpencode({ apply = false, yes = false, confirm = [], persona = "keep", server, mcpServer } = {}, { home = os.homedir(), root = packageRoot(), asker = defaultAsker(), out = defaultOut } = {}) {
+export async function cmdSetupOpencode({ apply = false, yes = false, confirm = [], replaceZiki = false, persona = "keep", server, mcpServer } = {}, { home = os.homedir(), root = packageRoot(), asker = defaultAsker(), out = defaultOut } = {}) {
   let serverUrl = server;
   if (!serverUrl) {
     let config;
     try {
       config = loadConfig(resolveConfigPath());
     } catch {
-      return { code: 1, text: "not paired; run `ziki-cli login` first (or pass --server)\n" };
+      return { code: 1, text: "not paired; run `ziki login` first (or pass --server)\n" };
     }
     serverUrl = config.url;
   }
@@ -370,16 +417,25 @@ export async function cmdSetupOpencode({ apply = false, yes = false, confirm = [
   }
   let toConfirm = confirm;
   let toYes = yes;
+  let toReplace = replaceZiki;
   if (!apply) {
     out(formatPlan(plan));
+    const blocked = plan.files.filter((file) => file.status === "blocked");
+    if (blocked.length > 0) {
+      return { code: 1, text: `cannot apply with blocked entries (${blocked.map((f) => f.path).join(", ")}); see above, fix, then re-run.\n` };
+    }
     if (!(await asker.confirm(planQuestion(plan)))) {
     return { code: 0, text: "not applied\n" };
     }
+    if (plan.files.some((file) => file.requiresReplace === true && file.status !== "unchanged") && !(await asker.confirm(REPLACE_QUESTION))) {
+      return { code: 0, text: "not applied\n" };
+    }
     toConfirm = plan.files.map((file) => file.path);
     toYes = true;
+    toReplace = true;
   }
   try {
-    const written = applySetupPlan(plan, { confirm: toConfirm, yes: toYes });
+    const written = applySetupPlan(plan, { confirm: toConfirm, yes: toYes, replaceZiki: toReplace });
     return { code: 0, text: `wrote ${written.length} file(s)\n` };
   } catch (error) {
     return { code: 1, text: `${error.message}\n` };
