@@ -6,7 +6,10 @@ import { SECURITY_STAGE_FILTERS } from "@/components/security-stage-filter";
 import { SECURITY_SEVERITIES, SEVERITY_GUIDE } from "@/lib/security-severity";
 
 const card = "rounded-[20px] border border-zk-border bg-zk-surface p-5 sm:p-6";
-const stages = SECURITY_STAGE_FILTERS.filter((stage) => stage.value !== "all");
+// Closed, Rejected and Archived are other ways a finding can end, not steps after Live.
+const ENDINGS = new Set<string>(["closed", "rejected", "archived"]);
+const stages = SECURITY_STAGE_FILTERS.filter((stage) => stage.value !== "all" && !ENDINGS.has(stage.value));
+const endings = SECURITY_STAGE_FILTERS.filter((stage) => ENDINGS.has(stage.value));
 
 export function SecuritySettings({
   isAdmin,
@@ -115,6 +118,10 @@ export function SecuritySettings({
                 </li>
               ))}
             </ol>
+            <p className="mt-3 text-sm text-zk-text2">
+              A finding can also end as {new Intl.ListFormat("en", { type: "disjunction" }).format(endings.map((stage) => stage.label))} instead of
+              going live.
+            </p>
           </section>
         </>
       )}
