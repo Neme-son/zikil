@@ -7,6 +7,7 @@ import { resolveConfigPath, loadConfig } from "../config/store.js";
 import { assertServerRule } from "./login.js";
 import { formatPlan } from "./setup-opencode.js";
 import { defaultAsker, defaultOut, planQuestion } from "../setup/ask.js";
+import { PROGRAM_NAME } from "../program.js";
 
 export const EXPERIMENTAL_NOTE = "experimental: generated from docs, not yet verified against a live Claude. Check the command and snippet before you trust them.";
 
@@ -63,7 +64,7 @@ export async function cmdSetupClaude({ apply = false, yes = false, confirm = [],
     try {
       config = loadConfig(resolveConfigPath());
     } catch {
-      return { code: 1, text: "not paired; run `ziki-cli login` first (or pass --server)\n" };
+      return { code: 1, text: "not paired; run `" + PROGRAM_NAME + " login` first (or pass --server)\n" };
     }
     serverUrl = config.url;
   }
