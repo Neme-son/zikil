@@ -6,6 +6,7 @@ import { classifyFile, realIo, applyPlan } from "../setup/plan.js";
 import { resolveConfigPath, loadConfig } from "../config/store.js";
 import { assertServerRule } from "./login.js";
 import { formatPlan } from "./setup-opencode.js";
+import { defaultAsker, defaultOut, planQuestion } from "../setup/ask.js";
 
 export const EXPERIMENTAL_NOTE = "experimental: generated from docs, not yet verified against a live Claude. Check the command and snippet before you trust them.";
 
@@ -55,7 +56,7 @@ function formatClaudePlan(plan) {
   return lines.join("\n");
 }
 
-export async function cmdSetupClaude({ apply = false, yes = false, confirm = [], server, mcpServer } = {}, { home = os.homedir(), root = process.cwd() } = {}) {
+export async function cmdSetupClaude({ apply = false, yes = false, confirm = [], server, mcpServer } = {}, { home = os.homedir(), root = process.cwd(), asker = defaultAsker(), out = defaultOut } = {}) {
   let serverUrl = server;
   if (!serverUrl) {
     let config;
@@ -81,13 +82,23 @@ export async function cmdSetupClaude({ apply = false, yes = false, confirm = [],
     return { code: 1, text: `MCP server missing at ${serverPath}; rebuild the bundle (npm run prepack) or pass --mcp-server\n` };
   }
   const plan = buildClaudePlan({ home, serverUrl, mcpServerPath: serverPath });
-  if (!apply) {
+  if (!apply && !asker) {
     return { code: 0, text: `${formatClaudePlan(plan)}\n` };
   }
-  if (yes !== true) {
+  let toConfirm = confirm;
+  let toYes = yes;
+  if (!apply) {
+    out(`${formatClaudePlan(plan)}`);
+    if (!(await asker.confirm(planQuestion(plan)))) {
+      return { code: 0, text: "not applied\n" };
+    }
+    toConfirm = plan.files.map((file) => file.path);
+    toYes = true;
+  }
+  if (toYes !== true) {
     throw new Error("refusing to write without approval; re-run with --apply --yes (plus --confirm <path> for the existing file)");
   }
-  const confirmed = new Set(confirm);
+  const confirmed = new Set(toConfirm);
   const changed = plan.files.filter((file) => file.status !== "unchanged");
   const missing = changed.filter((file) => file.requiresConfirmation && !confirmed.has(file.path));
   if (missing.length > 0) {
@@ -98,6 +109,6 @@ export async function cmdSetupClaude({ apply = false, yes = false, confirm = [],
     const stamp = new Date().toISOString().replace(/[:.]/g, "-");
     fs.copyFileSync(entry.absolutePath, `${entry.absolutePath}.ziki-backup-${stamp}`);
   }
-  const written = applyPlan(plan, { confirm, io: realIo() });
+  const written = applyPlan(plan, { confirm: toConfirm, io: realIo() });
   return { code: 0, text: `apply wrote settings only; still run by hand: ${plan.mcpAddCommand}\nwrote ${written.length} file(s)\n` };
 }

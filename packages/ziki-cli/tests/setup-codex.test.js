@@ -80,3 +80,39 @@ test('foreign ziki table blocks with instructions', () => {
     fs.rmSync(home, { recursive: true, force: true });
   }
 });
+
+test('interactive yes applies after asking', async () => {
+  const home = makeHome();
+  try {
+    const fakeMcp = path.join(home, 'mcp.cjs');
+    fs.writeFileSync(fakeMcp, '// fake');
+    const asked = [];
+    const result = await cmdSetupCodex(
+      { server: 'https://ziki.dev', mcpServer: fakeMcp },
+      { home, root: home, asker: { confirm: async (q) => { asked.push(q); return true; } }, out: () => {} },
+    );
+    assert.equal(result.code, 0);
+    assert.equal(asked.length, 1);
+    assert.match(asked[0], /Apply these changes\? \[y\/N\]/);
+    assert.ok(fs.existsSync(path.join(home, '.codex', 'config.toml')));
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('interactive no stops cleanly without writing', async () => {
+  const home = makeHome();
+  try {
+    const fakeMcp = path.join(home, 'mcp.cjs');
+    fs.writeFileSync(fakeMcp, '// fake');
+    const result = await cmdSetupCodex(
+      { server: 'https://ziki.dev', mcpServer: fakeMcp },
+      { home, root: home, asker: { confirm: async () => false }, out: () => {} },
+    );
+    assert.equal(result.code, 0);
+    assert.match(result.text, /not applied/);
+    assert.equal(fs.existsSync(path.join(home, '.codex')), false);
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});

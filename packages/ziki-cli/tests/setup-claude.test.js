@@ -66,3 +66,39 @@ test('unparseable settings block with instructions', () => {
   assert.equal(plan.files[0].status, 'blocked');
   assert.match(plan.files[0].detail, /by hand/);
 });
+
+test('interactive yes applies after asking', async () => {
+  const home = makeHome();
+  try {
+    const fakeMcp = path.join(home, 'mcp.cjs');
+    fs.writeFileSync(fakeMcp, '// fake');
+    const asked = [];
+    const result = await cmdSetupClaude(
+      { server: 'https://ziki.dev', mcpServer: fakeMcp },
+      { home, root: home, asker: { confirm: async (q) => { asked.push(q); return true; } }, out: () => {} },
+    );
+    assert.equal(result.code, 0);
+    assert.equal(asked.length, 1);
+    assert.match(asked[0], /Apply these changes\? \[y\/N\]/);
+    assert.ok(fs.existsSync(path.join(home, '.claude', 'settings.json')));
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('interactive no stops cleanly without writing', async () => {
+  const home = makeHome();
+  try {
+    const fakeMcp = path.join(home, 'mcp.cjs');
+    fs.writeFileSync(fakeMcp, '// fake');
+    const result = await cmdSetupClaude(
+      { server: 'https://ziki.dev', mcpServer: fakeMcp },
+      { home, root: home, asker: { confirm: async () => false }, out: () => {} },
+    );
+    assert.equal(result.code, 0);
+    assert.match(result.text, /not applied/);
+    assert.equal(fs.existsSync(path.join(home, '.claude')), false);
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
