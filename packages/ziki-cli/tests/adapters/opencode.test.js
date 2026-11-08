@@ -132,3 +132,32 @@ test('config merge carries the tools map alongside mcp', () => {
   assert.equal(merged.theme, 'dark');
   assert.deepEqual(merged.tools, { 'ziki_*': false });
 });
+
+test('forced merge overwrites a different ziki block and preserves everything else', () => {
+  const merged = mergeOpencodeConfig(
+    { theme: 'dark', mcp: { other: { type: 'local' }, ziki: { type: 'local', command: ['other'] } } },
+    { ziki: { type: 'local', command: ['node', '/x'] } },
+    undefined,
+    { force: true },
+  );
+  assert.equal(merged.theme, 'dark');
+  assert.deepEqual(merged.mcp.other, { type: 'local' });
+  assert.deepEqual(merged.mcp.ziki, { type: 'local', command: ['node', '/x'] });
+});
+
+test('forced tools merge flips owned denials and preserves foreign entries', () => {
+  const merged = mergeToolsMap({ other_tool: true, ziki_ziki_bid: true }, { ziki_ziki_bid: false }, { force: true });
+  assert.equal(merged.other_tool, true);
+  assert.equal(merged.ziki_ziki_bid, false);
+});
+
+test('conflict messages name the real config file', () => {
+  assert.throws(
+    () => mergeOpencodeConfig({ mcp: { ziki: { type: 'x' } } }, { ziki: { type: 'y' } }, undefined, { filename: 'opencode.jsonc' }),
+    /opencode\.jsonc already configures/,
+  );
+  assert.throws(
+    () => mergeToolsMap({ 'ziki_*': true }, { 'ziki_*': false }, { filename: 'opencode.jsonc' }),
+    /opencode\.jsonc already sets tool/,
+  );
+});

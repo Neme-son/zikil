@@ -165,31 +165,34 @@ export function resolveMcpServerPath({ flag, env, cliRoot }) {
 }
 
 // Merges ONLY strict-JSON configs. JSONC or unparseable files are refused by
-// the caller (blocked status), never silently rewritten.
-export function mergeOpencodeConfig(existing, desiredMcp, desiredTools) {
+// the caller (blocked status), never silently rewritten. By default a
+// differing entry throws for the human; `force` overwrites entries we own
+// (the manifest proves we wrote the file) or that the human approved.
+export function mergeOpencodeConfig(existing, desiredMcp, desiredTools, { force = false, filename = "opencode.json" } = {}) {
   const out = { ...(existing ?? {}) };
   const mcp = { ...((existing && existing.mcp) || {}) };
   for (const [name, block] of Object.entries(desiredMcp)) {
-    if (mcp[name] !== undefined && JSON.stringify(mcp[name]) !== JSON.stringify(block)) {
-      throw new Error(`opencode.json already configures MCP server "${name}" differently; remove or update it by hand first`);
+    if (mcp[name] !== undefined && JSON.stringify(mcp[name]) !== JSON.stringify(block) && !force) {
+      throw new Error(`${filename} already configures MCP server "${name}" differently; remove or update it by hand first`);
     }
     mcp[name] = block;
   }
   out.mcp = mcp;
   if (desiredTools) {
-    out.tools = mergeToolsMap((existing && existing.tools) || {}, desiredTools);
+    out.tools = mergeToolsMap((existing && existing.tools) || {}, desiredTools, { force, filename });
   }
   return out;
 }
 
 // Adds our denials to the user's tools map. Anything already false stays;
 // anything enabled that we deny is a conflict for the human, never a silent
-// flip: they may have enabled it on purpose.
-export function mergeToolsMap(existingTools, desiredTools) {
+// flip: they may have enabled it on purpose. `force` overwrites owned
+// entries the same way the MCP block above does.
+export function mergeToolsMap(existingTools, desiredTools, { force = false, filename = "opencode.json" } = {}) {
   const tools = { ...(existingTools ?? {}) };
   for (const [name, value] of Object.entries(desiredTools)) {
-    if (tools[name] !== undefined && tools[name] !== value) {
-      throw new Error(`opencode.json already sets tool "${name}" differently; remove or update it by hand first`);
+    if (tools[name] !== undefined && tools[name] !== value && !force) {
+      throw new Error(`${filename} already sets tool "${name}" differently; remove or update it by hand first`);
     }
     tools[name] = value;
   }
