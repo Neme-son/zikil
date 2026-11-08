@@ -8,20 +8,19 @@ import { IssueApiError } from "@/lib/agent-api/errors";
 
 export type AnswerActionResult = { ok: true } | { ok: false; error: string };
 
-export async function answerEscalationAction(
-  _previous: AnswerActionResult | undefined,
-  formData: FormData,
+async function submitEscalationAnswer(
+  escalationId: string,
+  rawAnswer: string,
 ): Promise<AnswerActionResult> {
   const user = await requireUser();
   const organisationId = await currentOrganisationIdFor(user.id);
   if (!organisationId) return { ok: false, error: "Organisation membership required." };
 
-  const escalationId = formData.get("escalationId") ?? formData.get("questionId");
   if (typeof escalationId !== "string" || !escalationId) {
     return { ok: false, error: "Invalid escalation." };
   }
 
-  const parsed = answerSchema.safeParse({ answer: formData.get("answer") ?? "" });
+  const parsed = answerSchema.safeParse({ answer: rawAnswer });
   if (!parsed.success) return { ok: false, error: "Write an answer before sending it." };
 
   try {
@@ -41,14 +40,26 @@ export async function answerEscalationAction(
   return { ok: true };
 }
 
+export async function answerEscalationAction(
+  _previous: AnswerActionResult | undefined,
+  formData: FormData,
+): Promise<AnswerActionResult> {
+  const escalationId = formData.get("escalationId") ?? formData.get("questionId");
+  const rawAnswer = (formData.get("answer") as string) ?? "";
+  return submitEscalationAnswer(String(escalationId ?? ""), rawAnswer);
+}
+
+export async function answerInlineEscalationAction(
+  escalationId: string,
+  answerText: string,
+): Promise<AnswerActionResult> {
+  return submitEscalationAnswer(escalationId, answerText);
+}
+
 export async function quickResolveEscalationAction(
   escalationId: string,
   actionType: "approve" | "authorize" | "reject",
 ): Promise<AnswerActionResult> {
-  const user = await requireUser();
-  const organisationId = await currentOrganisationIdFor(user.id);
-  if (!organisationId) return { ok: false, error: "Organisation membership required." };
-
   let answerText = "Approved. Proceed with your proposed approach.";
   if (actionType === "authorize") {
     answerText = "Work authorized. You may begin implementation.";
@@ -56,17 +67,5 @@ export async function quickResolveEscalationAction(
     answerText = "Declined. Do not proceed with this direction.";
   }
 
-  try {
-    await answerAgentQuestion(user.id, organisationId, escalationId, answerText);
-  } catch (error) {
-    if (error instanceof IssueApiError) return { ok: false, error: error.message };
-    throw error;
-  }
-
-  revalidatePath("/inbox");
-  // Answered questions leave the Activity page's "Needs you" (#849).
-  revalidatePath("/activity");
-  revalidatePath(`/inbox/escalations/${escalationId}`);
-  revalidatePath("/[org]/[project]", "layout");
-  return { ok: true };
+  return submitEscalationAnswer(escalationId, answerText);
 }
