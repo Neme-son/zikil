@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { buildSetupPlan, applySetupPlan, cmdSetupOpencode } from '../src/commands/setup-opencode.js';
+import { buildSetupPlan, applySetupPlan, cmdSetupOpencode, parseJsonc, diffLines, formatPlan } from '../src/commands/setup-opencode.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const CLI_ROOT = path.join(HERE, '..');
@@ -96,17 +96,25 @@ test('foreign opencode.json merges as a confirmed update with backup', () => {
   }
 });
 
-test('opencode.jsonc blocks with manual-merge instructions', () => {
+test('opencode.jsonc merges in place with warning, confirm and backup', () => {
   const home = makeHome();
   try {
     const cfgDir = path.join(home, '.config', 'opencode');
     fs.mkdirSync(cfgDir, { recursive: true });
-    fs.writeFileSync(path.join(cfgDir, 'opencode.jsonc'), '{ /* comments */ }');
+    fs.writeFileSync(path.join(cfgDir, 'opencode.jsonc'), '{\n  // mine\n  "theme": "dark",\n}\n');
     const plan = buildSetupPlan(baseInput(home));
-    const entry = plan.files.find((f) => f.path.endsWith('opencode.json'));
-    assert.equal(entry.status, 'blocked');
-    assert.match(entry.detail, /by hand/);
-    assert.throws(() => applySetupPlan(plan, { confirm: [], yes: true }), /blocked/);
+    const entry = plan.files.find((f) => f.path.endsWith('opencode.jsonc'));
+    assert.equal(entry.status, 'update');
+    assert.equal(entry.reason, 'jsonc');
+    assert.equal(entry.requiresConfirmation, true);
+    assert.match(formatPlan(plan), /comments and formatting in this file will be removed/);
+    const written = applySetupPlan(plan, { confirm: [entry.path], yes: true });
+    assert.ok(written.includes(entry.path));
+    const merged = JSON.parse(fs.readFileSync(path.join(cfgDir, 'opencode.jsonc'), 'utf8'));
+    assert.equal(merged.theme, 'dark');
+    assert.ok(merged.mcp.ziki);
+    const backups = fs.readdirSync(cfgDir).filter((n) => n.startsWith('opencode.jsonc.ziki-backup-'));
+    assert.equal(backups.length, 1);
   } finally {
     fs.rmSync(home, { recursive: true, force: true });
   }
@@ -235,3 +243,78 @@ test('interactive yes confirms and backs up an existing config', async () => {
     fs.rmSync(home, { recursive: true, force: true });
   }
 });
+
+test('parseJsonc strips comments and trailing commas, keeps strings intact', () => {
+  const doc = parseJsonc(`{
+    // line comment
+    "a": 1, /* block comment */
+    "url": "http://x/y?z=1,2",
+    "weird": "/* not a comment, ]/trailing",
+    "list": [1, 2,],
+  }`);
+  assert.deepEqual(doc, { a: 1, url: 'http://x/y?z=1,2', weird: '/* not a comment, ]/trailing', list: [1, 2] });
+});
+
+test('parseJsonc throws on invalid input', () => {
+  assert.throws(() => parseJsonc('{ broken,,,'), SyntaxError);
+  assert.throws(() => parseJsonc('{"a": 1 /* unterminated'), SyntaxError);
+});
+
+test('diffLines marks removed, added and kept lines', () => {
+  assert.deepEqual(diffLines('a\nb\nc', 'a\nx\nc'), ['  a', '- b', '+ x', '  c']);
+  assert.deepEqual(diffLines('a', 'a\nb'), ['  a', '+ b']);
+});
+
+test('JSONC opencode.json merges as a confirmed update, warns, and backs up', () => {
+  const home = makeHome();
+  try {
+    const cfgDir = path.join(home, '.config', 'opencode');
+    fs.mkdirSync(cfgDir, { recursive: true });
+    const jsonc = `{\n  // my theme\n  "theme": "dark", /* inline */\n  "extra": [1,],\n}\n`;
+    fs.writeFileSync(path.join(cfgDir, 'opencode.json'), jsonc);
+    const plan = buildSetupPlan(baseInput(home));
+    const entry = plan.files.find((f) => f.path.endsWith('opencode.json'));
+    assert.equal(entry.status, 'update');
+    assert.equal(entry.reason, 'jsonc');
+    assert.equal(entry.requiresConfirmation, true);
+    const text = formatPlan(plan);
+    assert.match(text, /comments and formatting in this file will be removed/);
+    assert.match(text, /- .*my theme/);
+    assert.match(text, /\+.*"ziki"/);
+    assert.ok(!entry.desiredText.includes('apiKey'));
+    assert.throws(() => applySetupPlan(plan, { confirm: [], yes: true }), /--confirm/);
+    const written = applySetupPlan(plan, { confirm: [entry.path], yes: true });
+    assert.ok(written.includes(entry.path));
+    const after = fs.readFileSync(path.join(cfgDir, 'opencode.json'), 'utf8');
+    const merged = JSON.parse(after);
+    assert.equal(merged.theme, 'dark');
+    assert.deepEqual(merged.extra, [1]);
+    assert.ok(merged.mcp.ziki);
+    assert.ok(!after.includes('my theme'));
+    const backups = fs.readdirSync(cfgDir).filter((n) => n.startsWith('opencode.json.ziki-backup-'));
+    assert.equal(backups.length, 1);
+    assert.ok(fs.readFileSync(path.join(cfgDir, backups[0]), 'utf8').includes('my theme'));
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('unparseable opencode.json stays blocked with the hand-merge block', () => {
+  const home = makeHome();
+  try {
+    const cfgDir = path.join(home, '.config', 'opencode');
+    fs.mkdirSync(cfgDir, { recursive: true });
+    fs.writeFileSync(path.join(cfgDir, 'opencode.json'), '{ nope,,,');
+    const plan = buildSetupPlan(baseInput(home));
+    const entry = plan.files.find((f) => f.path.endsWith('opencode.json'));
+    assert.equal(entry.status, 'blocked');
+    assert.match(entry.detail, /by hand/);
+    const text = formatPlan(plan);
+    assert.match(text, /blocked.*opencode\.json/);
+    assert.match(text, /"ziki"/);
+    assert.throws(() => applySetupPlan(plan, { confirm: [entry.path], yes: true }), /blocked/);
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
