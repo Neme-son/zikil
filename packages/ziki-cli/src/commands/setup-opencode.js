@@ -7,6 +7,7 @@ import { classifyFile, digest, realIo, applyPlan } from "../setup/plan.js";
 import { resolveConfigPath, loadConfig } from "../config/store.js";
 import { assertServerRule } from "./login.js";
 import { defaultAsker, defaultOut, planQuestion } from "../setup/ask.js";
+import { PROGRAM_NAME } from "../program.js";
 
 const SKILL_NAME = "ziki-work";
 const MANIFEST_NAME = ".ziki-manifest.json";

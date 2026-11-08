@@ -15,3 +15,8 @@ test("unknown command fails with usage", async () => {
   assert.equal(result.code, 2);
   assert.match(result.text, /unknown command/);
 });
+
+test("help shows the installed command name", async () => {
+  const result = await run(["help"], {});
+  assert.match(result.text, /Usage: ziki <command>/);
+});

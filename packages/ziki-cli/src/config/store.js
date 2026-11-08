@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { PROGRAM_NAME } from "../program.js";
 
 export class ConfigError extends Error {}
 
@@ -20,7 +21,7 @@ export function loadConfig(configPath) {
     text = fs.readFileSync(configPath, "utf8");
   } catch (error) {
     if (error && error.code === "ENOENT") {
-      throw new ConfigError(`pairing file not found: ${configPath} (run \`ziki-cli login\` first)`);
+      throw new ConfigError(`pairing file not found: ${configPath} (run \`${PROGRAM_NAME} login\` first)`);
     }
     throw new ConfigError(`cannot read pairing file: ${configPath}`);
   }

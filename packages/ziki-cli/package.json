@@ -6,7 +6,7 @@
   "private": true,
   "license": "PolyForm-Strict-1.0.0",
   "bin": {
-    "ziki-cli": "./bin/ziki.js"
+    "ziki": "./bin/ziki.js"
   },
   "engines": {
     "node": ">=20"

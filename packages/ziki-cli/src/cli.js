@@ -9,10 +9,11 @@ import { cmdWork } from "./commands/work.js";
 import { cmdSetupOpencode } from "./commands/setup-opencode.js";
 import { resolveConfigPath, loadConfig, apiFetch } from "./config/store.js";
 import { cmdInit } from "./commands/init.js";
+import { PROGRAM_NAME } from "./program.js";
 
-const HELP = `ziki-cli — thin client for the Ziki Local Agent Environment
+const HELP = `${PROGRAM_NAME} — thin client for the Ziki Local Agent Environment
 
-Usage: ziki-cli <command> [options]
+Usage: ${PROGRAM_NAME} <command> [options]
 
 Commands:
   init            guided first-time setup (login, connect, setup-opencode)

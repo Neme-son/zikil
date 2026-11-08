@@ -1,4 +1,4 @@
-# ziki-cli (Milestone 1: OpenCode)
+# ziki (Milestone 1: OpenCode)
 
 Thin installable CLI for the Ziki Local Agent Environment
 ([#464](https://github.com/emerjent/ziki/issues/464)). Zero runtime dependencies,
@@ -6,8 +6,17 @@ Node 20+. Milestone 1 covers OpenCode only and is report-only: the agent
 investigates and implements locally, then writes a delivery report. Nothing
 submits to Ziki.
 
-First time here? Run `ziki-cli init` — it pairs, links this checkout, and
+First time here? Run `ziki init` — it pairs, links this checkout, and
 installs the OpenCode adapter, asking before it writes anything.
+## Usage
+
+Installs the `ziki` command (npm package `ziki-cli`):
+
+`ziki status` — identity, projects, readiness.
+`ziki work` — show your agent's current work.
+`ziki setup-opencode` — install the OpenCode adapter (plan first).
+
+Inside this repo, `pnpm ziki` is a separate local developer tool, not this CLI.
 
 ## Commands
 
