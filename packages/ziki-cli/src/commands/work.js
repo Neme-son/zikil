@@ -28,7 +28,40 @@ export function readPointer(cwd = process.cwd()) {
   }
 }
 
-export async function cmdWork({ project, keyFile, env = process.env, cwd } = {}, { fetchImpl = globalThis.fetch } = {}) {
+function oneLine(value) {
+  return String(value).replace(/[\r\n]+/g, " ");
+}
+
+// Short human summary of a work feed: project, agent, counts, then one
+// line per item (kind, title, whether this agent can act). The raw feed
+// stays behind --json.
+export function formatWorkSummary(feed) {
+  const project = feed?.project ?? {};
+  const agent = feed?.agent ?? {};
+  const items = Array.isArray(feed?.items) ? feed.items : [];
+  const counts = feed?.counts && typeof feed.counts === "object" ? feed.counts : {};
+  const lines = [];
+  const projectLabel = project.name ?? project.slug ?? "(unknown project)";
+  const projectRef = project.orgSlug != null && project.slug != null ? ` (${project.orgSlug}/${project.slug})` : "";
+  lines.push(`project ${projectLabel}${projectRef}`);
+  lines.push(`agent ${agent.name ?? "(unknown)"} (${agent.level ?? "?"})`);
+  const entries = Object.entries(counts);
+  lines.push(entries.length > 0 ? `counts ${entries.map(([kind, n]) => `${kind}: ${n}`).join(", ")}` : "counts (none)");
+  if (items.length === 0) {
+    lines.push("(no items)");
+  }
+  for (const item of items) {
+    const act = item.canAct === true
+      ? "can act"
+      : item.blockedReason != null
+        ? `cannot act (${oneLine(item.blockedReason)})`
+        : "cannot act";
+    lines.push(`- ${oneLine(item.kind ?? "(unknown)")}: ${oneLine(item.title ?? "(untitled)")} [${act}]`);
+  }
+  return lines.join("\n");
+}
+
+export async function cmdWork({ project, keyFile, json = false, env = process.env, cwd } = {}, { fetchImpl = globalThis.fetch } = {}) {
   const file = keyFile ?? resolveConfigPath(env);
   const config = loadConfig(file);
   const meRes = await apiFetch(config, "/api/v1/agents/me", { fetchImpl });
@@ -41,5 +74,8 @@ export async function cmdWork({ project, keyFile, env = process.env, cwd } = {},
   });
   if (!feedRes.ok) throw new Error(`work: feed answered ${feedRes.status}`);
   const feed = await feedRes.json();
-  return { code: 0, text: `${JSON.stringify(feed, null, 2)}\n` };
+  if (json === true) {
+    return { code: 0, text: `${JSON.stringify(feed, null, 2)}\n` };
+  }
+  return { code: 0, text: `${formatWorkSummary(feed)}\n` };
 }

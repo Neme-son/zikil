@@ -169,7 +169,7 @@ export async function run(argv, _ctx) {
       return cmdConnect(rest);
     case "work":
       try {
-        return await cmdWork({ project: flagValue(rest, ["--project", "-p"]) });
+        return await cmdWork({ project: flagValue(rest, ["--project", "-p"]), json: hasFlag(rest, ["--json"]) });
       } catch (error) {
         return { code: 1, text: `${error.message}\n` };
       }
