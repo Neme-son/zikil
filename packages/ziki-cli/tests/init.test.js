@@ -98,7 +98,7 @@ test('login no stops cleanly without pairing', async () => {
     });
     const result = await promise;
     assert.equal(result.code, 0);
-    assert.match(lines.join('\n'), /login skipped; re-run `ziki-cli init`/);
+    assert.match(lines.join('\n'), /login skipped; re-run `ziki init`/);
     assert.equal(logins, 0);
   } finally {
     fs.rmSync(home, { recursive: true, force: true });
@@ -175,7 +175,7 @@ test('setup failure stops with the step to re-run', async () => {
     });
     const result = await promise;
     assert.equal(result.code, 1);
-    assert.match(lines.join('\n'), /setup-opencode failed: boom; re-run `ziki-cli init`/);
+    assert.match(lines.join('\n'), /setup-opencode failed: boom; re-run `ziki init`/);
   } finally {
     fs.rmSync(home, { recursive: true, force: true });
   }

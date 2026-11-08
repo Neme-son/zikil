@@ -1,12 +1,14 @@
 // Pure diagnostics: every input comes through `env` so tests inject fakes
 // and the CLI injects the real filesystem and network.
+import { PROGRAM_NAME } from "../program.js";
+
 export async function runDoctor(env) {
   const checks = [];
   checks.push({ name: "node", ok: true, detail: String(env.nodeVersion) });
   if (env.pairingFile.exists) {
     checks.push({ name: "pairing", ok: true, detail: env.pairingFile.path });
   } else {
-    checks.push({ name: "pairing", ok: false, detail: "pairing file not found; run `ziki-cli login`" });
+    checks.push({ name: "pairing", ok: false, detail: "pairing file not found; run `" + PROGRAM_NAME + " login`" });
   }
   try {
     const res = await env.fetchImpl(`${env.serverUrl}/api/health`);
@@ -25,7 +27,7 @@ export async function runDoctor(env) {
       name: "opencode",
       ok: true,
       warning: true,
-      detail: "no opencode config found; run `ziki-cli setup-opencode`",
+      detail: "no opencode config found; run `" + PROGRAM_NAME + " setup-opencode`",
     });
   }
   return { ok: checks.every((c) => c.ok), checks };
