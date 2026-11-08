@@ -10,6 +10,7 @@ function fakeEnv(overrides = {}) {
     fetchImpl: async () => ({ ok: true, status: 200, json: async () => ({ status: 'ok' }) }),
     serverUrl: 'http://localhost:3001',
     opencodeConfig: { exists: true, path: '/home/u/.config/opencode/opencode.json' },
+    mcpServer: { path: '/x/mcp-server.cjs', source: 'bundled' },
     ...overrides,
   };
 }
@@ -39,4 +40,20 @@ test('doctor warns (not fails) when opencode config is absent', async () => {
   const check = report.checks.find((c) => c.name === 'opencode');
   assert.equal(check.ok, true);
   assert.equal(check.warning, true);
+});
+
+test('doctor reports which mcp server source was found', async () => {
+  const report = await runDoctor(fakeEnv({ mcpServer: { path: '/e/index.js', source: 'ZIKI_MCP_PATH' } }));
+  const check = report.checks.find((c) => c.name === 'mcp-server');
+  assert.equal(check.ok, true);
+  assert.match(check.detail, /ZIKI_MCP_PATH: \/e\/index\.js/);
+});
+
+test('doctor fails when the mcp server is missing', async () => {
+  const report = await runDoctor(fakeEnv({ mcpServer: null }));
+  assert.equal(report.ok, false);
+  const check = report.checks.find((c) => c.name === 'mcp-server');
+  assert.equal(check.ok, false);
+  assert.match(check.detail, /pnpm --dir packages\/mcp-server build/);
+  assert.match(check.detail, /--mcp-path/);
 });

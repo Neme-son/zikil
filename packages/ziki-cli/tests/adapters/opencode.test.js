@@ -3,7 +3,6 @@ import assert from 'node:assert/strict';
 import path from 'node:path';
 import os from 'node:os';
 import fs from 'node:fs';
-import { fileURLToPath } from 'node:url';
 import {
   OPENCODE_GLOBAL_DIR,
   OPENCODE_MCP_SERVER_NAME,
@@ -12,10 +11,10 @@ import {
   buildMcpBlock,
   buildToolsMap,
   exposedToolName,
-  resolveMcpServerPath,
   mergeOpencodeConfig,
   mergeToolsMap,
 } from '../../src/adapters/opencode.js';
+import { resolveMcpServer, findCheckoutServer, MCP_BUILD_COMMAND } from '../../src/mcp.js';
 import { ZIKI_MCP_TOOL_ALLOWLIST } from '../../src/allowlist.js';
 
 test('global dir is ~/.config/opencode', () => {
@@ -34,37 +33,55 @@ test('mcp block uses stdio command plus server env', () => {
   });
 });
 
-test('mcp server path prefers explicit flag, then env, then checkout autodetect', () => {
-  assert.equal(
-    resolveMcpServerPath({ flag: '/f/index.js', env: {}, cliRoot: '/c' }),
-    '/f/index.js',
+test('mcp server resolution prefers flag, then env', () => {
+  assert.deepEqual(
+    resolveMcpServer({ mcpPath: '/f/index.js', env: {}, cliRoot: '/c', cwd: '/c' }),
+    { path: '/f/index.js', source: '--mcp-path' },
   );
-  assert.equal(
-    resolveMcpServerPath({ flag: undefined, env: { ZIKI_MCP_SERVER: '/e/index.js' }, cliRoot: '/c' }),
-    '/e/index.js',
+  assert.deepEqual(
+    resolveMcpServer({ mcpPath: undefined, env: { ZIKI_MCP_PATH: '/e/index.js' }, cliRoot: '/c', cwd: '/c' }),
+    { path: '/e/index.js', source: 'ZIKI_MCP_PATH' },
   );
-  const auto = resolveMcpServerPath({ flag: undefined, env: {}, cliRoot: '/repo/packages/ziki-cli' });
-  assert.ok(auto.endsWith(path.join('mcp-server', 'dist', 'index.js')));
-  const vendorBase = (() => {
-    try {
-      const probe = path.join(os.tmpdir(), 'ziki-cli-probe');
-      fs.mkdirSync(probe, { recursive: true });
-      fs.rmdirSync(probe);
-      return os.tmpdir();
-    } catch {
-      const local = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '.tmp');
-      fs.mkdirSync(local, { recursive: true });
-      return local;
-    }
-  })();
-  const vendorRoot = fs.mkdtempSync(path.join(vendorBase, 'ziki-cli-vendor-'));
-  fs.mkdirSync(path.join(vendorRoot, 'vendor'), { recursive: true });
-  fs.writeFileSync(path.join(vendorRoot, 'vendor', 'mcp-server.cjs'), '// bundle');
-  assert.equal(
-    resolveMcpServerPath({ flag: undefined, env: {}, cliRoot: vendorRoot }),
-    path.join(vendorRoot, 'vendor', 'mcp-server.cjs'),
-  );
-  fs.rmSync(vendorRoot, { recursive: true, force: true });
+});
+
+// Walk-up tests use the system temp dir directly (never the repo-local
+// fallback): anything under this checkout would find the real dist build.
+test('mcp server resolution finds the vendored bundle', () => {
+  const cliRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'ziki-cli-vendor-'));
+  try {
+    fs.mkdirSync(path.join(cliRoot, 'vendor'), { recursive: true });
+    fs.writeFileSync(path.join(cliRoot, 'vendor', 'mcp-server.cjs'), '// bundle');
+    assert.deepEqual(
+      resolveMcpServer({ mcpPath: undefined, env: {}, cliRoot, cwd: cliRoot }),
+      { path: path.join(cliRoot, 'vendor', 'mcp-server.cjs'), source: 'bundled' },
+    );
+  } finally {
+    fs.rmSync(cliRoot, { recursive: true, force: true });
+  }
+});
+
+test('mcp server resolution walks up to a checkout, else null', () => {
+  const checkout = fs.mkdtempSync(path.join(os.tmpdir(), 'ziki-cli-checkout-'));
+  const bare = fs.mkdtempSync(path.join(os.tmpdir(), 'ziki-cli-bare-'));
+  try {
+    const dist = path.join(checkout, 'packages', 'mcp-server', 'dist');
+    fs.mkdirSync(dist, { recursive: true });
+    const server = path.join(dist, 'index.js');
+    fs.writeFileSync(server, '// server');
+    const nested = path.join(checkout, 'packages', 'ziki-cli');
+    fs.mkdirSync(nested, { recursive: true });
+    assert.equal(findCheckoutServer(nested), server);
+    assert.deepEqual(
+      resolveMcpServer({ mcpPath: undefined, env: {}, cliRoot: nested, cwd: nested }),
+      { path: server, source: 'checkout' },
+    );
+    assert.equal(findCheckoutServer(bare), null);
+    assert.equal(resolveMcpServer({ mcpPath: undefined, env: {}, cliRoot: bare, cwd: bare }), null);
+    assert.equal(MCP_BUILD_COMMAND, 'pnpm --dir packages/mcp-server build');
+  } finally {
+    fs.rmSync(checkout, { recursive: true, force: true });
+    fs.rmSync(bare, { recursive: true, force: true });
+  }
 });
 
 test('merge adds the ziki block and preserves everything else', () => {

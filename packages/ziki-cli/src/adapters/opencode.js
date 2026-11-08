@@ -1,4 +1,3 @@
-import fs from "node:fs";
 import path from "node:path";
 
 // Adapter slice 1: install paths, MCP server block, config merge.
@@ -141,27 +140,6 @@ export function buildToolsMap() {
     tools[exposedToolName(tool)] = false;
   }
   return tools;
-}
-
-// Install-proof resolution: explicit flag wins, then env, then the vendored
-// bundle shipped in the tarball (prepack builds it), then the sibling
-// checkout for contributors running from source.
-export function resolveMcpServerPath({ flag, env, cliRoot }) {
-  if (flag) {
-    return flag;
-  }
-  if (env.ZIKI_MCP_SERVER) {
-    return env.ZIKI_MCP_SERVER;
-  }
-  const vendor = path.join(cliRoot, "vendor", "mcp-server.cjs");
-  try {
-    if (fs.statSync(vendor).isFile()) {
-      return vendor;
-    }
-  } catch {
-    // fall through to the checkout layout
-  }
-  return path.join(cliRoot, "..", "mcp-server", "dist", "index.js");
 }
 
 // Merges ONLY strict-JSON configs. JSONC or unparseable files are refused by

@@ -32,7 +32,7 @@ Inside this repo, `pnpm ziki` is a separate local developer tool, not this CLI.
 - `work [--project <slug-or-id>]` — show your agent's current work, following
   the connect pointer or the first project.
 - `status` — identity, class, org, projects, work gate, readiness.
-- `doctor` — check node, pairing file, server reachability, opencode config.
+- `doctor` — check node, pairing file, server reachability, opencode config, mcp server source.
 - `sync` — refresh managed files to the installed versions.
 
 ## Rules the CLI keeps
@@ -44,7 +44,24 @@ Inside this repo, `pnpm ziki` is a separate local developer tool, not this CLI.
 - Plan before write; refuse to overwrite without explicit confirmation.
 - The MCP server ships as one bundled file (`vendor/mcp-server.cjs`, built by
   `prepack`); no install-time build on the user's machine.
+  `ZIKI_BUNDLE_MCP=0` packs without it — that install finds its server
+  through `--mcp-path`, `ZIKI_MCP_PATH`, or a ziki checkout.
 
 ## Develop
 
 `node --test tests/store.test.js tests/doctor.test.js tests/status.test.js tests/cli.test.js tests/login.test.js tests/connect.test.js tests/work.test.js tests/adapters/opencode.test.js tests/setup-plan.test.js tests/setup.test.js tests/allowlist.test.js tests/pairing.test.js`
+
+## Publishing (maintainers only)
+
+The package stays `"private": true` so it can never publish by accident.
+To cut a release:
+
+1. Confirm the `ziki-cli` name is free on npm.
+2. Set the `license` field (currently `PolyForm-Strict-1.0.0`) with maintainer approval.
+3. Remove `"private": true`.
+4. From `packages/ziki-cli`, run `npm publish`.
+5. Verify with a clean global install: `npm install -g ziki-cli` in a fresh shell, then `ziki doctor`.
+
+The default tarball bundles the MCP server (`vendor/mcp-server.cjs`), which
+is PolyForm-Strict-licensed: publishing it needs maintainer approval.
+`ZIKI_BUNDLE_MCP=0 npm pack` builds a package without the bundle instead.

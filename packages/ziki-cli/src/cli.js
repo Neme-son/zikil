@@ -6,7 +6,8 @@ import { renderStatus } from "./commands/status.js";
 import { cmdLogin } from "./commands/login.js";
 import { connectProject } from "./commands/connect.js";
 import { cmdWork } from "./commands/work.js";
-import { cmdSetupOpencode } from "./commands/setup-opencode.js";
+import { cmdSetupOpencode, packageRoot } from "./commands/setup-opencode.js";
+import { resolveMcpServer } from "./mcp.js";
 import { resolveConfigPath, loadConfig, apiFetch } from "./config/store.js";
 import { cmdInit } from "./commands/init.js";
 import { PROGRAM_NAME } from "./program.js";
@@ -63,6 +64,7 @@ async function cmdDoctor() {
     fetchImpl: globalThis.fetch,
     serverUrl,
     opencodeConfig: opencodeConfigState(),
+    mcpServer: resolveMcpServer({ mcpPath: undefined, env: process.env, cliRoot: packageRoot(), cwd: process.cwd() }),
   });
   const lines = report.checks.map((c) => `${c.ok ? (c.warning ? "warn" : "pass") : "FAIL"} ${c.name}: ${c.detail}`);
   return { code: report.ok ? 0 : 1, text: `${lines.join("\n")}\n` };
@@ -181,7 +183,7 @@ export async function run(argv, _ctx) {
         replaceZiki: hasFlag(rest, ["--replace-ziki"]),
         persona: flagValue(rest, ["--persona"]) ?? "keep",
         server: flagValue(rest, ["--server"]),
-        mcpServer: flagValue(rest, ["--mcp-server"]),
+        mcpPath: flagValue(rest, ["--mcp-path"]),
       });
     case "sync":
       return cmdSetupOpencode({
@@ -191,7 +193,7 @@ export async function run(argv, _ctx) {
         replaceZiki: hasFlag(rest, ["--replace-ziki"]),
         persona: "keep",
         server: flagValue(rest, ["--server"]),
-        mcpServer: flagValue(rest, ["--mcp-server"]),
+        mcpPath: flagValue(rest, ["--mcp-path"]),
       });
     default:
       return { code: 2, text: `unknown command: ${name}\n\n${HELP}` };

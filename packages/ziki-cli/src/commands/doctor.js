@@ -1,6 +1,7 @@
 // Pure diagnostics: every input comes through `env` so tests inject fakes
 // and the CLI injects the real filesystem and network.
 import { PROGRAM_NAME } from "../program.js";
+import { MCP_BUILD_COMMAND } from "../mcp.js";
 
 export async function runDoctor(env) {
   const checks = [];
@@ -28,6 +29,15 @@ export async function runDoctor(env) {
       ok: true,
       warning: true,
       detail: "no opencode config found; run `" + PROGRAM_NAME + " setup-opencode`",
+    });
+  }
+  if (env.mcpServer) {
+    checks.push({ name: "mcp-server", ok: true, detail: `${env.mcpServer.source}: ${env.mcpServer.path}` });
+  } else {
+    checks.push({
+      name: "mcp-server",
+      ok: false,
+      detail: `not found; from a ziki checkout run \`${MCP_BUILD_COMMAND}\`, or pass --mcp-path <file>`,
     });
   }
   return { ok: checks.every((c) => c.ok), checks };

@@ -126,7 +126,7 @@ test('command prints a plan without writing', async () => {
     const fakeMcp = path.join(home, 'index.js');
     fs.writeFileSync(fakeMcp, '// fake mcp');
     const result = await cmdSetupOpencode(
-      { server: 'http://localhost:3001', mcpServer: fakeMcp },
+      { server: 'http://localhost:3001', mcpPath: fakeMcp },
       { home, root: CLI_ROOT },
     );
     assert.equal(result.code, 0);
@@ -144,7 +144,7 @@ test('command apply writes the full adapter set', async () => {
     const fakeMcp = path.join(home, 'index.js');
     fs.writeFileSync(fakeMcp, '// fake mcp');
     const result = await cmdSetupOpencode(
-      { server: 'http://localhost:3001', mcpServer: fakeMcp, apply: true, yes: true, persona: 'example' },
+      { server: 'http://localhost:3001', mcpPath: fakeMcp, apply: true, yes: true, persona: 'example' },
       { home, root: CLI_ROOT },
     );
     assert.equal(result.code, 0);
@@ -163,13 +163,33 @@ test('command refuses when the MCP server is not built', async () => {
   const home = makeHome();
   try {
     const result = await cmdSetupOpencode(
-      { server: 'http://localhost:3001', mcpServer: path.join(home, 'missing.js') },
+      { server: 'http://localhost:3001', mcpPath: path.join(home, 'missing.js') },
       { home, root: CLI_ROOT },
     );
     assert.equal(result.code, 1);
     assert.match(result.text, /MCP server missing/);
   } finally {
     fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('command stops with the build command when no server resolves', async () => {
+  const home = makeHome();
+  const bare = fs.mkdtempSync(path.join(os.tmpdir(), `ziki-cli-bare-${process.pid}-`));
+  try {
+    const cliRoot = path.join(home, 'cli');
+    fs.mkdirSync(cliRoot, { recursive: true });
+    const result = await cmdSetupOpencode(
+      { server: 'http://localhost:3001' },
+      { home, root: cliRoot, cwd: bare },
+    );
+    assert.equal(result.code, 1);
+    assert.match(result.text, /MCP server not found/);
+    assert.match(result.text, /pnpm --dir packages\/mcp-server build/);
+    assert.match(result.text, /--mcp-path/);
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+    fs.rmSync(bare, { recursive: true, force: true });
   }
 });
 
@@ -192,7 +212,7 @@ test('interactive yes applies after showing the plan', async () => {
     const shown = [];
     const asked = [];
     const result = await cmdSetupOpencode(
-      { server: 'http://localhost:3001', mcpServer: path.join(home, 'index.js') },
+      { server: 'http://localhost:3001', mcpPath: path.join(home, 'index.js') },
       { home, root: CLI_ROOT, asker: { confirm: async (q) => { asked.push(q); return true; } }, out: (line) => shown.push(line) },
     );
     assert.equal(result.code, 0);
@@ -211,7 +231,7 @@ test('interactive no stops cleanly without writing', async () => {
   try {
     fs.writeFileSync(path.join(home, 'index.js'), '// fake mcp');
     const result = await cmdSetupOpencode(
-      { server: 'http://localhost:3001', mcpServer: path.join(home, 'index.js') },
+      { server: 'http://localhost:3001', mcpPath: path.join(home, 'index.js') },
       { home, root: CLI_ROOT, asker: { confirm: async () => false }, out: () => {} },
     );
     assert.equal(result.code, 0);
@@ -230,7 +250,7 @@ test('interactive yes confirms and backs up an existing config', async () => {
     fs.mkdirSync(cfgDir, { recursive: true });
     fs.writeFileSync(path.join(cfgDir, 'opencode.json'), JSON.stringify({ theme: 'dark' }));
     const result = await cmdSetupOpencode(
-      { server: 'http://localhost:3001', mcpServer: path.join(home, 'index.js') },
+      { server: 'http://localhost:3001', mcpPath: path.join(home, 'index.js') },
       { home, root: CLI_ROOT, asker: { confirm: async () => true }, out: () => {} },
     );
     assert.equal(result.code, 0);
@@ -400,7 +420,7 @@ test('interactive yes replaces a foreign entry with a backup, keeping the rest',
     fs.writeFileSync(path.join(cfgDir, 'opencode.json'), before);
     const asked = [];
     const result = await cmdSetupOpencode(
-      { server: 'http://localhost:3001', mcpServer: path.join(home, 'index.js') },
+      { server: 'http://localhost:3001', mcpPath: path.join(home, 'index.js') },
       { home, root: CLI_ROOT, asker: { confirm: async (q) => { asked.push(q); return true; } }, out: () => {} },
     );
     assert.equal(result.code, 0);
@@ -432,7 +452,7 @@ test('interactive no on replace leaves the file unchanged', async () => {
     const asked = [];
     const answers = [true, false];
     const result = await cmdSetupOpencode(
-      { server: 'http://localhost:3001', mcpServer: path.join(home, 'index.js') },
+      { server: 'http://localhost:3001', mcpPath: path.join(home, 'index.js') },
       { home, root: CLI_ROOT, asker: { confirm: async (q) => { asked.push(q); return answers.shift(); } }, out: () => {} },
     );
     assert.equal(result.code, 0);
@@ -455,7 +475,7 @@ test('blocked plan never asks to apply and names the real file', async () => {
     const asked = [];
     const shown = [];
     const result = await cmdSetupOpencode(
-      { server: 'http://localhost:3001', mcpServer: path.join(home, 'index.js') },
+      { server: 'http://localhost:3001', mcpPath: path.join(home, 'index.js') },
       { home, root: CLI_ROOT, asker: { confirm: async (q) => { asked.push(q); return true; } }, out: (line) => shown.push(line) },
     );
     assert.equal(result.code, 1);
@@ -481,7 +501,7 @@ test('non-TTY replace needs --replace-ziki with --apply --yes --confirm', async 
     assert.throws(() => applySetupPlan(plan, { confirm: [entry.path], yes: true }), /--replace-ziki/);
     assert.throws(() => applySetupPlan(plan, { confirm: [], yes: true, replaceZiki: true }), /--confirm/);
     const result = await cmdSetupOpencode(
-      { server: 'http://localhost:3001', mcpServer: path.join(home, 'index.js'), apply: true, yes: true, confirm: [entry.path], replaceZiki: true },
+      { server: 'http://localhost:3001', mcpPath: path.join(home, 'index.js'), apply: true, yes: true, confirm: [entry.path], replaceZiki: true },
       { home, root: CLI_ROOT, asker: null, out: () => {} },
     );
     assert.equal(result.code, 0);
