@@ -12,6 +12,130 @@ const SKILL_NAME = "ziki-work";
 const MANIFEST_NAME = ".ziki-manifest.json";
 const MAX_PERSONA_BYTES = 64 * 1024;
 
+// Strip // and /* */ comments (block comments become one space so tokens
+// never join) and trailing commas. Both passes are string-aware.
+export function stripJsonc(text) {
+  let noComments = "";
+  let i = 0;
+  while (i < text.length) {
+    const ch = text[i];
+    if (ch === '"') {
+      noComments += ch;
+      i += 1;
+      let escaped = false;
+      while (i < text.length) {
+        const c = text[i];
+        noComments += c;
+        i += 1;
+        if (escaped) {
+          escaped = false;
+        } else if (c === "\\") {
+          escaped = true;
+        } else if (c === '"') {
+          break;
+        }
+      }
+      continue;
+    }
+    if (ch === "/" && text[i + 1] === "/") {
+      while (i < text.length && text[i] !== "\n") {
+        i += 1;
+      }
+      continue;
+    }
+    if (ch === "/" && text[i + 1] === "*") {
+      i += 2;
+      while (i < text.length && !(text[i] === "*" && text[i + 1] === "/")) {
+        i += 1;
+      }
+      i += 2;
+      noComments += " ";
+      continue;
+    }
+    noComments += ch;
+    i += 1;
+  }
+  let out = "";
+  let j = 0;
+  while (j < noComments.length) {
+    const ch = noComments[j];
+    if (ch === '"') {
+      out += ch;
+      j += 1;
+      let escaped = false;
+      while (j < noComments.length) {
+        const c = noComments[j];
+        out += c;
+        j += 1;
+        if (escaped) {
+          escaped = false;
+        } else if (c === "\\") {
+          escaped = true;
+        } else if (c === '"') {
+          break;
+        }
+      }
+      continue;
+    }
+    if (ch === ",") {
+      let k = j + 1;
+      while (k < noComments.length && /\s/.test(noComments[k])) {
+        k += 1;
+      }
+      if (noComments[k] === "}" || noComments[k] === "]") {
+        j += 1;
+        continue;
+      }
+    }
+    out += ch;
+    j += 1;
+  }
+  return out;
+}
+
+export function parseJsonc(text) {
+  return JSON.parse(stripJsonc(text));
+}
+
+// Minimal line diff for the plan. shortcut: O(n*m) time and memory, fine
+// for small config files; switch to Myers if it ever runs on big files.
+export function diffLines(oldText, newText) {
+  const a = oldText.split("\n");
+  const b = newText.split("\n");
+  const lcs = Array.from({ length: a.length + 1 }, () => new Array(b.length + 1).fill(0));
+  for (let i = a.length - 1; i >= 0; i -= 1) {
+    for (let k = b.length - 1; k >= 0; k -= 1) {
+      lcs[i][k] = a[i] === b[k] ? lcs[i + 1][k + 1] + 1 : Math.max(lcs[i + 1][k], lcs[i][k + 1]);
+    }
+  }
+  const lines = [];
+  let i = 0;
+  let k = 0;
+  while (i < a.length && k < b.length) {
+    if (a[i] === b[k]) {
+      lines.push(`  ${a[i]}`);
+      i += 1;
+      k += 1;
+    } else if (lcs[i + 1][k] >= lcs[i][k + 1]) {
+      lines.push(`- ${a[i]}`);
+      i += 1;
+    } else {
+      lines.push(`+ ${b[k]}`);
+      k += 1;
+    }
+  }
+  while (i < a.length) {
+    lines.push(`- ${a[i]}`);
+    i += 1;
+  }
+  while (k < b.length) {
+    lines.push(`+ ${b[k]}`);
+    k += 1;
+  }
+  return lines;
+}
+
+
 export function packageRoot() {
   return path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 }
@@ -56,7 +180,7 @@ function blockedEntry(absolutePath, reason, detail, existingExists) {
 }
 
 // Pure planner: every input is explicit, every write goes through the plan.
-// JSONC and unparseable configs block with instructions instead of edits.
+// Parsable JSONC merges with a warning; unparseable configs block with instructions instead of edits.
 export function buildSetupPlan({ home, cliRoot, serverUrl, mcpServerPath, persona = "keep", io = realIo() }) {
   const globalDir = OPENCODE_GLOBAL_DIR(home);
   const skillDir = path.join(globalDir, "skills", SKILL_NAME);
@@ -81,40 +205,56 @@ export function buildSetupPlan({ home, cliRoot, serverUrl, mcpServerPath, person
   const pushFile = (absolutePath, desiredText) => {
     const target = io.readTarget(absolutePath);
     const classified = classifyFile(target, desiredText, recorded[absolutePath] ?? null);
-    files.push({
+    const entry = {
       path: absolutePath,
       absolutePath,
       ...classified,
       desiredText,
       existingExists: target.kind !== "absent",
-    });
+    };
+    files.push(entry);
+    return entry;
   };
 
   const configPath = path.join(globalDir, "opencode.json");
+  const jsoncPath = path.join(globalDir, "opencode.jsonc");
   const configTarget = io.readTarget(configPath);
-  if (configTarget.kind === "absent" && io.readTarget(path.join(globalDir, "opencode.jsonc")).kind !== "absent") {
-    files.push(blockedEntry(configPath, "jsonc", `uses opencode.jsonc, which this CLI never edits. Merge this block by hand under "mcp", plus the tool denials under "tools":\n${JSON.stringify({ ziki: block }, null, 2)}`, false));
-  } else if (configTarget.kind === "absent") {
+  // Merge into whichever config exists, preferring opencode.json; a fresh
+  // setup creates plain opencode.json.
+  const activePath = configTarget.kind === "absent" ? jsoncPath : configPath;
+  const activeTarget = configTarget.kind === "absent" ? io.readTarget(jsoncPath) : configTarget;
+  const handMerge = `Merge this block by hand under "mcp", plus the tool denials under "tools":\n${JSON.stringify({ ziki: block }, null, 2)}`;
+  if (activeTarget.kind === "absent") {
     pushFile(configPath, `${JSON.stringify({ mcp: { ziki: block }, tools }, null, 2)}\n`);
-  } else if (configTarget.kind === "file") {
+  } else if (activeTarget.kind === "file") {
     let existing = null;
+    let isJsonc = false;
     try {
-      existing = JSON.parse(configTarget.text);
+      existing = JSON.parse(activeTarget.text);
     } catch {
-      existing = null;
+      try {
+        existing = parseJsonc(activeTarget.text);
+        isJsonc = true;
+      } catch {
+        existing = null;
+      }
     }
     if (existing === null || typeof existing !== "object") {
-      files.push(blockedEntry(configPath, "invalid-json", "opencode.json is not valid JSON; fix or remove it first", true));
+      files.push(blockedEntry(activePath, "invalid-json", `${path.basename(activePath)} is not valid JSON or JSONC. ${handMerge}`, true));
     } else {
       try {
         const merged = mergeOpencodeConfig(existing, { ziki: block }, tools);
-        pushFile(configPath, `${JSON.stringify(merged, null, 2)}\n`);
+        const entry = pushFile(activePath, `${JSON.stringify(merged, null, 2)}\n`);
+        if (isJsonc) {
+          entry.reason = "jsonc";
+          entry.existingText = activeTarget.text;
+        }
       } catch (error) {
-        files.push(blockedEntry(configPath, "conflict", error.message, true));
+        files.push(blockedEntry(activePath, "conflict", error.message, true));
       }
     }
   } else {
-    files.push(blockedEntry(configPath, configTarget.kind, `refusing to touch ${configTarget.kind}; remove or replace it first`, true));
+    files.push(blockedEntry(activePath, activeTarget.kind, `refusing to touch ${activeTarget.kind}; remove or replace it first`, true));
   }
 
   pushFile(path.join(skillDir, "SKILL.md"), readTemplate(cliRoot, "opencode-skill.md"));
@@ -148,11 +288,23 @@ export function buildSetupPlan({ home, cliRoot, serverUrl, mcpServerPath, person
 }
 
 export function formatPlan(plan) {
-  const lines = plan.files.map((file) => {
+  const lines = [];
+  for (const file of plan.files) {
     const reason = file.reason ? ` (${file.reason})` : "";
     const confirm = file.requiresConfirmation ? " [needs --confirm]" : "";
-    return `${file.status}  ${file.path}${reason}${confirm}`;
-  });
+    lines.push(`${file.status}  ${file.path}${reason}${confirm}`);
+    if (file.status === "blocked" && file.detail) {
+      for (const detailLine of file.detail.split("\n")) {
+        lines.push(`  ${detailLine}`);
+      }
+    }
+    if (file.reason === "jsonc" && typeof file.existingText === "string") {
+      lines.push("  warning: comments and formatting in this file will be removed; a backup is made before writing");
+      for (const diffLine of diffLines(file.existingText, file.desiredText)) {
+        lines.push(`  ${diffLine}`);
+      }
+    }
+  }
   const needConfirm = plan.files.filter((f) => f.requiresConfirmation && f.status !== "unchanged");
   if (needConfirm.length > 0) {
     lines.push(`re-run with: --apply --yes ${needConfirm.map((f) => `--confirm "${f.path}"`).join(" ")}`);
@@ -173,7 +325,7 @@ export function applySetupPlan(plan, { confirm = [], yes = false, io = realIo(),
     const flags = missing.map((file) => `--confirm "${file.path}"`).join(" ");
     throw new Error(`refusing to overwrite without confirmation; re-run with ${flags}`);
   }
-  const configEntry = changed.find((file) => file.path.endsWith("opencode.json") && file.existingExists);
+  const configEntry = changed.find((file) => (file.path.endsWith("opencode.json") || file.path.endsWith("opencode.jsonc")) && file.existingExists);
   if (configEntry) {
     const stamp = now().toISOString().replace(/[:.]/g, "-");
     fs.copyFileSync(configEntry.absolutePath, `${configEntry.absolutePath}.ziki-backup-${stamp}`);
