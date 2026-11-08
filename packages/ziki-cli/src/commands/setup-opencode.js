@@ -6,6 +6,7 @@ import { OPENCODE_GLOBAL_DIR, buildMcpBlock, buildToolsMap, resolveMcpServerPath
 import { classifyFile, digest, realIo, applyPlan } from "../setup/plan.js";
 import { resolveConfigPath, loadConfig } from "../config/store.js";
 import { assertServerRule } from "./login.js";
+import { defaultAsker, defaultOut, planQuestion } from "../setup/ask.js";
 
 const SKILL_NAME = "ziki-work";
 const MANIFEST_NAME = ".ziki-manifest.json";
@@ -180,7 +181,7 @@ export function applySetupPlan(plan, { confirm = [], yes = false, io = realIo(),
   return applyPlan(plan, { confirm, io });
 }
 
-export async function cmdSetupOpencode({ apply = false, yes = false, confirm = [], persona = "keep", server, mcpServer } = {}, { home = os.homedir(), root = packageRoot() } = {}) {
+export async function cmdSetupOpencode({ apply = false, yes = false, confirm = [], persona = "keep", server, mcpServer } = {}, { home = os.homedir(), root = packageRoot(), asker = defaultAsker(), out = defaultOut } = {}) {
   let serverUrl = server;
   if (!serverUrl) {
     let config;
@@ -211,11 +212,21 @@ export async function cmdSetupOpencode({ apply = false, yes = false, confirm = [
   } catch (error) {
     return { code: 1, text: `${error.message}\n` };
   }
-  if (!apply) {
+  if (!apply && !asker) {
     return { code: 0, text: `${formatPlan(plan)}\n` };
   }
+  let toConfirm = confirm;
+  let toYes = yes;
+  if (!apply) {
+    out(formatPlan(plan));
+    if (!(await asker.confirm(planQuestion(plan)))) {
+    return { code: 0, text: "not applied\n" };
+    }
+    toConfirm = plan.files.map((file) => file.path);
+    toYes = true;
+  }
   try {
-    const written = applySetupPlan(plan, { confirm, yes });
+    const written = applySetupPlan(plan, { confirm: toConfirm, yes: toYes });
     return { code: 0, text: `wrote ${written.length} file(s)\n` };
   } catch (error) {
     return { code: 1, text: `${error.message}\n` };

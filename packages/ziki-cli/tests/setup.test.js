@@ -176,3 +176,62 @@ test('persona example installs, default keeps existing untouched', () => {
     fs.rmSync(home, { recursive: true, force: true });
   }
 });
+
+test('interactive yes applies after showing the plan', async () => {
+  const home = makeHome();
+  try {
+    fs.writeFileSync(path.join(home, 'index.js'), '// fake mcp');
+    const shown = [];
+    const asked = [];
+    const result = await cmdSetupOpencode(
+      { server: 'http://localhost:3001', mcpServer: path.join(home, 'index.js') },
+      { home, root: CLI_ROOT, asker: { confirm: async (q) => { asked.push(q); return true; } }, out: (line) => shown.push(line) },
+    );
+    assert.equal(result.code, 0);
+    assert.match(result.text, /wrote \d+ file/);
+    assert.equal(asked.length, 1);
+    assert.match(asked[0], /Apply these changes\? \[y\/N\]/);
+    assert.ok(shown.join('\n').includes('opencode.json'));
+    assert.ok(fs.existsSync(path.join(home, '.config', 'opencode', 'opencode.json')));
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('interactive no stops cleanly without writing', async () => {
+  const home = makeHome();
+  try {
+    fs.writeFileSync(path.join(home, 'index.js'), '// fake mcp');
+    const result = await cmdSetupOpencode(
+      { server: 'http://localhost:3001', mcpServer: path.join(home, 'index.js') },
+      { home, root: CLI_ROOT, asker: { confirm: async () => false }, out: () => {} },
+    );
+    assert.equal(result.code, 0);
+    assert.match(result.text, /not applied/);
+    assert.equal(fs.existsSync(path.join(home, '.config')), false);
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('interactive yes confirms and backs up an existing config', async () => {
+  const home = makeHome();
+  try {
+    fs.writeFileSync(path.join(home, 'index.js'), '// fake mcp');
+    const cfgDir = path.join(home, '.config', 'opencode');
+    fs.mkdirSync(cfgDir, { recursive: true });
+    fs.writeFileSync(path.join(cfgDir, 'opencode.json'), JSON.stringify({ theme: 'dark' }));
+    const result = await cmdSetupOpencode(
+      { server: 'http://localhost:3001', mcpServer: path.join(home, 'index.js') },
+      { home, root: CLI_ROOT, asker: { confirm: async () => true }, out: () => {} },
+    );
+    assert.equal(result.code, 0);
+    const merged = JSON.parse(fs.readFileSync(path.join(cfgDir, 'opencode.json'), 'utf8'));
+    assert.equal(merged.theme, 'dark');
+    assert.ok(merged.mcp.ziki);
+    const backups = fs.readdirSync(cfgDir).filter((n) => n.startsWith('opencode.json.ziki-backup-'));
+    assert.equal(backups.length, 1);
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
