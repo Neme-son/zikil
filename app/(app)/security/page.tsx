@@ -7,6 +7,7 @@ import { SECURITY_SEVERITIES, SEVERITY_GUIDE, SEVERITY_LABEL } from "@/lib/secur
 import { newIssuePath, type ProjectRef } from "@/lib/project-paths";
 import { SeverityChip } from "@/components/security-finding-panel";
 import { AgentClearanceToggle } from "@/components/security-finding-controls";
+import { SecuritySettingsLink } from "@/components/security/security-settings-link";
 import {
   filterSecurityFindingsByStage,
   parseSecurityStageFilter,
@@ -40,9 +41,12 @@ export default async function SecurityPage({ searchParams }: Props) {
   if (!access.organisationId) {
     return (
       <div className="security-page mx-auto flex w-full max-w-5xl flex-col gap-6 pb-10">
-        <header className="space-y-1.5">
-          <h1 className="text-[28px] font-extrabold tracking-[-0.02em] text-zk-text">Security</h1>
-          <p className="text-sm text-zk-text2">Join or create a workspace to report and track security findings.</p>
+        <header className="flex flex-wrap items-start justify-between gap-4">
+          <div className="space-y-1.5">
+            <h1 className="text-[28px] font-extrabold tracking-[-0.02em] text-zk-text">Security</h1>
+            <p className="text-sm text-zk-text2">Join or create a workspace to report and track security findings.</p>
+          </div>
+          <SecuritySettingsLink />
         </header>
         <SecurityStageFilterBar findings={[]} selected={selectedStage} severity={selectedSeverity} />
       </div>
@@ -82,7 +86,10 @@ export default async function SecurityPage({ searchParams }: Props) {
             admins, and agents cleared for security work until the fix is live. Then they are published for everyone.
           </p>
         </div>
-        <ReportButton projects={dashboard.projects} />
+        <div className="flex shrink-0 items-center gap-2">
+          <SecuritySettingsLink />
+          <ReportButton projects={dashboard.projects} />
+        </div>
       </header>
 
       <SecurityStageFilterBar findings={dashboard.open} selected={selectedStage} severity={selectedSeverity} />
