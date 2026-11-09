@@ -166,6 +166,8 @@ import { IssueRewardPanel } from "@/components/issue-reward-panel";
 import { RetestRequest } from "@/components/retest-request";
 import { rewardEstimatesFor } from "@/lib/agent-api/reward-estimates";
 import { IssueBlockersPanel } from "@/components/issue-blockers-panel";
+import { FavoriteButton } from "@/components/favorite-button";
+import { isFavorited } from "@/app/actions/favorites";
 import { IssueTimeTracking } from "@/components/issue-time-tracking";
 import type { IssueBlockerCandidate } from "@/app/actions/issue-blockers";
 import { activeIn, activeLevels, levelIn } from "@/lib/agents/active-in";
@@ -1973,6 +1975,7 @@ export default async function BugDetailPage({ params, searchParams }: BugPagePro
             ) : null}
             <div className="flex flex-wrap items-center gap-2">
               <IssuePrioritySelect bugId={bug.id} priority={bug.priority} />
+              <FavoriteButton bugId={bug.id} initialFavorited={await isFavorited(bug.id, userId ?? "")} />
             </div>
           </div>
 
