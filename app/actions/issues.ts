@@ -2325,3 +2325,10 @@ export async function selfAssignBugAction(
 }
 
 
+
+// #kanban-board: move an issue to a new status from the board.
+export async function moveIssueStatusAction(bugId: string, status: string): Promise<ActionResult> {
+  const fd = new FormData();
+  fd.set("status", status);
+  return updateBugAction(bugId, fd);
+}
