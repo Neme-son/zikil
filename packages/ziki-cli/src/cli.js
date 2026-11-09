@@ -206,7 +206,7 @@ export async function run(argv, _ctx) {
           yes: hasFlag(rest, ["--yes"]),
           confirm: flagValues(rest, ["--confirm"]),
           server: flagValue(rest, ["--server"]),
-          mcpServer: flagValue(rest, ["--mcp-server"]),
+          mcpPath: flagValue(rest, ["--mcp-path"]),
         });
       } catch (error) {
         return { code: 1, text: `${error.message}\n` };
@@ -218,7 +218,7 @@ export async function run(argv, _ctx) {
           yes: hasFlag(rest, ["--yes"]),
           confirm: flagValues(rest, ["--confirm"]),
           server: flagValue(rest, ["--server"]),
-          mcpServer: flagValue(rest, ["--mcp-server"]),
+          mcpPath: flagValue(rest, ["--mcp-path"]),
         });
       } catch (error) {
         return { code: 1, text: `${error.message}\n` };

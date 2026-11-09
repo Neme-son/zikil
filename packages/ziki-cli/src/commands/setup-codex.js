@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import { CODEX_CONFIG_PATH, buildCodexBlock, upsertManagedBlock } from "../adapters/codex.js";
-import { resolveMcpServerPath } from "../mcp.js";
+import { resolveMcpServer, MCP_BUILD_COMMAND } from "../mcp.js";
 import { classifyFile, realIo, applyPlan } from "../setup/plan.js";
 import { resolveConfigPath, loadConfig } from "../config/store.js";
 import { assertServerRule } from "./login.js";
@@ -49,7 +49,7 @@ export function buildCodexPlan({ home, serverUrl, mcpServerPath, io = realIo() }
   };
 }
 
-export async function cmdSetupCodex({ apply = false, yes = false, confirm = [], server, mcpServer } = {}, { home = os.homedir(), root = process.cwd(), asker = defaultAsker(), out = defaultOut } = {}) {
+export async function cmdSetupCodex({ apply = false, yes = false, confirm = [], server, mcpPath } = {}, { home = os.homedir(), root = process.cwd(), cwd = process.cwd(), asker = defaultAsker(), out = defaultOut } = {}) {
   let serverUrl = server;
   if (!serverUrl) {
     let config;
@@ -65,14 +65,18 @@ export async function cmdSetupCodex({ apply = false, yes = false, confirm = [], 
   } catch (error) {
     return { code: 1, text: `${error.message}\n` };
   }
-  const serverPath = resolveMcpServerPath({ flag: mcpServer, env: process.env, cliRoot: root });
+  const resolved = resolveMcpServer({ mcpPath, env: process.env, cliRoot: root, cwd });
+  if (!resolved) {
+    return { code: 1, text: `MCP server not found; from a ziki checkout run \`${MCP_BUILD_COMMAND}\`, or pass --mcp-path <file>\n` };
+  }
+  const serverPath = resolved.path;
   try {
     const stat = fs.lstatSync(serverPath);
     if (!stat.isFile() || stat.isSymbolicLink()) {
       throw new Error("not a file");
     }
   } catch {
-    return { code: 1, text: `MCP server missing at ${serverPath}; rebuild the bundle (npm run prepack) or pass --mcp-server\n` };
+    return { code: 1, text: `MCP server missing at ${serverPath}; pass a built file with --mcp-path, or run \`${MCP_BUILD_COMMAND}\` from a ziki checkout\n` };
   }
   const plan = buildCodexPlan({ home, serverUrl, mcpServerPath: serverPath });
   const banner = `${EXPERIMENTAL_NOTE}\n`;
