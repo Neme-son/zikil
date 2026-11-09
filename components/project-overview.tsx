@@ -4,13 +4,18 @@ import { RichText } from "@/components/rich-text";
 import { ProjectOverviewJoinButton } from "@/components/project-overview-join-button";
 import { Badge } from "@/components/ui/badge";
 import { issuesPath, marketingPath, orgHomePath, projectRef } from "@/lib/project-paths";
+import { issuePath } from "@/lib/issue-ref";
 import { publicReportPath } from "@/lib/public-project-paths";
 import { safeHref } from "@/lib/rich-text";
 import type { ProjectOverviewData } from "@/lib/project-overview";
 
-function Metric({ label, value }: { label: string; value: number }) {
+function Metric({ label, value, accent }: { label: string; value: number; accent: string }) {
   return (
-    <div className="rounded-xl border border-zk-border bg-zk-surface p-4">
+    <div className="group relative overflow-hidden rounded-2xl border border-zk-border bg-zk-surface p-4 transition-transform duration-200 hover:-translate-y-1 hover:shadow-lg">
+      <span
+        aria-hidden="true"
+        className={`absolute inset-x-0 top-0 h-1 ${accent}`}
+      />
       <dt className="text-sm text-zk-text2">{label}</dt>
       <dd className="mt-1 text-2xl font-bold text-zk-text">{value.toLocaleString()}</dd>
     </div>
@@ -156,11 +161,33 @@ export function ProjectOverviewView({
         </div>
 
         <dl className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
-          <Metric label="Open ideas" value={data.openIdeas} />
-          <Metric label="Open issues" value={data.openIssues} />
-          <Metric label="Delivered fixes" value={data.deliveredFixes} />
-          <Metric label="Contributors" value={project.contributorCount} />
+          <Metric label="Open ideas" value={data.openIdeas} accent="bg-gradient-to-r from-electric-blue to-sky-tint" />
+          <Metric label="Open issues" value={data.openIssues} accent="bg-gradient-to-r from-electric-blue-strong to-electric-blue" />
+          <Metric label="Delivered fixes" value={data.deliveredFixes} accent="bg-gradient-to-r from-zk-ok-fg to-electric-blue" />
+          <Metric label="Contributors" value={project.contributorCount} accent="bg-gradient-to-r from-sky-tint to-zk-accent" />
         </dl>
+
+        {currentUserId && data.assignedIssues.length > 0 ? (
+          <section aria-labelledby="assigned-issues-heading" className="mt-6 rounded-2xl border border-zk-border bg-zk-surface p-5 sm:p-6">
+            <h2 id="assigned-issues-heading" className="text-lg font-bold text-zk-text">Issues assigned to you</h2>
+            <ul className="mt-4 divide-y divide-zk-divider">
+              {data.assignedIssues.map((issue) => (
+                <li key={issue.id} className="flex items-center justify-between gap-3 py-2">
+                  <Link
+                    href={issuePath(ref, issue.number)}
+                    className="min-w-0 flex-1 truncate text-sm font-medium text-zk-text hover:text-zk-accent hover:underline"
+                  >
+                    <span className="mr-2 text-zk-muted">#{issue.number}</span>
+                    {issue.title}
+                  </Link>
+                  <Badge className="shrink-0 border border-zk-border bg-zk-chip text-xs text-zk-text2">
+                    {issue.substatus.replace(/_/g, " ")}
+                  </Badge>
+                </li>
+              ))}
+            </ul>
+          </section>
+        ) : null}
       </header>
 
       <div className="grid gap-6 lg:grid-cols-3">
