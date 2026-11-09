@@ -895,6 +895,25 @@ export async function updateBugAction(
   }
   if (events.length > 0) notifyLater(...events);
 
+  // #automation-rules: evaluate rules on issue update.
+  try {
+    const { detectTrigger } = await import("@/lib/automation");
+    const { evaluateAutomationRules } = await import("@/app/actions/automation");
+    const trigger = detectTrigger(
+      { status: existing.status, priority: existing.priority, assigneeId: existing.assigneeId, typeId: existing.typeId, areaId: existing.areaId, milestoneId: existing.milestoneId, title: existing.title },
+      { status: data.status ?? existing.status, priority: data.priority ?? existing.priority, assigneeId: data.assigneeId ?? existing.assigneeId, typeId: data.typeId ?? existing.typeId, areaId: data.areaId ?? existing.areaId, milestoneId: data.milestoneId ?? existing.milestoneId, title: existing.title },
+    );
+    await evaluateAutomationRules(
+      existing.projectId,
+      bugId,
+      trigger,
+      { status: data.status ?? existing.status, priority: data.priority ?? existing.priority, assigneeId: data.assigneeId ?? existing.assigneeId, typeId: data.typeId ?? existing.typeId, areaId: data.areaId ?? existing.areaId, milestoneId: data.milestoneId ?? existing.milestoneId, title: existing.title, track: existing.track, reporterId: existing.reporterId },
+      { status: existing.status, priority: existing.priority, assigneeId: existing.assigneeId, typeId: existing.typeId, areaId: existing.areaId, milestoneId: existing.milestoneId, title: existing.title, track: existing.track, reporterId: existing.reporterId },
+    );
+  } catch (err) {
+    console.error("Automation evaluation failed:", err);
+  }
+
   revalidatePath("/[org]/[project]", "layout");
   revalidateIssue();
   revalidatePath("/bugs");

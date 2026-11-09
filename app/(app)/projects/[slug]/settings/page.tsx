@@ -8,6 +8,7 @@ import { isAdminOfOrganisation } from "@/lib/agents/membership";
 import { prisma } from "@/lib/prisma";
 import { ProjectSettingsForm } from "./settings-form";
 import { ProjectAreasManager } from "./areas-manager";
+import { AutomationRulesManager } from "@/components/automation-rules-manager";
 import { WorkflowSettingsForm } from "./workflow-settings-form";
 import { ProjectRepositoriesManager } from "./repositories-manager";
 import { workflowValues } from "@/lib/workflow-config";
@@ -43,6 +44,12 @@ const SECTIONS = [
     label: "Areas",
     hint: "Parts of the product",
     icon: "M3 3h7v7H3zM14 3h7v7h-7zM14 14h7v7h-7zM3 14h7v7H3z",
+  },
+  {
+    id: "automation",
+    label: "Automation",
+    hint: "Rules that run automatically",
+    icon: "M13 2L3 14h9l-1 8 10-12h-9l1-8z",
   },
 ] as const;
 
@@ -89,6 +96,13 @@ export default async function ProjectSettingsPage({
         where: { projectId: project.id },
         orderBy: [{ name: "asc" }, { id: "asc" }],
         select: { id: true, name: true, slug: true, description: true, paths: true },
+      })
+    : [];
+  const automationRules = section === "automation"
+    ? await prisma.automationRule.findMany({
+        where: { projectId: project.id },
+        orderBy: [{ position: "asc" }, { name: "asc" }],
+        select: { id: true, name: true, enabled: true, trigger: true, conditions: true, actions: true },
       })
     : [];
   const platformDefaults = section === "details" ? projectDefaultsFromPlatform(await getPlatformRewardConfig(prisma)) : null;
@@ -198,6 +212,26 @@ export default async function ProjectSettingsPage({
           ) : null}
 
           {section === "areas" ? <ProjectAreasManager projectSlug={project.slug} areas={areas} /> : null}
+
+          {section === "automation" ? (
+            <section className={card}>
+              <div className="flex flex-col gap-1">
+                <h2 className="m-0 text-lg font-bold text-zk-text">Automation rules</h2>
+                <span className="text-[13px] text-zk-muted">Rules that run automatically when issue events occur.</span>
+              </div>
+              <AutomationRulesManager
+                projectId={project.id}
+                rules={automationRules.map((r) => ({
+                  id: r.id,
+                  name: r.name,
+                  enabled: r.enabled,
+                  trigger: r.trigger,
+                  conditions: (r.conditions as { field: string; operator: string; value?: string }[]) ?? [],
+                  actions: (r.actions as { type: string; value?: string }[]) ?? [],
+                }))}
+              />
+            </section>
+          ) : null}
         </div>
       </div>
     </div>

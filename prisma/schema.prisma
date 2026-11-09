@@ -532,6 +532,8 @@ model Bug {
   supportThreads            SupportThread[]
   /// #time-tracking: time logged against this issue.
   timeEntries               TimeEntry[]
+  /// #automation-rules: execution logs for this issue.
+  automationLogs            AutomationLog[]
 
   /// #517: issue numbers are per organisation, so two organisations can both have a #1.
   @@unique([organisationId, number])
@@ -554,6 +556,44 @@ model Bug {
   // so the list can be read in index order instead of sorting every row.
   @@index([isDeleted, isBoosted(sort: Desc), boostedAt(sort: Desc), voteCount(sort: Desc), updatedAt(sort: Desc), createdAt(sort: Desc)], map: "Bug_list_top_votes_idx")
   @@index([isDeleted, isBoosted(sort: Desc), boostedAt(sort: Desc), createdAt(sort: Desc), id(sort: Desc)], map: "Bug_list_newest_idx")
+}
+
+/// An automation rule defined by project admins (#automation-rules). When a
+/// trigger event fires and all conditions match, the actions are executed
+/// automatically on the issue.
+model AutomationRule {
+  id          String   @id @default(cuid())
+  projectId   String
+  project     Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  name        String
+  enabled     Boolean  @default(true)
+  /// issue_created | issue_updated | status_changed | priority_changed | assignee_changed
+  trigger     String   @default("issue_updated")
+  /// JSON array of condition objects: { field, operator, value }
+  conditions  Json     @default("[]")
+  /// JSON array of action objects: { type, value }
+  actions     Json     @default("[]")
+  position    Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  logs        AutomationLog[]
+
+  @@index([projectId, enabled])
+}
+
+/// Audit log of automation rule executions (#automation-rules).
+model AutomationLog {
+  id        String         @id @default(cuid())
+  ruleId    String
+  rule      AutomationRule @relation(fields: [ruleId], references: [id], onDelete: Cascade)
+  bugId     String
+  bug       Bug            @relation(fields: [bugId], references: [id], onDelete: Cascade)
+  result    String         @default("success")
+  details   String?
+  createdAt DateTime       @default(now())
+
+  @@index([ruleId, createdAt])
+  @@index([bugId, createdAt])
 }
 
 /// Time a person logged against an issue (#time-tracking). Minutes are whole
@@ -919,6 +959,8 @@ model Project {
   bugs                  Bug[]
   ideas                 Idea[]
   areas                 ProjectArea[]
+  /// #automation-rules: rules defined for this project.
+  automationRules       AutomationRule[]
   redesigns             RedesignProposal[]
   testMissions          TestMission[]
   auditEvents           ProjectAuditEvent[]

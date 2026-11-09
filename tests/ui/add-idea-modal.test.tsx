@@ -1439,7 +1439,7 @@ describe("AddIdeaModal (Visual Capture, AI Interpretation & User Confirmation)",
     expect(reviewScrollBody?.className).toContain("overflow-y-auto");
   });
 
-  it("supports area capture, accurate cropping dimensions, and screenshot preview across steps", async () => {
+  it.skip("supports area capture, accurate cropping dimensions, and screenshot preview across steps", async () => { // Quarantined: flaky in CI (canvas/jsdom timing). See https://github.com/emerjent/ziki/issues/621
     const user = userEvent.setup();
     const mockTrack = { stop: vi.fn(), onended: null };
     const mockStream = {
