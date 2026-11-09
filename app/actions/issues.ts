@@ -895,6 +895,16 @@ export async function updateBugAction(
   }
   if (events.length > 0) notifyLater(...events);
 
+  // #release-notes: auto-add resolved issues to the current draft release.
+  if (data.status === "resolved" && existing.status !== "resolved") {
+    try {
+      const { autoAddToRelease } = await import("@/app/actions/releases");
+      await autoAddToRelease(bugId, existing.projectId);
+    } catch (err) {
+      console.error("Auto-add to release failed:", err);
+    }
+  }
+
   revalidatePath("/[org]/[project]", "layout");
   revalidateIssue();
   revalidatePath("/bugs");
