@@ -83,6 +83,10 @@ export default async function IdeaPage({ params, searchParams }: {
       projectId: true,
       createdAt: true,
       convertedAt: true,
+      demotedAt: true,
+      demotionSummary: true,
+      demotionDescription: true,
+      demotedFromIssue: { select: { number: true } },
       rejectedAt: true,
       rejectReason: true,
       archivedAt: true,
@@ -394,6 +398,16 @@ export default async function IdeaPage({ params, searchParams }: {
           ) : null}
         </aside>
       </div>
+
+      {idea.demotedAt ? (
+        <section className="rounded-xl border border-zk-line bg-zk-surface p-5" aria-labelledby="demotion-history-heading">
+          <h2 id="demotion-history-heading" className="font-bold text-zk-text">Returned from issue #{idea.demotedFromIssue?.number ?? "?"}</h2>
+          <p className="mt-1 text-xs text-zk-muted">Demoted <LocalTime date={idea.demotedAt} /></p>
+          <p className="mt-1 text-sm text-zk-muted">This idea was reopened after the issue was found to be too early to work on. Its original verdicts and score are preserved.</p>
+          {idea.demotionSummary ? <p className="mt-3 font-semibold text-zk-text">{idea.demotionSummary}</p> : null}
+          {idea.demotionDescription ? <p className="mt-2 whitespace-pre-wrap text-sm text-zk-text2">{idea.demotionDescription}</p> : null}
+        </section>
+      ) : null}
     </div>
   );
 }

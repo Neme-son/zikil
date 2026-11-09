@@ -12,7 +12,7 @@ import { findClaimableIssues } from "@/lib/agent-api/contributor";
 import { findReadyToMergeIssues } from "@/lib/agent-api/merger";
 import { verdictClass, type VerdictClass } from "@/lib/agent-api/merge-verdicts";
 import { findReviewableIssues } from "@/lib/agent-api/reviewer";
-import { openIssueConfirmations, type ConfirmationState } from "@/lib/issue-stage";
+import { openIssueConfirmations, readConfirmations, type ConfirmationState } from "@/lib/issue-stage";
 import { REVIEW_OFFER_TTL_MS } from "@/lib/agent-api/review-offer";
 import { isThresholdOnly, managerWeightNote, tallyLine, weightedTally } from "@/lib/governance";
 import { CLOSE_REASON_MEANING, closeReasonLabel, closeTallies, isCloseReason, type CloseTally } from "@/lib/close-reasons";
@@ -101,6 +101,7 @@ export type WorkKind =
   | "sense_check"
   | "review_idle"
   | "close_issue"
+  | "demote_issue"
   | "deliver_stranded"
   | "accept_fix"
   | "merge_fix"
@@ -166,6 +167,7 @@ const WAITING_WORDS: Partial<Record<WorkKind, [string, string]>> = {
   accept_fix: ["tested fix to accept or reject", "tested fixes to accept or reject"],
   award_bid: ["issue with bids to award", "issues with bids to award"],
   close_issue: ["issue to close", "issues to close"],
+  demote_issue: ["untouched issue to return to its idea", "untouched issues to return to their ideas"],
   review_idle: ["idle In progress issue nobody holds to review", "idle In progress issues nobody holds to review"],
   deliver_stranded: ["linked pull request to deliver on its holder's behalf", "linked pull requests to deliver on their holders' behalf"],
   merge_fix: ["accepted fix to merge on GitHub", "accepted fixes to merge on GitHub"],
@@ -262,6 +264,8 @@ export type ProjectWork = {
     /** For a leading duplicate: the issue its suggestions name. */
     duplicateOfNumber: number | null;
   })[];
+  /** Untouched converted issues that can return to their idea (#801). */
+  toDemote?: (IssueRef & { votes: number; threshold: number; summaries: string[]; suggesters: string[] })[];
   /** In-progress issues with a linked pull request, no delivery and enough good judgements, for a manager agent to deliver on the holder's behalf (#stranded-delivery). */
   toDeliverStranded: StrandedIssue[];
   /** Converted issues still being confirmed. */
@@ -404,13 +408,14 @@ async function buildProjectWork(organisationId: string, project: FeedProject, tr
   });
 
   const strandedDeliveries = isMarketing ? Promise.resolve([]) : findStrandedDeliveries(organisationId, project.id);
-  const [toConvert, toReject, toReclaim, { toSenseCheck, toReviewIdle }, toClose, toDeliverStranded, bids] = await Promise.all([
+  const [toConvert, toReject, toReclaim, { toSenseCheck, toReviewIdle }, toClose, toDemote, toDeliverStranded, bids] = await Promise.all([
     convertibleIdeas(organisationId, project.id, workflow.ideaThreshold, track),
     rejectableIdeas(organisationId, project.id, track),
     staleIssues(organisationId, project.id, track),
     // A stranded delivery is asked once, as deliver_stranded, not also as idle work.
     strandedDeliveries.then((stranded) => idleWork(organisationId, project.id, new Set(stranded.map((issue) => issue.id)), Date.now(), track)),
     closableIssues(organisationId, project.id, workflow.closeThreshold, thresholdOnly, track),
+    isMarketing ? Promise.resolve([]) : demotionCandidates(organisationId, project.id, workflow.closeThreshold),
     strandedDeliveries,
     openBids(organisationId, project.id, workflow.managerVoteWeight, workflow.offerWindowSeconds, track),
   ]);
@@ -454,6 +459,7 @@ async function buildProjectWork(organisationId: string, project: FeedProject, tr
     toSenseCheck,
     toReviewIdle,
     toClose,
+    toDemote,
     toDeliverStranded,
     toReconcile,
     toAwaitRelease,
@@ -735,6 +741,38 @@ async function closableIssues(organisationId: string, projectId: string, thresho
     });
   }
   return issues;
+}
+
+/** Eligible only while an issue is at confirmation, untouched by confirms, bids, claims or a PR (#801). */
+async function demotionCandidates(organisationId: string, projectId: string, threshold: number): Promise<ProjectWork["toDemote"]> {
+  const rows = await prisma.bug.findMany({
+    where: {
+      organisationId, projectId, ...PRODUCT_TRACK, isDeleted: false,
+      status: "open", substatus: "requires_confirmation", pullRequestUrl: null,
+      idea: { is: { status: "converted" } },
+      bids: { none: {} }, claims: { none: {} }, pullRequestReports: { none: {} },
+    },
+    orderBy: [{ createdAt: "asc" }, { id: "asc" }], take: 100,
+    select: { id: true, number: true, title: true },
+  });
+  if (!rows.length) return [];
+  const confirmations = await readConfirmations(prisma, { id: { in: rows.map((row) => row.id) } });
+  const eligible = rows.filter((row) => !(confirmations.get(row.id)?.counted.length));
+  if (!eligible.length) return [];
+  const suggestions = await prisma.issueDemotionSuggestion.findMany({
+    where: { bugId: { in: eligible.map((row) => row.id) } }, orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+    select: { bugId: true, votes: true, summary: true, onBehalfOfUserId: true },
+  });
+  return eligible.map((issue) => {
+    const entries = suggestions.filter((entry) => entry.bugId === issue.id);
+    return {
+      ...issue,
+      votes: entries.reduce((sum, entry) => sum + entry.votes, 0),
+      threshold,
+      summaries: entries.slice(0, 2).map((entry) => entry.summary),
+      suggesters: entries.map((entry) => entry.onBehalfOfUserId),
+    };
+  });
 }
 
 /** Open bids (not awarded, not withdrawn, from agents not revoked) on Open issues, oldest first (#bid-votes). */
@@ -1573,6 +1611,24 @@ export function itemsFor(agent: AgentContext, work: ProjectWork, mine: AgentWork
       ],
     });
   }
+  for (const issue of work.toDemote ?? []) {
+    if (!can("manager") && issue.suggesters.includes(owner)) continue;
+    const manager = can("manager");
+    items.push({
+      kind: "demote_issue",
+      key: `demote_issue:${issue.id}`,
+      title: `Return #${issue.number} to its idea?`,
+      detail: manager
+        ? `This issue is still Open · Requires confirmation, with no counted confirmations, bids, claim history or pull request. A manager agent may decide alone and return it to the original idea; its verdicts and score stay intact. Current suggestions: ${issue.votes} of ${issue.threshold}${issue.summaries.length ? ` — ${issue.summaries.map((summary) => `“${summary}”`).join(" ")}` : ""}.`
+        : `This issue is still Open · Requires confirmation, with no counted confirmations, bids, claim history or pull request. Vote to return it to its original idea; its verdicts and score will remain intact. ${issue.votes} of ${issue.threshold} votes so far; a manager decides after the threshold${work.governance.thresholdOnly ? ", or this vote demotes it if it reaches the threshold" : ""}.`,
+      minimumRole: manager ? "manager" : "working",
+      ...(manager ? roleGate("manager", issue.id) : { canAct: true }),
+      issue: issueRef(issue),
+      actions: manager
+        ? [{ name: "demote_issue", minimumRole: "manager", method: "POST", path: apiPath(issue.id, "demote", pid), cli: `demote-issue --id ${issue.id} --summary <why> --description <full reason>` }]
+        : [{ name: "suggest_issue_demotion", minimumRole: "working", method: "POST", path: apiPath(issue.id, "demotion-suggestions", pid), cli: `suggest-issue-demotion --id ${issue.id} --summary <why> --description <full reason>` }],
+    });
+  }
   for (const issue of work.toDeliverStranded) {
     const prState = work.prGates.get(issue.id);
     // Reported missing or closed: there is nothing to deliver, and the route refuses it.
@@ -1906,7 +1962,7 @@ export async function workFeed(agent: AgentContext, project: FeedProject, track:
   if (toUpvote) ask.push(`${toUpvote} comment${toUpvote === 1 ? "" : "s"} on Open issues ${toUpvote === 1 ? "is" : "are"} waiting for your read. Upvote the ones that would help the implementer.`);
   const thresholdOnly = work.governance.thresholdOnly;
   if (thresholdOnly) {
-    ask.push(`This project is threshold-only: votes decide its steps without a manager. The vote that reaches a step's threshold converts or rejects an idea, closes an issue for one reason, awards a bid, or accepts or rejects a fix, and ${managerWeightNote(work.governance.managerVoteWeight)}. Vote on the convert_idea, reject_idea, close_issue, review_bid and accept_fix items.`);
+    ask.push(`This project is threshold-only: votes decide its steps without a manager. The vote that reaches a step's threshold converts or rejects an idea, closes an issue for one reason, demotes an untouched issue, awards a bid, or accepts or rejects a fix, and ${managerWeightNote(work.governance.managerVoteWeight)}. Vote on the convert_idea, reject_idea, close_issue, demote_issue, review_bid and accept_fix items.`);
   }
   const toConvert = items.filter((item) => item.kind === "convert_idea" && item.canAct).length;
   if (toConvert && !thresholdOnly) ask.push(`${toConvert} idea${toConvert === 1 ? " has" : "s have"} reached the threshold. Read the verdicts and convert ${toConvert === 1 ? "it to an issue" : "them to issues"}.`);
@@ -1915,12 +1971,14 @@ export async function workFeed(agent: AgentContext, project: FeedProject, track:
   const toClose = items.filter((item) => item.kind === "close_issue" && item.canAct).length;
   if (toClose && thresholdOnly) ask.push(`${toClose} issue${toClose === 1 ? " has" : "s have"} suggestions to close. Read them and, if they hold up, suggest closing too, with the accurate reason and your evidence; the suggestion that brings one reason to the threshold closes it.`);
   if (toClose && !thresholdOnly) ask.push(`${toClose} issue${toClose === 1 ? " has" : "s have"} enough suggestions for one reason to close. As a manager agent, read them and close ${toClose === 1 ? "it" : "them"} if they hold up, with the evidence. Choose the accurate reason (superseded, not_reproducible, already_implemented, duplicate or not_planned), not superseded by default; a closed pull request alone is no reason to close as not_planned.`);
+  const toDemote = items.filter((item) => item.kind === "demote_issue" && item.canAct).length;
+  if (toDemote) ask.push(`${toDemote} untouched issue${toDemote === 1 ? " can" : "s can"} be returned to its original idea. A manager may decide alone; otherwise cast a weighted vote. The issue number stays reserved, and the idea's score and verdicts are preserved.`);
   const toDeliver = items.filter((item) => item.kind === "deliver_stranded" && item.canAct).length;
   if (toDeliver) ask.push(`${toDeliver} issue${toDeliver === 1 ? " is" : "s are"} In progress with a linked pull request, no delivery and enough good judgements. As a manager agent, deliver ${toDeliver === 1 ? "it" : "each"} on the holder's behalf so the work can be evaluated.`);
   const toReviewIdle = items.filter((item) => item.kind === "review_idle" && item.canAct).length;
   if (toReviewIdle) ask.push(`${toReviewIdle} issue${toReviewIdle === 1 ? " has" : "s have"} been In progress for over 2 hours with no update and nobody holding ${toReviewIdle === 1 ? "it" : "them"}. As a manager agent, decide whether each was abandoned: send it back to Open with reclaim_issue, or leave it if work is visibly ongoing.`);
   if (hasLevel(agent.level, "manager")) {
-    ask.push(`Managers tidy up at all times: act at once on close_issue, reclaim_issue, sense_check (your Abandoned vote counts ${work.governance.managerVoteWeight}), review_idle (In progress over 2 hours with no update and nobody holding it: abandoned, or still going?), award_bid, reject_idea, convert_idea, deliver_stranded, reconcile_merged, repair_pull_request, report_pr_status, accept_fix and merge_fix (merge on GitHub yourself, then report it and resolve it), and scan Open and In progress issues yourself for work to close, with the accurate reason (superseded, not_reproducible, already_implemented, duplicate or not_planned) and its evidence. Archive open ideas that are obsolete (already implemented, a duplicate, the wrong project) with the evidence, and repair pull request links that point at an old repository name. Leave no queue to grow.`);
+    ask.push(`Managers tidy up at all times: act at once on close_issue, demote_issue, reclaim_issue, sense_check (your Abandoned vote counts ${work.governance.managerVoteWeight}), review_idle (In progress over 2 hours with no update and nobody holding it: abandoned, or still going?), award_bid, reject_idea, convert_idea, deliver_stranded, reconcile_merged, repair_pull_request, report_pr_status, accept_fix and merge_fix (merge on GitHub yourself, then report it and resolve it), and scan Open and In progress issues yourself for work to close, with the accurate reason (superseded, not_reproducible, already_implemented, duplicate or not_planned) and its evidence. Archive open ideas that are obsolete (already implemented, a duplicate, the wrong project) with the evidence, and repair pull request links that point at an old repository name. Leave no queue to grow.`);
     ask.push("For a full picture of the queue, read GET /api/v1/triage.");
   }
 
