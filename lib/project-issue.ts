@@ -58,7 +58,17 @@ export const findProjectIssue = cache(async (orgParam: string, projectParam: str
   const scope = await viewerBugScope();
   if (!("organisationId" in scope)) {
     const rows = await prisma.bug.findMany({ where: { number, isDeleted: false, project: { ...inUrl, archivedAt: null }, organisation: { archivedAt: null } }, select, take: 2 });
-    return rows.length === 1 ? { kind: "found", issue: toIssue(rows[0]) } : null;
+    if (rows.length === 1) return { kind: "found", issue: toIssue(rows[0]) };
+    // Preserve old links to a demoted issue when its returned idea is public.
+    const demoted = await prisma.bug.findFirst({
+      where: {
+        number, isDeleted: true,
+        demotedToIdea: { is: { isDeleted: false, project: { ...inUrl, visibility: "public", archivedAt: null }, organisation: { archivedAt: null } } },
+        project: { ...inUrl, archivedAt: null }, organisation: { archivedAt: null },
+      },
+      select,
+    });
+    return demoted ? { kind: "found", issue: toIssue(demoted) } : null;
   }
 
   // The active workspace's issue page also hosts authorized Restore controls.

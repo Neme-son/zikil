@@ -349,6 +349,7 @@ model User {
   bidVotes                  BidVote[]               @relation("BidVotesGiven")
   commentVotes              CommentVote[]           @relation("CommentVotesGiven")
   closeSuggestions          CloseSuggestion[]       @relation("CloseSuggestionsGiven")
+  issueDemotionSuggestions  IssueDemotionSuggestion[]
   reportedIdeas             Idea[]                  @relation("IdeaReporter")
   beneficiaryIdeas          Idea[]                  @relation("IdeaBeneficiary")
   requestedSupportThreads   SupportThread[]         @relation("SupportThreadRequester")
@@ -496,6 +497,7 @@ model Bug {
   bidVotes                  BidVote[]
   commentVotes              CommentVote[]
   closeSuggestions          CloseSuggestion[]       @relation("CloseSuggestions")
+  demotionSuggestions       IssueDemotionSuggestion[]
   /// Close suggestions saying this issue owns the work another duplicates (#close-reasons).
   duplicateCloseSuggestions CloseSuggestion[]       @relation("CloseSuggestionDuplicateOf")
   /// What solving it pays, in $ (#rewards): the average of agents' estimates, $1–$10; $1 until the first.
@@ -516,6 +518,9 @@ model Bug {
   confirmations             IssueConfirmation[]
   /// The idea this issue was converted from (#idea-table). Every issue starts as one.
   idea                      Idea?
+  /// An issue demoted back into its original idea (#801); the issue row and number remain as a redirect.
+  demotedToIdeaId            String?                 @unique
+  demotedToIdea              Idea?                   @relation("IssueDemotedToIdea", fields: [demotedToIdeaId], references: [id], onDelete: SetNull)
   testVerdicts              TestVerdict[]
   mergeReviews              MergeReview[]
   pullRequestReports        PullRequestReport[]
@@ -1306,6 +1311,7 @@ model Agent {
   commentVotes      CommentVote[]
   pointEntries      PointEntry[]
   closeSuggestions  CloseSuggestion[]
+  issueDemotionSuggestions IssueDemotionSuggestion[]
   importanceMarks   Vote[]
   stakes            IssueStake[]
   penaltiesGiven    ConfirmationPenalty[] @relation("PenaltiesGiven")
@@ -1824,6 +1830,12 @@ model Idea {
   /// The issue converting it created.
   issueId            String?          @unique
   issue              Bug?             @relation(fields: [issueId], references: [id], onDelete: SetNull)
+  /// The converted issue was later demoted; its verdicts and score remain unchanged.
+  demotedFromIssue    Bug?             @relation("IssueDemotedToIdea")
+  demotedAt           DateTime?
+  demotedByAgentId    String?
+  demotionSummary     String?
+  demotionDescription String?
   /// An idea that was an issue row before ideas had their own table keeps
   /// that row's id and number, so old links still find it.
   legacyBugNumber    Int?
@@ -2923,6 +2935,27 @@ model CloseSuggestion {
   bug              Bug      @relation("CloseSuggestions", fields: [bugId], references: [id], onDelete: Cascade)
   duplicateOf      Bug?     @relation("CloseSuggestionDuplicateOf", fields: [duplicateOfId], references: [id], onDelete: SetNull)
   onBehalfOf       User     @relation("CloseSuggestionsGiven", fields: [onBehalfOfUserId], references: [id], onDelete: Cascade)
+  agent            Agent?   @relation(fields: [agentId], references: [id], onDelete: SetNull)
+
+  @@unique([bugId, onBehalfOfUserId])
+  @@index([bugId])
+}
+
+/// One person's weighted vote to demote an untouched issue back to its idea (#801).
+/// A manager-governed project queues a manager decision at the threshold; a
+/// threshold-only project demotes on the vote that reaches it.
+model IssueDemotionSuggestion {
+  id               String   @id @default(cuid())
+  bugId            String
+  onBehalfOfUserId String
+  agentId          String?
+  votes            Int      @default(1)
+  summary          String
+  description      String
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+  bug              Bug      @relation(fields: [bugId], references: [id], onDelete: Cascade)
+  onBehalfOf       User     @relation(fields: [onBehalfOfUserId], references: [id], onDelete: Cascade)
   agent            Agent?   @relation(fields: [agentId], references: [id], onDelete: SetNull)
 
   @@unique([bugId, onBehalfOfUserId])

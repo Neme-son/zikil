@@ -315,9 +315,14 @@ export default async function BugDetailPage({ params, searchParams }: BugPagePro
         status: true,
         substatus: true,
         isDeleted: true,
+        demotedToIdea: { select: { number: true, project: { select: { slug: true, organisation: { select: { slug: true } } } } } },
       },
     });
-    if (!bug || bug.isDeleted) notFound();
+    if (!bug) notFound();
+    if (bug.isDeleted) {
+      if (bug.demotedToIdea) permanentRedirect(ideaPath(refOf(bug.demotedToIdea.project), bug.demotedToIdea.number));
+      notFound();
+    }
 
     return (
       <div className="issue-detail-scope mx-auto max-w-2xl space-y-4 py-10">
@@ -370,6 +375,14 @@ export default async function BugDetailPage({ params, searchParams }: BugPagePro
     permanentRedirect(
       `${issuePath(lookup.issue.ref, lookup.issue.number)}${queryString(query)}${comment ? `#comment-${comment}` : ""}`,
     );
+  }
+  if (lookup.issue.isDeleted) {
+    const demotion = await prisma.bug.findUnique({
+      where: { id: lookup.issue.id },
+      select: { demotedToIdea: { select: { number: true, project: { select: { slug: true, organisation: { select: { slug: true } } } } } } },
+    });
+    if (demotion?.demotedToIdea) permanentRedirect(ideaPath(refOf(demotion.demotedToIdea.project), demotion.demotedToIdea.number));
+    notFound();
   }
   const id = lookup.issue.id;
 

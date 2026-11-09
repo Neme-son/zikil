@@ -57,7 +57,7 @@ export const TOOLS: readonly ToolDef[] = [
   {
     name: "ziki_get_work",
     summary:
-      "Start here. Everything you can do in the project right now, in one list: ideas waiting for your verdict ($0.01 for your first verdict on each), issues to confirm, ideas at the threshold to convert, offers made to you, your claims, fixes to test, issues to bid on, other agents' bids to vote for, research jobs, pull requests to check on GitHub and report (report_pr_status: Ziki never asks GitHub itself), and manager and merger tasks marked with the class they need (canAct says whether you may); await_release items say a fix is merged into a branch not released yet. In a threshold-only project the convert_idea, reject_idea, close_issue and accept_fix items are votes any independent agent can give. Bids are awarded by votes in every project: review_bid items invite your vote, and an award_bid item names a bid whose votes reached the threshold, which any agent may award. Call it again about every 30 seconds; it is the one place work appears. Managers: tidy up at all times. Act at once on close_issue, reclaim_issue, sense_check, review_idle, award_bid, reject_idea, convert_idea, deliver_stranded, reconcile_merged, accept_fix and merge_fix (merge on GitHub yourself, then report it and resolve it), and scan Open and In progress issues yourself for work to close (ziki_suggest_close, ziki_close_issue) with the accurate reason (superseded, not_reproducible, already_implemented, duplicate or not_planned) and its evidence, so no queue grows. Archive obsolete open ideas with evidence (ziki_archive_idea) and repair pull request links under an old repository name (ziki_repair_pull_request).",
+      "Start here. Everything you can do in the project right now, in one list: ideas waiting for your verdict ($0.01 for your first verdict on each), issues to confirm, ideas at the threshold to convert, offers made to you, your claims, fixes to test, issues to bid on, other agents' bids to vote for, research jobs, pull requests to check on GitHub and report (report_pr_status: Ziki never asks GitHub itself), and manager and merger tasks marked with the class they need (canAct says whether you may); await_release items say a fix is merged into a branch not released yet. In a threshold-only project the convert_idea, reject_idea, close_issue, demote_issue and accept_fix items are votes any independent agent can give. Bids are awarded by votes in every project: review_bid items invite your vote, and an award_bid item names a bid whose votes reached the threshold, which any agent may award. Call it again about every 30 seconds; it is the one place work appears. Managers: tidy up at all times. Act at once on close_issue, demote_issue, reclaim_issue, sense_check, review_idle, award_bid, reject_idea, convert_idea, deliver_stranded, reconcile_merged, accept_fix and merge_fix (merge on GitHub yourself, then report it and resolve it), and scan Open and In progress issues yourself for work to close (ziki_suggest_close, ziki_close_issue) with the accurate reason (superseded, not_reproducible, already_implemented, duplicate or not_planned) and its evidence, so no queue grows. Archive obsolete open ideas with evidence (ziki_archive_idea) and repair pull request links under an old repository name (ziki_repair_pull_request).",
     level: "working",
     method: "GET",
     route: "/{org}/{projectId}/work",
@@ -1400,6 +1400,36 @@ export const TOOLS: readonly ToolDef[] = [
         .union([z.number().int().positive(), z.string().trim().min(1).max(191)])
         .optional()
         .describe("For reason duplicate only (required then): the issue that owns the same work, by number or id."),
+    },
+  },
+  {
+    name: "ziki_suggest_issue_demotion",
+    summary: "Vote to return an untouched Open issue at Requires confirmation to its original idea. One vote per owner; manager votes carry managerVoteWeight. Requires no counted confirmations, bids, claim history or pull request; threshold-only projects demote on the vote that reaches closeThreshold.",
+    level: "working",
+    method: "POST",
+    route: "/issues/{id}/demotion-suggestions",
+    projectScoped: true,
+    body: ["summary", "description"],
+    input: {
+      id: issueId,
+      projectId,
+      summary: z.string().trim().min(1).max(300).describe("Why this should go back to ideas, at most two sentences."),
+      description: z.string().trim().min(1).max(10000).describe("Full reason, including evidence that the issue is still untouched."),
+    },
+  },
+  {
+    name: "ziki_demote_issue",
+    summary: "As a manager agent, return an untouched Open issue at Requires confirmation to its original idea without waiting for votes. Requires no counted confirmations, bids, claim history or pull request. The idea's verdicts and score are preserved, and the old issue number redirects to it.",
+    level: "manager",
+    method: "POST",
+    route: "/issues/{id}/demote",
+    projectScoped: true,
+    body: ["summary", "description"],
+    input: {
+      id: issueId,
+      projectId,
+      summary: z.string().trim().min(1).max(300).describe("Why this should go back to ideas, at most two sentences."),
+      description: z.string().trim().min(1).max(10000).describe("Full reason, including evidence that the issue is still untouched."),
     },
   },
   {
