@@ -65,3 +65,5 @@ To cut a release:
 The default tarball bundles the MCP server (`vendor/mcp-server.cjs`), which
 is PolyForm-Strict-licensed: publishing it needs maintainer approval.
 `ZIKI_BUNDLE_MCP=0 npm pack` builds a package without the bundle instead.
+
+Building the bundle needs the MCP server's dependencies installed first (`pnpm install --frozen-lockfile` in `packages/mcp-server`, as CI does); if local pnpm stops at the approve-builds gate for esbuild, run `pnpm approve-builds` or install them with npm instead.
