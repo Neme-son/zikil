@@ -35,6 +35,7 @@ export const escalationTypeValues = [
   "blocker",
   "scope_change",
   "human_approval",
+  "security",
 ] as const;
 
 export type EscalationTypeSlug = (typeof escalationTypeValues)[number];
@@ -300,7 +301,8 @@ export type EscalationType =
   | "Work Authorization"
   | "Question"
   | "Scope Expansion"
-  | "Human Approval";
+  | "Human Approval"
+  | "Security";
 
 export function escalationTypeToSlug(type: EscalationType): EscalationTypeSlug {
   switch (type) {
@@ -312,6 +314,8 @@ export function escalationTypeToSlug(type: EscalationType): EscalationTypeSlug {
       return "scope_change";
     case "Human Approval":
       return "human_approval";
+    case "Security":
+      return "security";
     case "Question":
     default:
       return "question";
@@ -328,6 +332,8 @@ export function slugToEscalationType(slug: EscalationTypeSlug | string): Escalat
       return "Scope Expansion";
     case "human_approval":
       return "Human Approval";
+    case "security":
+      return "Security";
     case "question":
     default:
       return "Question";
@@ -342,6 +348,7 @@ export function parseEscalationBody(rawBody: string): { type: EscalationType; cl
     if (tag === "work_authorization" || tag === "authorization") return { type: "Work Authorization", cleanBody: match[2] };
     if (tag === "scope_change" || tag === "scope_expansion") return { type: "Scope Expansion", cleanBody: match[2] };
     if (tag === "human_approval" || tag === "approval") return { type: "Human Approval", cleanBody: match[2] };
+    if (tag === "security" || tag === "vulnerability") return { type: "Security", cleanBody: match[2] };
     if (tag === "question") return { type: "Question", cleanBody: match[2] };
   }
   return { type: classifyEscalation(rawBody), cleanBody: rawBody };
@@ -352,6 +359,22 @@ export function parseEscalationBody(rawBody: string): { type: EscalationType; cl
  */
 export function classifyEscalation(body: string): EscalationType {
   const lower = body.toLowerCase();
+  if (
+    lower.includes("vulnerab") ||
+    lower.includes("exploit") ||
+    lower.includes("cve-") ||
+    lower.includes("xss") ||
+    lower.includes("csrf") ||
+    lower.includes("sql injection") ||
+    lower.includes("secret leak") ||
+    lower.includes("leaked") ||
+    lower.includes("auth bypass") ||
+    lower.startsWith("[security]") ||
+    lower.startsWith("[vulnerability]") ||
+    lower.includes("security")
+  ) {
+    return "Security";
+  }
   if (
     lower.includes("block") ||
     lower.includes("stuck") ||

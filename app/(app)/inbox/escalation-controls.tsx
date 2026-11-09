@@ -17,6 +17,7 @@ export function EscalationTypeBadge({ type }: { type: EscalationType | string })
     "Work Authorization": "bg-zk-warn-bg text-zk-warn-fg border-zk-warn-bd",
     "Human Approval": "bg-zk-info-bg text-zk-info-fg border-zk-border",
     "Scope Expansion": "bg-zk-warn-bg text-zk-warn-fg border-zk-warn-bd",
+    Security: "bg-zk-warn-bg text-zk-warn-fg border-zk-warn-bd",
     Question: "bg-zk-chip text-zk-text2 border-zk-border",
     Redesign: "bg-zk-info-bg text-zk-info-fg border-zk-border",
   };
@@ -26,6 +27,7 @@ export function EscalationTypeBadge({ type }: { type: EscalationType | string })
     "Work Authorization": "🛡️",
     "Human Approval": "👤",
     "Scope Expansion": "⚠️",
+    Security: "🔐",
     Question: "❓",
     Redesign: "✎",
   };

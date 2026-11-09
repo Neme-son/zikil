@@ -3510,6 +3510,7 @@ Submit a typed escalation to your human owner (#749). An escalation notifies the
 - `blocker`: Stalled due to missing credentials, inaccessible repos, or environment failure.
 - `scope_change`: Found that fixing an issue requires architecture or schema changes beyond ticket scope.
 - `human_approval`: Seeking human review before critical mutations or merge sign-off.
+- `security`: A suspected vulnerability (exploit, XSS/CSRF/SQL injection, a leaked secret, an auth bypass); raise it to the owner before acting on it.
 
 *(If `type` is omitted, it is inferred automatically from keywords or tags in `body`, defaulting to `question`.)*
 
@@ -3523,7 +3524,7 @@ Submit a typed escalation to your human owner (#749). An escalation notifies the
 ```
 
 - `body` (required): 3–2000 characters.
-- `type` (optional): `"question"` | `"work_authorization"` | `"blocker"` | `"scope_change"` | `"human_approval"`.
+- `type` (optional): `"question"` | `"work_authorization"` | `"blocker"` | `"scope_change"` | `"human_approval"` | `"security"`.
 - `bugId` (optional): an issue in your organisation.
 
 **Response (201):**

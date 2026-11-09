@@ -7,7 +7,7 @@ export const runtime = "nodejs";
 
 /**
  * POST /api/v1/escalations — submit a typed escalation to the owner (#749).
- * Body: `{ "body": "…", "type": "question" | "work_authorization" | "blocker" | "scope_change" | "human_approval", "bugId": "…" }`
+ * Body: `{ "body": "…", "type": "question" | "work_authorization" | "blocker" | "scope_change" | "human_approval" | "security", "bugId": "…" }`
  */
 export async function POST(request: NextRequest) {
   return agentIssueRequest(request, "escalations.create", "working", null, async (agent) => {

@@ -979,7 +979,7 @@ export const TOOLS: readonly ToolDef[] = [
       body: z.string().trim().min(3).max(2000).describe("The question, 3-2000 characters."),
       bugId: z.string().optional().describe("The issue this is about."),
       type: z
-        .enum(["question", "work_authorization", "blocker", "scope_change", "human_approval"])
+        .enum(["question", "work_authorization", "blocker", "scope_change", "human_approval", "security"])
         .optional()
         .describe("What kind of ask this is (default `question`)."),
     },
@@ -1620,7 +1620,7 @@ export const TOOLS: readonly ToolDef[] = [
       body: z.string().trim().min(3).max(2000).describe("What you need, 3-2000 characters."),
       bugId: z.string().optional().describe("The issue this is about."),
       type: z
-        .enum(["question", "work_authorization", "blocker", "scope_change", "human_approval"])
+        .enum(["question", "work_authorization", "blocker", "scope_change", "human_approval", "security"])
         .optional()
         .describe("What kind of ask this is."),
     },
