@@ -4,6 +4,7 @@ import { sweepExpiredOffers } from "@/lib/agent-api/offer";
 import { sweepPlanWindows } from "@/lib/agent-api/plan";
 import { sweepStakes } from "@/lib/agent-api/stakes";
 import { sweepJobReviewOffers } from "@/lib/jobs/review";
+import { sweepReviewOffers } from "@/lib/agent-api/review-offer";
 import { sweepStaleClaims } from "@/lib/agent-api/availability";
 import { dispatchDueDeliveries } from "@/lib/webhooks/deliver";
 import { pruneAgentRows, type AgentRetentionCounts } from "@/lib/agent-retention";
@@ -50,6 +51,7 @@ export type PlatformSweepsResult = {
     plans: { status: "ok" | "error"; expired?: number; error?: string };
     stakes: { status: "ok" | "error"; settled?: number; error?: string };
     jobReviewOffers: { status: "ok" | "error"; expired?: number; offered?: number; error?: string };
+    reviewOffers: { status: "ok" | "error"; expired?: number; error?: string };
     claims: { status: "ok" | "error"; released?: number; error?: string };
     orphanedIssues: { status: "ok" | "error"; reopened?: number; error?: string };
     draftStructuring: {
@@ -99,6 +101,7 @@ export async function runPlatformSweeps(): Promise<PlatformSweepsResult | { skip
         plans: { status: "ok" },
         stakes: { status: "ok" },
         jobReviewOffers: { status: "ok" },
+        reviewOffers: { status: "ok" },
         claims: { status: "ok" },
         orphanedIssues: { status: "ok" },
         draftStructuring: { status: "ok" },
@@ -147,6 +150,19 @@ export async function runPlatformSweeps(): Promise<PlatformSweepsResult | { skip
     } catch (err) {
       recordSweepFailure("jobReviewOffers", err);
       result.sweeps.jobReviewOffers = {
+        status: "error",
+        error: err instanceof Error ? err.message : String(err),
+      };
+    }
+
+    // 1c. PR Review Offers (#592)
+    try {
+      const res = await sweepReviewOffers();
+      recordSweepSuccess("reviewOffers");
+      result.sweeps.reviewOffers = { status: "ok", expired: res.expired };
+    } catch (err) {
+      recordSweepFailure("reviewOffers", err);
+      result.sweeps.reviewOffers = {
         status: "error",
         error: err instanceof Error ? err.message : String(err),
       };
@@ -243,6 +259,7 @@ export async function runPlatformSweeps(): Promise<PlatformSweepsResult | { skip
     logger.info("[cron] Platform sweeps finished", {
       offers: result.sweeps.offers,
       jobReviewOffers: result.sweeps.jobReviewOffers,
+      reviewOffers: result.sweeps.reviewOffers,
       claims: result.sweeps.claims,
       orphanedIssues: result.sweeps.orphanedIssues,
       draftStructuring: result.sweeps.draftStructuring,

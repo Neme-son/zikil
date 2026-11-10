@@ -33,7 +33,11 @@ import { IssueApiError } from "@/lib/agent-api/errors";
 import { latestPullRequestReport, pullRequestStateView } from "@/lib/agent-api/pull-request-report";
 import { agentAttachmentUrl } from "@/lib/agent-api/attachment-read";
 import { entrySummary } from "@/lib/agent-api/entry-fields";
+import { actionReason } from "@/lib/agent-api/action-reason";
+import { findingForBug, findingView, type FindingRow, type FindingViewer } from "@/lib/security-findings";
 import { searchWorkItems } from "@/lib/search-index";
+import { checkPostForSecrets, stringsIn } from "@/lib/security/secret-guard";
+import { findSecretsInFields } from "@/lib/security/secrets";
 
 export { IssueApiError };
 
@@ -51,7 +55,58 @@ function enumFilter<T extends string>(name: string, raw: string | null, allowed:
 /** Files uploaded with POST /api/v1/attachments, linked on save (#645). */
 const attachmentIdsSchema = z.array(idSchema).max(MAX_ATTACHMENTS_PER_ITEM).optional();
 // #730: an agent's comment leads with its point, in at most two sentences, then the full body.
-export const agentCommentSchema = commentSchema.extend({ summary: entrySummary, label: commentLabel.optional(), projectId: idSchema.optional(), attachmentIds: attachmentIdsSchema }).strict();
+export const agentCommentSchema = commentSchema.extend({ summary: entrySummary, label: commentLabel.optional(), reason: actionReason, projectId: idSchema.optional(), attachmentIds: attachmentIdsSchema }).strict();
+
+/**
+ * Push protection for agents (#secret-protection): every string in a write's
+ * JSON body is checked for credentials before the route sees it. A body with
+ * one is answered 422 `secret_detected`, naming the field, line and kind (never
+ * the secret), and nothing is saved. Other bodies, and unreadable JSON (the
+ * route reports that itself), pass on unchanged.
+ */
+async function secretInRequest(request: NextRequest, agent: AgentContext, action: string, target: string | null): Promise<Response | null> {
+  if (!["POST", "PUT", "PATCH"].includes(request.method)) return null;
+  if (!(request.headers.get("content-type") ?? "").toLowerCase().includes("json")) return null;
+  let body: unknown;
+  try {
+    body = await request.clone().json();
+  } catch {
+    return null;
+  }
+  const fields = stringsIn(body);
+  // The common case reads no database at all: only a body with a secret in it
+  // goes on to have its issue looked up, for the alert's link.
+  if (findSecretsInFields(fields).length === 0) return null;
+  const check = await checkPostForSecrets({
+    organisationId: agent.organisationId,
+    actor: { kind: "agent", agentId: agent.agentId, agentName: agent.name, ownerId: agent.ownerId },
+    source: action,
+    bugId: target ? await issueInOrganisation(target, agent.organisationId) : null,
+    fields,
+  });
+  if (check.ok) return null;
+  return secretDetectedResponse(check);
+}
+
+/** The 422 an agent gets when a write is stopped for a credential in it (#secret-protection). */
+export function secretDetectedResponse(check: { message: string; secrets: unknown[] }): Response {
+  return NextResponse.json(
+    { error: check.message, code: "secret_detected", secrets: check.secrets },
+    { status: 422 },
+  );
+}
+
+/** The issue a route's target names, when it is an issue in this organisation; for linking an alert. */
+async function issueInOrganisation(target: string, organisationId: string): Promise<string | null> {
+  try {
+    const id = await issueIdFor(prisma, target, organisationId);
+    if (!id) return null;
+    const bug = await prisma.bug.findFirst({ where: { id, organisationId }, select: { id: true } });
+    return bug?.id ?? null;
+  } catch {
+    return null;
+  }
+}
 
 /**
  * Authenticate before parsing input, charge the shared budget, and audit outcomes including denials.
@@ -88,7 +143,11 @@ export async function agentIssueRequest(
         budgetKind,
       );
       quota = budget;
-      response = budget.allowed ? await run(agent) : agentBudgetExceededResponse(budget.retryAfterSeconds, budget);
+      // #secret-protection: a write carrying a credential is stopped before the route reads it.
+      const stopped = budget.allowed && budgetKind === "write" ? await secretInRequest(request, agent, action, target) : null;
+      response = !budget.allowed
+        ? agentBudgetExceededResponse(budget.retryAfterSeconds, budget)
+        : stopped ?? await run(agent);
     }
   } catch (error) {
     if (error instanceof IssueApiError) response = NextResponse.json(error.body ? { error: error.message, ...error.body } : { error: error.message }, { status: error.status });
@@ -299,6 +358,25 @@ const confirmationSelect = {
   updatedAt: true,
 } satisfies Prisma.IssueConfirmationSelect;
 
+/**
+ * #security-findings: a private finding's block on an issue or idea read. Always its
+ * severity and whether it is disclosed; the real title, summary, description and
+ * files only when the asking agent may see them (`canView`).
+ */
+export function securityJson(row: FindingRow | null, viewer: FindingViewer | null) {
+  if (!row) return null;
+  const view = findingView(row, viewer);
+  return {
+    severity: view.severity,
+    disclosed: view.disclosed,
+    disclosedAt: view.disclosedAt,
+    canView: view.canView,
+    details: view.details
+      ? { ...view.details, attachments: view.details.attachments.map((file) => ({ ...file, url: agentAttachmentUrl(file.id) })) }
+      : null,
+  };
+}
+
 /** The issue's plan as the issue read shows it: the entry's fields without its revisions and replies. */
 async function planSummary(bugId: string) {
   const plan = await currentPlan(bugId);
@@ -309,14 +387,14 @@ async function planSummary(bugId: string) {
   return summary;
 }
 
-export async function readAgentIssue(scope: Scope, id: string) {
+export async function readAgentIssue(scope: Scope, id: string, viewer: FindingViewer | null = null) {
   // #457: the path may be the readable number (`123`, `ZE-123`) or the id.
   const ref = parseIssueRef(id);
   const issue = await prisma.bug.findFirst({
     where: { ...scope, ...(ref.kind === "number" ? { number: ref.number } : { id: ref.id }), isDeleted: false },
     select: { ...issueSelect, voteCount: true, comments: {
       where: { deletedAt: null }, orderBy: [{ createdAt: "desc" }, { id: "desc" }], take: 100,
-      select: { id: true, summary: true, body: true, authorId: true, agentId: true, parentId: true, confirmationId: true, bidId: true, deliveryId: true, testVerdictId: true, mergeReviewId: true, createdAt: true, editedAt: true, _count: { select: { votes: true } } },
+      select: { id: true, summary: true, body: true, reason: true, authorId: true, agentId: true, parentId: true, confirmationId: true, bidId: true, deliveryId: true, testVerdictId: true, mergeReviewId: true, createdAt: true, editedAt: true, _count: { select: { votes: true } } },
     }, attachments: {
       // #645: metadata only; agents read the bytes at `url` (#722).
       orderBy: [{ createdAt: "asc" }, { id: "asc" }],
@@ -346,6 +424,8 @@ export async function readAgentIssue(scope: Scope, id: string) {
     plan: await planSummary(issue.id),
     // #pr-reports: the latest independent report on the linked pull request, with who filed it and its age, or null.
     pullRequestState: pullRequestStateView(await latestPullRequestReport(issue.id, issue.pullRequestUrl)),
+    // #security-findings: null for an ordinary issue.
+    security: securityJson(await findingForBug(issue.id), viewer),
   };
 }
 
@@ -379,7 +459,7 @@ export async function countAgentIssues(scope: Scope, params: URLSearchParams) {
 
 /** What a paged comment carries: the embedded read's fields plus who wrote it. */
 const commentSelect = {
-  id: true, summary: true, body: true, authorId: true, agentId: true, parentId: true, confirmationId: true, bidId: true, deliveryId: true, testVerdictId: true, mergeReviewId: true, createdAt: true, editedAt: true,
+  id: true, summary: true, body: true, reason: true, authorId: true, agentId: true, parentId: true, confirmationId: true, bidId: true, deliveryId: true, testVerdictId: true, mergeReviewId: true, createdAt: true, editedAt: true,
   author: { select: { id: true, name: true } },
   agent: { select: { id: true, name: true } },
   _count: { select: { votes: true } },
@@ -474,6 +554,7 @@ export async function commentOnAgentIssue(agent: AgentContext, request: NextRequ
         summary: input.summary,
         label: input.label ?? null,
         body,
+        reason: input.reason ?? null,
         confirmationId: placement.confirmationId,
         bidId: placement.bidId,
         deliveryId: placement.deliveryId,
@@ -490,6 +571,7 @@ export async function commentOnAgentIssue(agent: AgentContext, request: NextRequ
         summary: true,
         label: true,
         body: true,
+        reason: true,
         parentId: true,
         confirmationId: true,
         bidId: true,

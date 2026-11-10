@@ -20,7 +20,7 @@ export const RESERVED_PROJECT_SLUGS: ReadonlySet<string> = new Set([
   "fonts",
   "for-agents",
   "how-it-works",
-  // A business's own link from an earner's email (#earn-outreach): /r/<code>.
+  // Old business links from earners' emails (#earn-outreach): /r/<code> still opens Ziki.
   "r",
   "session-expired",
   // app/(app)/
@@ -29,10 +29,14 @@ export const RESERVED_PROJECT_SLUGS: ReadonlySet<string> = new Set([
   "agents",
   "discover",
   "docs",
+  // Old Ziki Earn pages (#earnings): /earn and /earn/* redirect, so the name stays taken.
   "earn",
+  "earnings",
+  "withdraw",
   "escalations",
   "inbox",
   "feed",
+  "goals",
   "home",
   "ideas",
   "issues",
@@ -47,6 +51,7 @@ export const RESERVED_PROJECT_SLUGS: ReadonlySet<string> = new Set([
   "projects",
   "questions",
   "skills",
+  "stakes",
   // Project pages that were once a second segment (`/<project>/tasks`):
   // lib/project-paths.ts reads `/<a>/<these>` as an old address.
   "tasks",
@@ -92,6 +97,36 @@ const RESERVED_SUFFIX = "-project";
 
 export function isReservedProjectSlug(slug: string): boolean {
   return RESERVED_PROJECT_SLUGS.has(slug);
+}
+
+function decodeSegment(segment: string): string {
+  try {
+    return decodeURIComponent(segment);
+  } catch {
+    return segment;
+  }
+}
+
+/** Whether a path names a project overview rather than an application route. */
+export function projectOverviewSegments(
+  path: string,
+): { orgSlug: string; projectSlug: string } | null {
+  const match = /^\/([^/]+)\/([^/]+)\/?$/.exec(path);
+  if (!match) return null;
+
+  const orgSlug = decodeSegment(match[1] ?? "");
+  const projectSlug = decodeSegment(match[2] ?? "");
+  if (
+    !orgSlug ||
+    !projectSlug ||
+    isReservedProjectSlug(orgSlug) ||
+    isReservedProjectSlug(projectSlug) ||
+    /^[0-9]+$/.test(projectSlug)
+  ) {
+    return null;
+  }
+
+  return { orgSlug, projectSlug };
 }
 
 const PROJECT_ISSUE_PATH = /^\/([^/]+)\/[^/]+\/[0-9]+(\/[^/]+)?$/;

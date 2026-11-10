@@ -147,6 +147,7 @@ export const pointRoleLabels: Record<PointRole, string> = {
   idea: "Idea Contribution",
   signup: "Signup Bonus",
   comment: "Comment Upvote",
+  plan: "Plan Approved",
   vote: "Importance / Bid Vote",
 };
 

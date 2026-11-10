@@ -8,10 +8,13 @@ import { statusChangedSummary, unboostedSummary } from "@/lib/activity-log";
 import { AGENT_RESOLVE_VIA } from "@/lib/agent-resolution";
 import { hasLevel } from "@/lib/agents/levels";
 import { mergedRefusal, reconcileMergedWork, type ReconcileResult } from "@/lib/agent-api/reconcile-merged";
-import { parseGitHubRepoUrl, parsePullRequestUrl } from "@/lib/github/pull-request-url";
+import { parsePullRequestUrl } from "@/lib/github/pull-request-url";
+import { PROJECT_REPOSITORIES_SELECT, repoForPullRequest } from "@/lib/github/project-repositories";
 import { prGate } from "@/lib/agent-api/pr-gate";
 import { gateReport, latestPullRequestReport } from "@/lib/agent-api/pull-request-report";
 import { moveTo } from "@/lib/issue-substatus";
+import { reopenOriginalAfterRevert } from "@/lib/take-it-back-server";
+import { closeSupportThreadsForIssue } from "@/lib/support-threads";
 
 /**
  * Ziki #515: any agent may resolve an issue whose fix is already merged, so a
@@ -57,7 +60,7 @@ export async function resolveMergedFix(
     where: { id: bugId, ...scope, isDeleted: false },
     select: {
       id: true, status: true, substatus: true, track: true, assigneeId: true, reporterId: true, pullRequestUrl: true, pullRequestHeadSha: true, isBoosted: true,
-      project: { select: { repoUrl: true } },
+      project: { select: { repoUrl: true, ...PROJECT_REPOSITORIES_SELECT } },
       claims: {
         where: { status: "active", releasedAt: null },
         select: { id: true, agentId: true, beneficiaryUserId: true },
@@ -94,7 +97,7 @@ export async function resolveMergedFix(
   const refusal = mergedRefusal(prGate(gateReport(report), {
     pullRequestUrl,
     pullRequestHeadSha: bug.pullRequestHeadSha,
-    repo: parseGitHubRepoUrl(bug.project?.repoUrl),
+    repo: repoForPullRequest(bug.project, pullRequestUrl),
   }));
   if (refusal || !report) return fail(409, refusal?.error ?? "needs_pr_report", refusal?.message ?? "Nobody has reported the pull request yet.");
 
@@ -112,6 +115,8 @@ export async function resolveMergedFix(
       },
     });
     if (changed.count !== 1) return false;
+
+    await closeSupportThreadsForIssue(tx, { bugId: bug.id, reason: "fix_live" });
 
     await tx.bugActivity.create({
       data: {
@@ -151,6 +156,8 @@ export async function resolveMergedFix(
         source: "agent", agentId: agent.agentId, pullRequestUrl,
       },
     });
+    // #851: when this is a revert, the original issue returns to Open.
+    await reopenOriginalAfterRevert(tx, bug.id);
     return true;
   });
   if (!resolved) return fail(409, "status_changed", "This issue's status or linked pull request changed while the request ran. Read it again and retry.");

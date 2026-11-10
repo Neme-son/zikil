@@ -9,6 +9,7 @@ import { prisma } from "@/lib/prisma";
 import { ProjectSettingsForm } from "./settings-form";
 import { ProjectAreasManager } from "./areas-manager";
 import { WorkflowSettingsForm } from "./workflow-settings-form";
+import { ProjectRepositoriesManager } from "./repositories-manager";
 import { workflowValues } from "@/lib/workflow-config";
 import {
   getPlatformRewardConfig,
@@ -71,8 +72,12 @@ export default async function ProjectSettingsPage({
     where: { organisationId, slug },
     select: {
       id: true, slug: true, name: true, goal: true, repoUrl: true, stagingUrl: true, siteUrl: true,
-      visibility: true, isOpenForContributors: true, contributorGuidelines: true,
+      visibility: true, isOpenForContributors: true, acceptsGuestIdeas: true, contributorGuidelines: true,
       githubInstallationId: true, rewardConfig: true, workflow: true, organisation: { select: { slug: true } },
+      repositories: {
+        select: { id: true, url: true, label: true, branch: true, githubInstallationId: true },
+        orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+      },
     },
   });
   if (!project) notFound();
@@ -154,6 +159,7 @@ export default async function ProjectSettingsPage({
 
           {section === "github" ? (
             <div className="flex flex-col gap-4">
+              <Link href="/projects/readiness" className="self-start text-sm font-semibold text-zk-accent underline">Check repository readiness for this organisation</Link>
               {github === "error" ? <p role="alert" className="rounded-[14px] bg-zk-warn-bg p-3 text-sm text-zk-warn-fg">GitHub setup could not be completed. Start the connection again from this page.</p> : null}
               {github === "connected" ? <p role="status" className="rounded-[14px] bg-zk-ok-bg p-3 text-sm text-zk-ok-fg">GitHub App installation connected.</p> : null}
               {github === "unavailable" ? <p role="alert" className="rounded-[14px] bg-zk-warn-bg p-3 text-sm text-zk-warn-fg">The GitHub App is not configured. Set GITHUB_APP_SLUG before connecting it.</p> : null}
@@ -163,7 +169,7 @@ export default async function ProjectSettingsPage({
                 <div className="flex flex-col gap-1">
                   <h2 className="m-0 text-lg font-bold text-zk-text">GitHub App</h2>
                   <span className="text-[13px] text-zk-muted">
-                    Installation ID: {project.githubInstallationId ?? "Not connected"}. No access token is stored.
+                    For the main repository, and the others in the same organisation. Installation ID: {project.githubInstallationId ?? "Not connected"}. No access token is stored.
                   </span>
                 </div>
                 <a
@@ -172,6 +178,11 @@ export default async function ProjectSettingsPage({
                 >
                   {project.githubInstallationId ? "Change installation" : "Connect GitHub App"}
                 </a>
+                <ProjectRepositoriesManager
+                  projectSlug={project.slug}
+                  repositories={project.repositories}
+                  projectConnected={Boolean(project.githubInstallationId)}
+                />
               </section>
             </div>
           ) : null}

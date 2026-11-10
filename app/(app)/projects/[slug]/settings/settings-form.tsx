@@ -18,6 +18,7 @@ type Project = {
   siteUrl: string | null;
   visibility?: "public" | "private";
   isOpenForContributors?: boolean;
+  acceptsGuestIdeas?: boolean;
   contributorGuidelines?: string | null;
   rewardConfig?: unknown;
 };
@@ -32,6 +33,7 @@ export function ProjectSettingsForm({
   const [result, action, pending] = useActionState<ProjectActionResult | undefined, FormData>(updateProjectAction, undefined);
   const [visibility, setVisibility] = useState<"public" | "private">(project.visibility === "public" ? "public" : "private");
   const [isOpenForContributors, setIsOpenForContributors] = useState(Boolean(project.isOpenForContributors));
+  const [acceptsGuestIdeas, setAcceptsGuestIdeas] = useState(Boolean(project.acceptsGuestIdeas));
 
   return (
     <form action={action} className="space-y-4">
@@ -41,22 +43,27 @@ export function ProjectSettingsForm({
         <Input id="project-name" name="name" defaultValue={project.name} minLength={2} maxLength={60} required />
         {result?.field === "name" ? <span className="text-xs text-zk-bad-fg">{result.fieldErrors?.name ?? result.error}</span> : null}
       </label>
-      <label htmlFor="project-goal" className="block space-y-1 text-sm font-medium text-zk-text">Goal
-        <Textarea id="project-goal" name="goal" defaultValue={project.goal ?? ""} maxLength={4000} rows={6} aria-describedby="project-goal-hint" />
-        <span id="project-goal-hint" className="block text-xs font-normal text-zk-muted">Markdown is supported. Maximum 4,000 characters.</span>
-      </label>
-      <label htmlFor="project-repo-url" className="block space-y-1 text-sm font-medium text-zk-text">GitHub repository URL
-        <Input id="project-repo-url" name="repoUrl" type="url" inputMode="url" placeholder="https://github.com/owner/repository" defaultValue={project.repoUrl ?? ""} />
-        {result?.field === "repoUrl" ? <span className="text-xs text-zk-bad-fg">{result.fieldErrors?.repoUrl ?? result.error}</span> : null}
+      <label htmlFor="project-goal" className="block space-y-1 text-sm font-medium text-zk-text">Project Brief &amp; Context for Agents
+        <Textarea id="project-goal" name="goal" defaultValue={project.goal ?? ""} maxLength={4000} rows={6} aria-describedby="project-goal-hint" placeholder="Explain what this project is building, who it is for, and how the final product should work." />
+        <span id="project-goal-hint" className="block text-xs font-normal text-zk-muted">Agents read this context when working on your project. Markdown is supported. Maximum 4,000 characters.</span>
       </label>
       <label htmlFor="project-site-url" className="block space-y-1 text-sm font-medium text-zk-text">Site URL
         <Input id="project-site-url" name="siteUrl" type="url" inputMode="url" placeholder="https://example.com" defaultValue={project.siteUrl ?? ""} />
         {result?.field === "siteUrl" ? <span className="text-xs text-zk-bad-fg">{result.fieldErrors?.siteUrl ?? result.error}</span> : null}
       </label>
-      <label htmlFor="project-staging-url" className="block space-y-1 text-sm font-medium text-zk-text">Staging URL
-        <Input id="project-staging-url" name="stagingUrl" type="url" inputMode="url" placeholder="https://staging.example.com" defaultValue={project.stagingUrl ?? ""} />
-        {result?.field === "stagingUrl" ? <span className="text-xs text-zk-bad-fg">{result.fieldErrors?.stagingUrl ?? result.error}</span> : null}
-      </label>
+      <details className="rounded-xl border border-zk-border bg-zk-subtle/30 p-4">
+        <summary className="cursor-pointer text-sm font-medium text-zk-text">Developer Links &amp; Staging (Advanced)</summary>
+        <div className="mt-4 space-y-4">
+          <label htmlFor="project-repo-url" className="block space-y-1 text-sm font-medium text-zk-text">GitHub repository URL
+            <Input id="project-repo-url" name="repoUrl" type="url" inputMode="url" placeholder="https://github.com/owner/repository" defaultValue={project.repoUrl ?? ""} />
+            {result?.field === "repoUrl" ? <span className="text-xs text-zk-bad-fg">{result.fieldErrors?.repoUrl ?? result.error}</span> : null}
+          </label>
+          <label htmlFor="project-staging-url" className="block space-y-1 text-sm font-medium text-zk-text">Staging URL
+            <Input id="project-staging-url" name="stagingUrl" type="url" inputMode="url" placeholder="https://staging.example.com" defaultValue={project.stagingUrl ?? ""} />
+            {result?.field === "stagingUrl" ? <span className="text-xs text-zk-bad-fg">{result.fieldErrors?.stagingUrl ?? result.error}</span> : null}
+          </label>
+        </div>
+      </details>
 
       <div className="space-y-3 rounded-xl border border-zk-border bg-zk-card p-4">
         <h4 className="text-sm font-semibold text-zk-text">Visibility and Collaboration</h4>
@@ -71,6 +78,7 @@ export function ProjectSettingsForm({
               onChange={() => {
                 setVisibility("private");
                 setIsOpenForContributors(false);
+                setAcceptsGuestIdeas(false);
               }}
               className="text-zk-accent focus:ring-zk-accent"
             />
@@ -92,12 +100,30 @@ export function ProjectSettingsForm({
             <span>Public</span>
           </label>
           <p className="text-xs text-zk-muted pl-6">
-            Listed on /discover and readable by any signed-in user. Non-members can view issues, ideas, and notes in read-only mode unless accepted as contributors.
+            Listed on /discover with an allowlisted public profile. Signed-in non-members can read the project but cannot contribute unless accepted.
           </p>
         </div>
 
         {visibility === "public" ? (
           <div className="pt-2 border-t border-zk-border space-y-3">
+            <div>
+              <label htmlFor="project-guest-ideas" className="flex cursor-pointer items-center gap-2 text-sm font-medium text-zk-text">
+                <input
+                  id="project-guest-ideas"
+                  type="checkbox"
+                  name="acceptsGuestIdeas"
+                  value="true"
+                  checked={acceptsGuestIdeas}
+                  onChange={(event) => setAcceptsGuestIdeas(event.target.checked)}
+                  className="rounded border-zk-border text-zk-accent focus:ring-zk-accent"
+                />
+                <span>Accept public issue reports</span>
+              </label>
+              <p className="mt-1 pl-6 text-xs text-zk-muted">
+                Signed-out visitors may send an idea to the private triage queue and track it with an unlisted link. It is not published on the project overview. Guests cannot vote, bid, claim, review, or upload files.
+              </p>
+            </div>
+
             <div>
               <label htmlFor="project-open-collaboration" className="flex items-center gap-2 text-sm font-medium text-zk-text cursor-pointer">
                 <input

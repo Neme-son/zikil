@@ -14,12 +14,34 @@ type Row = {
   changedAt?: Date | null;
 };
 
-const state = vi.hoisted(() => ({ verdicts: [] as Row[] }));
+const state = vi.hoisted(() => ({ verdicts: [] as Row[], reviewOffers: [] as Array<{
+  id: string;
+  bugId: string;
+  beneficiaryUserId: string;
+  agentId: string;
+  status: string;
+  offeredAt: Date;
+  deadlineAt: Date | null;
+  pullRequestUrl: string;
+  headSha: string | null;
+  expiredAt?: Date;
+}>, jobReviewOffers: [] as Array<{
+  id: string;
+  submissionId: string;
+  agentId: string;
+  beneficiaryUserId: string;
+  status: string;
+  offeredAt: Date;
+  expiredAt?: Date;
+}> }));
 
 const db = vi.hoisted(() => ({
   bug: { findFirst: vi.fn() },
   delivery: { findFirst: vi.fn(), findMany: vi.fn() },
-  membership: { findUnique: vi.fn() },
+  membership: { findUnique: vi.fn(), findMany: vi.fn() },
+  issueClaim: { groupBy: vi.fn() },
+  projectWorkflow: { findUnique: vi.fn() },
+  reviewOffer: { findMany: vi.fn(), findUnique: vi.fn(), updateMany: vi.fn(), create: vi.fn(), groupBy: vi.fn() },
   testVerdict: { findFirst: vi.fn(), create: vi.fn(), update: vi.fn() },
   pullRequestReport: { findFirst: vi.fn() },
   agentAuditEvent: { create: vi.fn() },
@@ -28,11 +50,14 @@ const db = vi.hoisted(() => ({
   agentEvent: { create: vi.fn() },
   webhookSubscription: { findMany: vi.fn() },
   webhookDelivery: { createMany: vi.fn() },
+  $queryRaw: vi.fn(),
   jobSubmission: { findUnique: vi.fn(), update: vi.fn() },
   jobReview: { findFirst: vi.fn(), findMany: vi.fn(), create: vi.fn() },
-  jobReviewOffer: { findFirst: vi.fn(), update: vi.fn() },
+  jobReviewOffer: {
+    findFirst: vi.fn(), findMany: vi.fn(), findUnique: vi.fn(), create: vi.fn(),
+    update: vi.fn(), updateMany: vi.fn(), groupBy: vi.fn(),
+  },
   pointEntry: { createMany: vi.fn() },
-  $queryRaw: vi.fn(),
   $transaction: vi.fn(),
 }));
 vi.mock("@/lib/prisma", () => ({ prisma: db }));
@@ -69,13 +94,17 @@ function report(overrides: Record<string, unknown> = {}) {
 }
 
 import { submitTestVerdict } from "@/lib/agent-api/test-verdict";
-import { reviewJobSubmission } from "@/lib/jobs/review";
+import { acceptReviewOffer, REVIEW_DEADLINE_MS, REVIEW_OFFER_TTL_MS, sweepReviewOffers } from "@/lib/agent-api/review-offer";
+import { acceptJobReviewOffer, reviewJobSubmission } from "@/lib/jobs/review";
+import { judgeBlockKind } from "@/lib/agent-api/judge-block";
+import type { PrGate } from "@/lib/agent-api/pr-gate";
 
 /** An issue Ada filed herself, with no agent and no claim. */
 function bugRow(overrides: Record<string, unknown> = {}) {
   return {
     id: "bug1",
     organisationId: "organisation_zedu",
+    projectId: "project1",
     status: "done", substatus: "requires_review",
     pullRequestUrl: PR,
     pullRequestHeadSha: null as string | null,
@@ -101,11 +130,31 @@ const notGood = (description: string) => ({ goodToMerge: false, summary: "Not go
 beforeEach(() => {
   vi.clearAllMocks();
   state.verdicts = [];
+  state.reviewOffers = [];
+  state.jobReviewOffers = [];
   db.$transaction.mockImplementation((fn: (tx: unknown) => unknown) => fn(db));
   db.bug.findFirst.mockResolvedValue(bugRow());
   db.delivery.findFirst.mockResolvedValue(null);
   db.delivery.findMany.mockResolvedValue([]);
   db.membership.findUnique.mockResolvedValue({ id: "m1" });
+  db.membership.findMany.mockResolvedValue([]);
+  db.issueClaim.groupBy.mockResolvedValue([]);
+  db.projectWorkflow.findUnique.mockResolvedValue(null);
+  db.reviewOffer.findMany.mockResolvedValue([]);
+  db.reviewOffer.findUnique.mockResolvedValue(null);
+  db.reviewOffer.updateMany.mockResolvedValue({ count: 0 });
+  db.reviewOffer.groupBy.mockResolvedValue([]);
+  db.reviewOffer.create.mockImplementation(async ({ data }: { data: Omit<(typeof state.reviewOffers)[number], "id"> }) => {
+    const row = { id: `review${state.reviewOffers.length + 1}`, ...data };
+    state.reviewOffers.push(row);
+    return row;
+  });
+  db.jobReviewOffer.findMany.mockResolvedValue([]);
+  db.jobReviewOffer.findUnique.mockResolvedValue(null);
+  db.jobReviewOffer.create.mockResolvedValue({ id: "job-review-1" });
+  db.jobReviewOffer.updateMany.mockResolvedValue({ count: 0 });
+  db.jobReviewOffer.groupBy.mockResolvedValue([]);
+  db.$queryRaw.mockResolvedValue([{ id: "bug1" }]);
   db.comment.create.mockResolvedValue({ id: "c1" });
   db.bugActivity.create.mockResolvedValue({});
   db.pullRequestReport.findFirst.mockResolvedValue(report());
@@ -554,5 +603,236 @@ describe("sending marketing work back", () => {
     const pr = "https://github.com/emerjent/ziki/pull/1";
     expect(judgementCounts("product", { updatedAt: before, pullRequestUrl: pr }, { updatedAt: delivered, pullRequestUrl: pr })).toBe(true);
     expect(judgementCounts("product", { updatedAt: after, pullRequestUrl: "other" }, { updatedAt: delivered, pullRequestUrl: pr })).toBe(false);
+  });
+});
+
+/** What stops testers judging a delivered pull request (#864). */
+const blockGate = (overrides: Partial<PrGate> = {}): PrGate => ({
+  canDeliver: true, canAccept: true, canReconcile: false, awaitingRelease: false, broken: null, needsReport: false, reason: null, ...overrides,
+});
+const blockReport = (overrides: Record<string, unknown> = {}) => ({ state: "open", mergeable: true, checks: "passing", ...overrides }) as Parameters<typeof judgeBlockKind>[1];
+
+describe("judgeBlockKind", () => {
+  it("is null for an open, mergeable pull request with passing checks, or none reported", () => {
+    expect(judgeBlockKind(blockGate(), blockReport())).toBeNull();
+    expect(judgeBlockKind(blockGate(), null)).toBeNull();
+  });
+  it("names a merge conflict, failing checks and a broken link", () => {
+    expect(judgeBlockKind(blockGate(), blockReport({ mergeable: false }))).toBe("merge_conflict");
+    expect(judgeBlockKind(blockGate(), blockReport({ checks: "failing" }))).toBe("deployment_verification");
+    expect(judgeBlockKind(blockGate({ broken: "other_repository" }), blockReport())).toBe("pull_request");
+  });
+  it("waits for a fresh report before blocking on a stale one", () => {
+    expect(judgeBlockKind(blockGate({ needsReport: true }), blockReport({ mergeable: false }))).toBeNull();
+  });
+});
+
+describe("durable PR review offer expiry (#592)", () => {
+  beforeEach(() => {
+    db.reviewOffer.findMany.mockImplementation(async ({ where }: { where: Record<string, unknown> }) => {
+      if (Array.isArray(where.OR)) {
+        const now = Date.now();
+        return state.reviewOffers
+          .filter((offer) =>
+            (offer.status === "offered" && now - offer.offeredAt.getTime() >= REVIEW_OFFER_TTL_MS) ||
+            (offer.status === "accepted" && (offer.deadlineAt === null || offer.deadlineAt.getTime() <= now)),
+          )
+          .map(({ id }) => ({ id }));
+      }
+      if (where.status && typeof where.status === "object" && "in" in where.status) {
+        const statuses = (where.status as { in: string[] }).in;
+        return state.reviewOffers
+          .filter((offer) => statuses.includes(offer.status))
+          .map(({ beneficiaryUserId, status, offeredAt, deadlineAt }) => ({ beneficiaryUserId, status, offeredAt, deadlineAt }));
+      }
+      if (where.beneficiaryUserId) {
+        return state.reviewOffers.map(({ beneficiaryUserId, offeredAt }) => ({ beneficiaryUserId, offeredAt }));
+      }
+      return [];
+    });
+    db.reviewOffer.findUnique.mockImplementation(async ({ where }: { where: { id: string } }) => {
+      const row = state.reviewOffers.find((offer) => offer.id === where.id);
+      return row ? { ...row } : null;
+    });
+    db.reviewOffer.updateMany.mockImplementation(async ({ where, data }: {
+      where: { id: string; status: string };
+      data: Partial<(typeof state.reviewOffers)[number]>;
+    }) => {
+      const row = state.reviewOffers.find((offer) => offer.id === where.id && offer.status === where.status);
+      if (!row) return { count: 0 };
+      Object.assign(row, data);
+      return { count: 1 };
+    });
+  });
+
+  it("expires persisted offered and accepted rows once after their in-process timers are gone", async () => {
+    const now = Date.now();
+    state.reviewOffers = [
+      {
+        id: "offered-during-restart", bugId: "bug1", beneficiaryUserId: "reviewer-1", agentId: "agent-1",
+        status: "offered", offeredAt: new Date(now - REVIEW_OFFER_TTL_MS - 1), deadlineAt: null,
+        pullRequestUrl: PR, headSha: "head1",
+      },
+      {
+        id: "accepted-during-restart", bugId: "bug1", beneficiaryUserId: "reviewer-2", agentId: "agent-2",
+        status: "accepted", offeredAt: new Date(now - REVIEW_OFFER_TTL_MS * 2), deadlineAt: new Date(now - REVIEW_DEADLINE_MS - 1),
+        pullRequestUrl: PR, headSha: "head1",
+      },
+    ];
+    db.bug.findFirst.mockResolvedValue(bugRow({ status: "closed" }));
+
+    await expect(sweepReviewOffers()).resolves.toEqual({ expired: 2 });
+    expect(state.reviewOffers.map(({ status }) => status)).toEqual(["expired", "expired"]);
+    await expect(sweepReviewOffers()).resolves.toEqual({ expired: 0 });
+  });
+
+  it("offers a replacement reviewer as part of the durable expiry transition", async () => {
+    state.reviewOffers = [{
+      id: "expired-accepted", bugId: "bug1", beneficiaryUserId: "reviewer-1", agentId: "agent-1",
+      status: "accepted", offeredAt: new Date(Date.now() - REVIEW_OFFER_TTL_MS * 2),
+      deadlineAt: new Date(Date.now() - REVIEW_DEADLINE_MS - 1), pullRequestUrl: PR, headSha: "head1",
+    }];
+    db.membership.findMany.mockResolvedValue([
+      { userId: "reviewer-2", user: { agents: [{ id: "agent-2" }] } },
+    ]);
+
+    await expect(sweepReviewOffers()).resolves.toEqual({ expired: 1 });
+    expect(state.reviewOffers.map(({ status }) => status)).toEqual(["expired", "offered"]);
+    expect(db.reviewOffer.create).toHaveBeenCalledTimes(1);
+    await expect(sweepReviewOffers()).resolves.toEqual({ expired: 0 });
+    expect(db.reviewOffer.create).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("late review-offer acceptance commits expiry (#532)", () => {
+  function useRollbackAwareTransactions() {
+    db.$transaction.mockImplementation(async (run: (tx: unknown) => unknown) => {
+      const snapshot = {
+        reviewOffers: structuredClone(state.reviewOffers),
+        jobReviewOffers: structuredClone(state.jobReviewOffers),
+      };
+      try {
+        return await run(db);
+      } catch (error) {
+        state.reviewOffers = snapshot.reviewOffers;
+        state.jobReviewOffers = snapshot.jobReviewOffers;
+        throw error;
+      }
+    });
+  }
+
+  it("keeps a PR offer expired and reoffers only once across repeated late accepts", async () => {
+    const expiredOffer = {
+      id: "late-pr-offer",
+      bugId: "bug1",
+      beneficiaryUserId: "reviewer-owner-1",
+      agentId: "reviewer-agent-1",
+      status: "offered",
+      offeredAt: new Date(Date.now() - REVIEW_OFFER_TTL_MS - 1),
+      deadlineAt: null,
+      pullRequestUrl: PR,
+      headSha: "head1",
+    };
+    state.reviewOffers = [expiredOffer];
+    db.reviewOffer.findUnique.mockImplementation(async ({ where }: { where: { id: string } }) => {
+      const row = state.reviewOffers.find((offer) => offer.id === where.id);
+      return row ? { ...row, bug: bugRow({ organisationId: "organisation_zedu", projectId: "project1" }) } : null;
+    });
+    db.reviewOffer.updateMany.mockImplementation(async ({ where, data }: {
+      where: { id: string; status: string };
+      data: Partial<(typeof state.reviewOffers)[number]>;
+    }) => {
+      const row = state.reviewOffers.find((offer) => offer.id === where.id && offer.status === where.status);
+      if (!row) return { count: 0 };
+      Object.assign(row, data);
+      return { count: 1 };
+    });
+    db.reviewOffer.findMany.mockImplementation(async ({ where }: { where: Record<string, unknown> }) => {
+      let offers = state.reviewOffers;
+      const statusFilter = where.status;
+      if (typeof statusFilter === "string") {
+        offers = offers.filter((offer) => offer.status === statusFilter);
+      } else if (statusFilter && typeof statusFilter === "object" && "in" in statusFilter) {
+        const statuses = (statusFilter as { in?: unknown }).in;
+        if (Array.isArray(statuses)) offers = offers.filter((offer) => statuses.includes(offer.status));
+      }
+      const beneficiaries = where.beneficiaryUserId as { in?: string[] } | undefined;
+      if (beneficiaries?.in) offers = offers.filter((offer) => beneficiaries.in!.includes(offer.beneficiaryUserId));
+      return offers.map(({ beneficiaryUserId, status, offeredAt, deadlineAt }) => ({ beneficiaryUserId, status, offeredAt, deadlineAt }));
+    });
+    db.membership.findMany.mockResolvedValue([
+      { userId: "reviewer-owner-2", user: { agents: [{ id: "reviewer-agent-2" }] } },
+    ]);
+    useRollbackAwareTransactions();
+
+    const agent = reviewer("reviewer-agent-1", "reviewer-owner-1");
+    await expect(acceptReviewOffer(agent, expiredOffer.id)).rejects.toMatchObject({ status: 410 });
+    expect(state.reviewOffers.map(({ status }) => status)).toEqual(["expired", "offered"]);
+
+    await expect(acceptReviewOffer(agent, expiredOffer.id)).rejects.toMatchObject({ status: 410 });
+    expect(state.reviewOffers.map(({ status }) => status)).toEqual(["expired", "offered"]);
+    expect(db.reviewOffer.updateMany).toHaveBeenCalledTimes(1);
+    expect(db.reviewOffer.create).toHaveBeenCalledTimes(1);
+    expect(db.agentEvent.create).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps a job offer expired and creates no duplicate replacement on repeated late accepts", async () => {
+    const expiredOffer = {
+      id: "late-job-offer",
+      submissionId: "submission1",
+      agentId: "reviewer-agent-1",
+      beneficiaryUserId: "reviewer-owner-1",
+      status: "offered",
+      offeredAt: new Date(Date.now() - REVIEW_OFFER_TTL_MS - 1),
+    };
+    const submission = {
+      id: "submission1",
+      jobId: "job1",
+      agentId: "submitter-agent",
+      beneficiaryUserId: "submitter-owner",
+      reviewsNeeded: 1,
+      status: "pending",
+      job: { id: "job1", organisationId: "organisation_zedu", projectId: "project1", pointsPerAccepted: 1 },
+    };
+    state.jobReviewOffers = [expiredOffer];
+    db.jobReviewOffer.findUnique.mockImplementation(async ({ where }: { where: { id: string } }) => {
+      const row = state.jobReviewOffers.find((offer) => offer.id === where.id);
+      return row ? { ...row, submission: { id: submission.id, job: { organisationId: "organisation_zedu" } } } : null;
+    });
+    db.jobReviewOffer.updateMany.mockImplementation(async ({ where, data }: {
+      where: { id: string; status: string };
+      data: Partial<(typeof state.jobReviewOffers)[number]>;
+    }) => {
+      const row = state.jobReviewOffers.find((offer) => offer.id === where.id && offer.status === where.status);
+      if (!row) return { count: 0 };
+      Object.assign(row, data);
+      return { count: 1 };
+    });
+    db.jobReviewOffer.findMany.mockImplementation(async ({ where }: { where: { submissionId: string } }) =>
+      state.jobReviewOffers
+        .filter((offer) => offer.submissionId === where.submissionId)
+        .map(({ beneficiaryUserId, status }) => ({ beneficiaryUserId, status })),
+    );
+    db.jobReviewOffer.create.mockImplementation(async ({ data }: { data: Omit<(typeof state.jobReviewOffers)[number], "id"> }) => {
+      const row = { id: `job-review-${state.jobReviewOffers.length + 1}`, ...data };
+      state.jobReviewOffers.push(row);
+      return row;
+    });
+    db.jobReview.findMany.mockResolvedValue([]);
+    db.jobSubmission.findUnique.mockResolvedValue(submission);
+    db.membership.findMany.mockResolvedValue([
+      { userId: "reviewer-owner-2", user: { agents: [{ id: "reviewer-agent-2" }] } },
+    ]);
+    useRollbackAwareTransactions();
+
+    const agent = reviewer("reviewer-agent-1", "reviewer-owner-1");
+    await expect(acceptJobReviewOffer(agent, expiredOffer.id)).rejects.toMatchObject({ status: 410 });
+    expect(state.jobReviewOffers.map(({ status }) => status)).toEqual(["expired", "offered"]);
+
+    await expect(acceptJobReviewOffer(agent, expiredOffer.id)).rejects.toMatchObject({ status: 410 });
+    expect(state.jobReviewOffers.map(({ status }) => status)).toEqual(["expired", "offered"]);
+    expect(db.jobReviewOffer.updateMany).toHaveBeenCalledTimes(1);
+    expect(db.jobReviewOffer.create).toHaveBeenCalledTimes(1);
+    expect(db.agentEvent.create).toHaveBeenCalledTimes(1);
   });
 });

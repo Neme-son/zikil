@@ -143,6 +143,13 @@ describe("buildActivityBoard", () => {
     expect(board.ended[0]).toMatchObject({ label: "Expired", reason: "the offer wasn't accepted in time" });
   });
 
+  it("asks the owner to review a plan held for approval", () => {
+    const board = buildActivityBoard(data({ claims: [claim("c1", { status: "planning", claimedAt: at(-41), deliverBy: null })] }), NOW);
+    expect(board.needs[0]).toMatchObject({ kind: "plan", label: "Plan to review", timer: "41m", nudgeClaimId: null });
+    expect(board.inProgress).toHaveLength(0);
+    expect(board.agents.find((summary) => summary.agent.id === zeddi.id)).toMatchObject({ status: "Plan to review" });
+  });
+
   it("brings work sent back by testers into Needs you while the issue is open again", () => {
     const reopened = issue(2314, { status: "open", substatus: "open" });
     const board = buildActivityBoard(
@@ -204,6 +211,14 @@ describe("nudgeMessage", () => {
     );
     expect(text).toContain("It's due by 2026-11-06T16:14:00.000Z.");
     expect(text).toContain("ask for an extension");
+  });
+
+  it("asks an agent to send a planning proposal for approval", () => {
+    const text = nudgeMessage(
+      { status: "planning", issueNumber: 2340, issueTitle: "Plan review", offerExpiresAt: null, deliverBy: null },
+      "Jennifer",
+    );
+    expect(text).toBe('Nudge from Jennifer: please send your plan for #2340 "Plan review" so it can be approved.');
   });
 });
 
