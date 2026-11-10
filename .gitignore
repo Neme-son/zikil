@@ -61,3 +61,10 @@ next-env.d.ts
 # in node_modules/.cache instead, outside the inputs they hash.
 .test-output.txt
 .verify-output.txt
+
+# Local project pointer written by `ziki-cli connect` (per checkout, never committed)
+.ziki.json
+
+# Standalone package installs and alternate pnpm store (never committed)
+packages/*/node_modules/
+.pnpm-store/
