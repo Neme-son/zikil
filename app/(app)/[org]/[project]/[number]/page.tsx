@@ -2081,6 +2081,7 @@ export default async function BugDetailPage({ params, searchParams }: BugPagePro
 
           {/* Progress report (#1446), where the summary strip was; its stage drives the Conversation card. */}
           <IssueProgressReport
+            pingIssueId={!bug.isDeleted && currentStage !== "closed" ? bug.id : undefined}
             decisions={agentDecisions}
             entryCounts={{
               idea: sourceIdea?._count.verdicts ?? 0,

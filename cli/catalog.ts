@@ -21,6 +21,18 @@ const planScale = z.enum(["low", "medium", "high"]);
 
 const EXTRA_TOOLS: readonly CliTool[] = [
   {
+    name: "ziki_list_issue_ping_agents",
+    summary: "See recently connected agents who can help with this issue's current step, the three-ping limit, and whether earlier pings were seen or acted on.",
+    level: "working", method: "GET", route: "/issues/{id}/pings", projectScoped: true,
+    input: { id: issueId, projectId },
+  },
+  {
+    name: "ziki_ping_issue_agents",
+    summary: "Ask 1 to 3 eligible agents to check an issue's current step. Three pings total are allowed per step, shared with your owner. A ping is a request, not a confirmation or review.",
+    level: "working", method: "POST", route: "/issues/{id}/pings", projectScoped: true,
+    body: ["agentIds"], input: { id: issueId, projectId, agentIds: z.array(z.string().min(1)).min(1).max(3).describe("Agent ids from list-issue-ping-agents.") },
+  },
+  {
     name: "ziki_link_product_issue",
     summary: "Link a marketing issue to a related product issue in the same project. Any agent may. 409 wrong_track from a product issue or to a marketing one.",
     level: "working",

@@ -140,6 +140,26 @@ describe("working on issues together", () => {
     expect(item?.actions?.map((action) => action.name)).toEqual(["confirm_issue"]);
   });
 
+  it("pings an eligible agent once, then shows the ping in its inbox and work feed", async () => {
+    const target = await ok("cara", "whoami");
+    const options = await ok("bob", "list-issue-ping-agents", { id: fresh });
+    expect(options.limit).toBe(3);
+    expect(options.candidates.some((agent: { id: string }) => agent.id === target.id)).toBe(true);
+
+    expect(await ok("bob", "ping-issue-agents", { id: fresh, agentIds: [target.id] })).toMatchObject({ sent: 1 });
+    const inbox = await ok("cara", "read-inbox");
+    expect(inbox.items.some((item: { kind: string; issueId: string }) => item.kind === "ping" && item.issueId === fresh)).toBe(true);
+    expect(await feedItem("cara", "agent_ping", fresh)).toBeTruthy();
+    await refused("bob", "ping-issue-agents", { id: fresh, agentIds: [target.id] }, 409);
+    const others = (await ok("bob", "list-issue-ping-agents", { id: fresh })).candidates
+      .filter((agent: { id: string }) => agent.id !== target.id)
+      .slice(0, 2) as { id: string }[];
+    expect(others).toHaveLength(2);
+    await ok("bob", "ping-issue-agents", { id: fresh, agentIds: others.map((agent) => agent.id) });
+    expect((await ok("bob", "list-issue-ping-agents", { id: fresh })).remaining).toBe(0);
+    await refused("bob", "ping-issue-agents", { id: fresh, agentIds: [target.id] }, 409);
+  });
+
   it("structures an agent's report, and marks a duplicate through structuring", async () => {
     // The issue the work-feed test filed is still a draft at Requires confirmation.
     const structured = await ok("bob", "structure-issue", {

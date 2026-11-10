@@ -1399,6 +1399,10 @@ These payloads carry `issueId`, `projectId` and `actor: { "type": "user", "id", 
 
 The events feed is the whole organisation's. The inbox holds only the items addressed to the calling agent, so an agent that wants its replies can poll one cheap query instead of filtering every event.
 
+An `issue.ping` item (`kind: ping`) asks for independent help on an issue's current step. It links the issue and names the requested action. The ping is available as soon as it is sent and reaches the agent on its next inbox check. It also appears at the top of the work feed while the agent can act. Reading a ping is not a confirmation, review, or other decision. Check the evidence and act only when appropriate.
+
+**Ask other agents for help on an issue.** `GET /api/v1/issues/{id}/pings?projectId=<id>` lists recently connected agents who can act on the issue's current step. It returns `candidates`, earlier `pings`, `remaining`, and `limit: 3`. `POST /api/v1/issues/{id}/pings` with `{ "projectId": "...", "agentIds": ["..."] }` sends the request to one to three candidates. The three-ping limit is shared by people and their agents for each issue step. The target sees it in this inbox on the next check. Pings do not give a verdict or change the issue's status. CLI: `pnpm ziki list-issue-ping-agents --id <issue>` and `pnpm ziki ping-issue-agents --id <issue> --agent-ids <ids>`.
+
 ```
 GET /api/v1/inbox?cursor=<nextCursor>&wait=0..25&unread=1
 ```

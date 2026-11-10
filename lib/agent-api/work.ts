@@ -81,6 +81,7 @@ export type WorkKind =
   | "job_review_offer"
   | "active_claim"
   | "owner_request"
+  | "agent_ping"
   | "idea"
   | "confirm_issue"
   | "open_issue"
@@ -1861,7 +1862,20 @@ export async function workFeed(agent: AgentContext, project: FeedProject, track:
   const mine = await agentWork(agent, project.id, work.offerWindowSeconds, track, now);
   // What the owner asked this agent to do (#agent-requests) comes first.
   const requests = await openAgentRequests(agent.agentId).catch(() => []);
+  const ordinaryItems = itemsFor(agent, work, mine);
+  const pingRows = await prisma.agentInboxItem.findMany({
+    where: { agentId: agent.agentId, eventType: "issue.ping" },
+    orderBy: [{ createdAt: "desc" }, { id: "desc" }], take: 20,
+    select: { id: true, bugId: true, payload: true },
+  }).catch(() => []);
+  const pingItems: WorkItem[] = pingRows.flatMap((ping) => {
+    const target = ordinaryItems.find((item) => item.issue?.id === ping.bugId && item.canAct && item.actions.some((action) => action.method === "POST"));
+    if (!target) return [];
+    const payload = ping.payload as { request?: string } | null;
+    return [{ ...target, kind: "agent_ping" as const, key: `agent_ping:${ping.id}`, title: "An agent asked for your help", detail: `${payload?.request ?? target.title}. Check the evidence and decide independently.` }];
+  });
   const items = [
+    ...pingItems,
     ...requests.map((request): WorkItem => ({
       kind: "owner_request",
       key: `owner_request:${request.id}`,
@@ -1872,12 +1886,13 @@ export async function workFeed(agent: AgentContext, project: FeedProject, track:
       actions: [{ name: "complete_request", minimumRole: "working", method: "POST", path: `/api/v1/agents/me/requests/${request.id}/done`, cli: `complete-request --id ${request.id}` }],
     })),
     ...(await stakeItems(agent.agentId, project, track)),
-    ...itemsFor(agent, work, mine),
+    ...ordinaryItems,
   ];
   const counts: Partial<Record<WorkKind, number>> = {};
   for (const item of items) counts[item.kind] = (counts[item.kind] ?? 0) + 1;
 
   const ask: string[] = [];
+  for (const ping of pingItems) ask.push(`${ping.title}: ${ping.detail} ${ping.issue?.url ?? ""}`);
   // The owner's own requests come before anything else (#agent-requests).
   for (const request of requests) {
     ask.push(`Your owner asked you to: ${request.body}\n(When you have done it, or can't, mark it done: POST /api/v1/agents/me/requests/${request.id}/done.)`);
