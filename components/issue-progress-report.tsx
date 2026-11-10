@@ -4,6 +4,7 @@ import type { CSSProperties, ReactNode } from "react";
 import { ClaimDeadline } from "@/components/claim-deadline";
 import type { AgentDecision } from "@/components/issue-agent-activity";
 import { useIssueStage } from "@/components/issue-stage-context";
+import { IssuePingAgents } from "@/components/issue-ping-agents";
 import {
   decisionStageInfo,
   pipelineStages,
@@ -210,12 +211,15 @@ function entryCount(n: number, [one, many]: readonly [string, string]) {
  * summary (#186).
  */
 export function IssueProgressReport({
+  pingIssueId,
   decisions,
   entryCounts = {},
   currentStage,
   setback = false,
   live,
 }: {
+  /** The current issue can ask another agent for help at its active step. */
+  pingIssueId?: string;
   decisions: ReadonlyArray<AgentDecision>;
   /**
    * Each stage's own entries (#595): idea verdicts, confirmations, bids,
@@ -245,9 +249,10 @@ export function IssueProgressReport({
       className="issue-progress rounded-[20px] border border-zk-border bg-zk-surface px-5 py-[18px]"
     >
       {/* No status chip: the stepper below already marks where the issue is (one status per issue). */}
-      <h2 id="progress-report-title" className="cap">
-        Progress report
-      </h2>
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <h2 id="progress-report-title" className="cap">Progress report</h2>
+        {pingIssueId ? <IssuePingAgents issueId={pingIssueId} /> : null}
+      </div>
       <div className="pgw">
         <div className="pg-track" aria-hidden="true">
           <span className="pg-fill" style={{ width: `${(currentIndex * 100) / (steps.length - 1)}%` }} />
