@@ -271,6 +271,8 @@ model User {
   id                        String                  @id @default(cuid())
   securityVerifications SecurityVerification[]
   securityFindingsReported  SecurityFinding[]       @relation("SecurityFindingReporter")
+  securityTargetsAdded      SecurityTarget[]        @relation("SecurityTargetAddedBy")
+  securityChecksRequested   SecurityCheck[]         @relation("SecurityCheckRequester")
   name                      String
   email                     String                  @unique
   /// Null for Google-only accounts; required for credentials login/signup.
@@ -835,6 +837,9 @@ model Organisation {
   id                 String              @id @default(cuid())
   /// Private security findings reported in this organisation (#security-findings).
   securityFindings   SecurityFinding[]
+  /// Sites, servers and repos added for a security check, and the checks run on them (#security-checks).
+  securityTargets    SecurityTarget[]
+  securityChecks     SecurityCheck[]
   slug               String              @unique
   name               String
   description        String?             @db.VarChar(500)
@@ -882,6 +887,7 @@ model Project {
   savedIssueViews        SavedIssueView[]
   agentNotes            AgentNote[]
   securityFindings      SecurityFinding[]
+  securityChecks        SecurityCheck[]
   id                    String                @id @default(cuid())
   organisationId              String
   slug                  String
@@ -1235,6 +1241,8 @@ model ProjectJoinRequest {
 /// A named agent working for its owner inside an organisation (#427). It always acts
 /// as itself and for a named person.
 model Agent {
+  /// Parts of security checks this agent holds or did (#security-checks).
+  securityCheckItems   SecurityCheckItem[]
   requests             AgentRequest[]
   agentNotes           AgentNote[]
   id                   String                @id @default(cuid())
@@ -3021,6 +3029,8 @@ model SecurityFinding {
   attachments   Attachment[]
 
   verifications SecurityVerification[]
+  /// The security check result it was sent from, when it came from a check (#security-checks).
+  checkResult   SecurityCheckResult?
 
   @@index([organisationId, disclosedAt])
   @@index([projectId])
@@ -3042,6 +3052,163 @@ model SecurityVerification {
   @@index([findingId, createdAt])
   @@index([reviewerId])
   @@index([evidenceId])
+}
+
+/// What a security check looks at (#security-checks). Ziki works this out from
+/// the one box the client types into, so nobody picks from a list.
+enum SecurityTargetKind {
+  website
+  server
+  repo
+}
+
+/// Where a security check is (#security-checks). Ownership comes first: no
+/// agent touches a target until it is proven to belong to the workspace.
+enum SecurityCheckStatus {
+  /// Waiting for the owner to prove the target is theirs.
+  awaiting_ownership
+  /// Ownership proven; the first job (split it into parts) waits for an agent.
+  queued
+  /// An agent is splitting the target into the parts to check.
+  splitting
+  /// Agents are checking the parts.
+  checking
+  /// Every part is reported.
+  done
+  /// Stopped by the owner before it finished.
+  cancelled
+}
+
+/// The two kinds of job in a security check (#security-checks). The first job
+/// of every check is `split`: an agent looks at the target and adds the parts.
+enum SecurityCheckItemKind {
+  split
+  check
+}
+
+/// Where one job is (#security-checks).
+enum SecurityCheckItemStatus {
+  /// Not given to an agent yet.
+  waiting
+  /// An agent holds it.
+  checking
+  /// The agent reported back.
+  done
+  /// Dropped: the check was cancelled, or the part does not apply.
+  skipped
+}
+
+/// A website, server or repo a workspace wants checked (#security-checks).
+/// Ownership is proven once per target, not once per check.
+model SecurityTarget {
+  id              String             @id @default(cuid())
+  organisationId  String
+  organisation    Organisation       @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  kind            SecurityTargetKind
+  /// The target in one canonical form: the host for a website, the host or IP
+  /// for a server, `owner/name` for a repo.
+  value           String
+  /// What the client typed, shown back to them.
+  input           String
+  addedById       String
+  addedBy         User               @relation("SecurityTargetAddedBy", fields: [addedById], references: [id], onDelete: Cascade)
+  /// The secret the owner puts in a DNS TXT record or homepage tag to prove the target is theirs.
+  ownershipToken  String             @unique
+  /// How ownership was proven, e.g. `dns_txt`, `html_tag`, `github`. A string,
+  /// not an enum, so a new method (servers) needs no migration.
+  ownershipMethod String?
+  /// When ownership was proven; null until then. No agent may touch the target while null.
+  verifiedAt      DateTime?
+  createdAt       DateTime           @default(now())
+  updatedAt       DateTime           @updatedAt
+  checks          SecurityCheck[]
+
+  @@unique([organisationId, kind, value])
+  @@index([organisationId, createdAt])
+}
+
+/// One security check of a target (#security-checks): a one-off report, not
+/// ongoing monitoring. The client may pay before it starts or after it ends.
+/// Until `paidAt` they see only the teaser, and the agents who did the work
+/// are paid only once the client pays.
+model SecurityCheck {
+  id             String                @id @default(cuid())
+  organisationId String
+  organisation   Organisation          @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  targetId       String
+  target         SecurityTarget        @relation(fields: [targetId], references: [id], onDelete: Cascade)
+  /// The project findings go to on "Fix on Ziki"; null until the client picks one.
+  projectId      String?
+  project        Project?              @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  requestedById  String
+  requestedBy    User                  @relation("SecurityCheckRequester", fields: [requestedById], references: [id], onDelete: Cascade)
+  status         SecurityCheckStatus   @default(awaiting_ownership)
+  /// The price in coins when the check was asked for.
+  priceCoins     Int
+  /// When the client paid; null while unpaid. Unlocks the full report and releases agent pay.
+  paidAt         DateTime?
+  startedAt      DateTime?
+  finishedAt     DateTime?
+  createdAt      DateTime              @default(now())
+  updatedAt      DateTime              @updatedAt
+  items          SecurityCheckItem[]
+  results        SecurityCheckResult[]
+
+  @@index([organisationId, createdAt])
+  @@index([targetId, createdAt])
+  @@index([status])
+}
+
+/// One job inside a security check (#security-checks): the split, or one part
+/// to check. Ziki gives it to an agent, which does it and reports back. No
+/// votes or bids.
+model SecurityCheckItem {
+  id               String                  @id @default(cuid())
+  checkId          String
+  check            SecurityCheck           @relation(fields: [checkId], references: [id], onDelete: Cascade)
+  kind             SecurityCheckItemKind
+  /// What to check, e.g. "Login form: rate limits".
+  title            String
+  /// More on what to look at, written by the agent that split the target.
+  instructions     String?
+  status           SecurityCheckItemStatus @default(waiting)
+  /// The agent given this job; null while waiting.
+  agentId          String?
+  agent            Agent?                  @relation(fields: [agentId], references: [id], onDelete: SetNull)
+  assignedAt       DateTime?
+  reportedAt       DateTime?
+  /// When the agent's pay for this job was released, after the client paid.
+  /// Awards use a fixed source key so a release is never paid twice.
+  payoutReleasedAt DateTime?
+  createdAt        DateTime                @default(now())
+  updatedAt        DateTime                @updatedAt
+  results          SecurityCheckResult[]
+
+  @@index([checkId, status])
+  @@index([agentId, status])
+}
+
+/// One problem an agent found (#security-checks). Private, like
+/// SecurityFinding: its text never goes into events, webhooks, the work feed
+/// or search. Only the requesting workspace reads it, and in full only once
+/// the check is paid.
+model SecurityCheckResult {
+  id          String            @id @default(cuid())
+  checkId     String
+  check       SecurityCheck     @relation(fields: [checkId], references: [id], onDelete: Cascade)
+  itemId      String
+  item        SecurityCheckItem @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  severity    SecuritySeverity
+  title       String
+  description String
+  howToFix    String
+  /// The private finding it became on "Fix on Ziki"; null until then.
+  findingId   String?           @unique
+  finding     SecurityFinding?  @relation(fields: [findingId], references: [id], onDelete: SetNull)
+  createdAt   DateTime          @default(now())
+
+  @@index([checkId, severity])
+  @@index([itemId])
 }
 
 /// Status of a support thread raised about a stuck fix (#requests).
