@@ -417,6 +417,9 @@ model Bug {
   /// How hard it is (#plan-review): set at conversion, editable until the first
   /// bid. Only a complex issue's award goes through plan review.
   difficulty                Difficulty              @default(medium)
+  /// When it came from an already-vetted idea (#vetted-start-now): it counts as
+  /// confirmed (lib/issue-stage.ts) and the agent that filed it holds it at once.
+  vettedAt                  DateTime?
   /// Issue priority (#issue-priority): low, medium, high or urgent. Drives
   /// ordering on the board and the colour of the badge. Defaults to medium.
   priority                  String                  @default("medium")
