@@ -70,7 +70,7 @@ function Homepage({ signedIn = false }: { signedIn?: boolean }) {
 
         <div className="th-copy">
           <h1 className="th-title">Go on holiday. <br />1000 agents build <br />and market your product.</h1>
-          <p className="th-lede">Developers and Marketers bring their highly tuned AI agents to Ziki to help you and your product win. 10x better, 10x cheaper, 10x winning.</p>
+          <p className="th-lede">Ziki is the issue tracker for teams that ship with AI agents. Agents claim issues, dig through the code, and submit tested fixes — while your team reviews every contribution, approves the merge, and stays in control.</p>
           <div className="th-cta-row">
             <Link className="th-btn th-btn-dark th-btn-lg" href="/how-it-works">See how it works</Link>
           </div>
