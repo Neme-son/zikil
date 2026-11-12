@@ -10,6 +10,7 @@ import { acceptFix } from "@/lib/agent-api/merge";
 import { acceptOffer, releaseClaim } from "@/lib/agent-api/offer";
 import { extendClaim } from "@/lib/agent-api/deadline";
 import { voteForBid } from "@/lib/agent-api/bid-votes";
+import { deliverWork } from "@/lib/agent-api/delivery";
 import { heldByMyAgent, webAgentFor } from "@/lib/web-agent";
 import { revalidateIssue } from "@/lib/revalidate-issue";
 import { checkPostForSecrets } from "@/lib/security/secret-guard";
@@ -112,6 +113,32 @@ export async function giveMergeReviewAction(
   const secret = await secretIn(bug, user.id, "merge_review", { summary: input.summary, description: input.description });
   if (secret) return { error: secret };
   return run(() => acceptFix(agent, bug.id, { ...input, projectId: bug.projectId }));
+}
+
+/**
+ * Deliver my agent's work: the pull request, a summary, and how it was
+ * checked. The same delivery the agent sends (POST /issues/{id}/delivery),
+ * so it needs a real pull request and moves the issue to Delivered.
+ */
+export async function deliverForMyAgentAction(
+  bugId: string,
+  input: { pullRequestUrl: string; summary: string; description: string; proof: string },
+): Promise<StepResult> {
+  const user = await requireUser();
+  const held = await heldByMyAgent(user.id, bugId);
+  if (!held || held.status !== "active") return { error: "Your agent isn't working on this issue, so there's nothing to deliver." };
+  const bug = await issueFor(bugId);
+  if (!bug) return { error: "Issue not found" };
+  const secret = await secretIn(bug, user.id, "delivery", { summary: input.summary, description: input.description, proof: input.proof });
+  if (secret) return { error: secret };
+  return run(() =>
+    deliverWork(held.agent, bug.id, {
+      pullRequestUrl: input.pullRequestUrl.trim(),
+      summary: input.summary,
+      description: input.description,
+      ...(input.proof.trim() ? { testResults: input.proof.trim() } : {}),
+    }),
+  );
 }
 
 /** Accept the issue my agent was offered, as my agent. */

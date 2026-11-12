@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useToast } from "@/components/ui/toast";
 import {
   acceptOfferForMyAgentAction,
+  deliverForMyAgentAction,
   giveMergeReviewAction,
   giveTestVerdictAction,
   openForBidsAction,
@@ -15,15 +16,16 @@ import {
  * The one thing the viewer can do at this step, through their agent
  * (#owner-control). It sits under the next-step bar and shows at most one
  * action, only when the issue is at that step and the viewer is allowed:
- * open a confirmed issue for bids, judge delivered work, review accepted work
- * for merge, or accept an offer made to their agent. Agents do the same
+ * open a confirmed issue for bids, deliver their agent's work, judge delivered
+ * work, review accepted work for merge, or accept an offer made to their agent. Agents do the same
  * through the API; this is the same step, by hand.
  */
 export type YourTurn =
   | { kind: "open"; agentName: string; confirmations: number; needed: number }
   | { kind: "verdict"; agentName: string }
   | { kind: "review"; agentName: string }
-  | { kind: "offer"; agentName: string };
+  | { kind: "offer"; agentName: string }
+  | { kind: "deliver"; agentName: string };
 
 const COPY: Record<YourTurn["kind"], { title: string; body: (turn: YourTurn) => string }> = {
   open: {
@@ -36,6 +38,10 @@ const COPY: Record<YourTurn["kind"], { title: string; body: (turn: YourTurn) => 
   verdict: { title: "Is this work good to merge?", body: () => "Look at the delivered work and say whether it's ready. Your verdict counts toward accepting it." },
   review: { title: "Review this for merge", body: () => "Testers say it's good. Approve it for merging, or send it back with what to change." },
   offer: { title: "This issue was offered to your agent", body: (turn) => `Accept it and ${turn.agentName} starts working on it.` },
+  deliver: {
+    title: "Deliver the work",
+    body: () => "When the pull request is ready, hand it in here. Other agents then test it before it can merge.",
+  },
 };
 
 export function YourTurnCard({ bugId, turn }: { bugId: string; turn: YourTurn }) {
@@ -44,6 +50,8 @@ export function YourTurnCard({ bugId, turn }: { bugId: string; turn: YourTurn })
   const [summary, setSummary] = useState("");
   const [description, setDescription] = useState("");
   const [files, setFiles] = useState("");
+  const [pullRequestUrl, setPullRequestUrl] = useState("");
+  const [proof, setProof] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
   const toast = useToast();
@@ -51,6 +59,8 @@ export function YourTurnCard({ bugId, turn }: { bugId: string; turn: YourTurn })
   const summaryId = useId();
   const descriptionId = useId();
   const filesId = useId();
+  const prId = useId();
+  const proofId = useId();
 
   const go = (step: () => Promise<StepResult>, done: string) => {
     setError(null);
@@ -81,6 +91,17 @@ export function YourTurnCard({ bugId, turn }: { bugId: string; turn: YourTurn })
       );
     }
   };
+
+  const submitDelivery = () => {
+    if (!pullRequestUrl.trim() || !summary.trim() || !description.trim() || !proof.trim()) {
+      setError("Fill in all four: the pull request, a summary, what changed, and how you checked it works.");
+      return;
+    }
+    go(() => deliverForMyAgentAction(bugId, { pullRequestUrl, summary, description, proof }), "Delivered. Other agents can test it now.");
+  };
+
+  const input = "rounded-lg border border-zk-border bg-zk-bg px-2.5 py-2 text-sm text-zk-text";
+  const fieldLabel = "text-xs font-medium text-zk-text2";
 
   const yes = turn.kind === "review" ? "Approve for merge" : "Good to merge";
   const no = turn.kind === "review" ? "Send back" : "Not yet";
@@ -121,6 +142,67 @@ export function YourTurnCard({ bugId, turn }: { bugId: string; turn: YourTurn })
             {pending ? "Accepting…" : `Accept for ${turn.agentName}`}
           </button>
         </div>
+      ) : null}
+
+      {turn.kind === "deliver" ? (
+        writing ? (
+          <div className="flex flex-col gap-2">
+            <label htmlFor={prId} className={fieldLabel}>
+              Pull request link
+            </label>
+            <input
+              id={prId}
+              type="url"
+              value={pullRequestUrl}
+              placeholder="https://github.com/owner/repo/pull/123"
+              onChange={(event) => setPullRequestUrl(event.target.value)}
+              className={input}
+            />
+            <label htmlFor={summaryId} className={fieldLabel}>
+              In a sentence or two, what did you do?
+            </label>
+            <input id={summaryId} value={summary} maxLength={300} onChange={(event) => setSummary(event.target.value)} className={input} />
+            <label htmlFor={descriptionId} className={fieldLabel}>
+              What changed, and anything left open
+            </label>
+            <textarea id={descriptionId} value={description} rows={3} onChange={(event) => setDescription(event.target.value)} className={`resize-y ${input}`} />
+            <label htmlFor={proofId} className={fieldLabel}>
+              How you checked it works (test results or steps)
+            </label>
+            <textarea
+              id={proofId}
+              value={proof}
+              rows={3}
+              placeholder="pnpm test: 1680 passed. Opened the issue page and moved it to Live."
+              onChange={(event) => setProof(event.target.value)}
+              className={`resize-y font-mono text-xs ${input}`}
+            />
+            {error ? (
+              <p role="alert" className="m-0 text-xs font-medium text-zk-bad-fg">
+                {error}
+              </p>
+            ) : null}
+            <div className="flex justify-end gap-2">
+              <button type="button" disabled={pending} onClick={() => setWriting(null)} className="rounded-lg px-3 py-1.5 text-xs font-semibold text-zk-text2 hover:bg-zk-chip">
+                Back
+              </button>
+              <button
+                type="button"
+                disabled={pending}
+                onClick={submitDelivery}
+                className="rounded-lg bg-zk-accent px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-60"
+              >
+                {pending ? "Delivering…" : "Deliver"}
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div>
+            <button type="button" onClick={() => setWriting("good")} className="rounded-lg bg-zk-accent px-3.5 py-2 text-sm font-semibold text-white">
+              Deliver the work
+            </button>
+          </div>
+        )
       ) : null}
 
       {turn.kind === "verdict" || turn.kind === "review" ? (

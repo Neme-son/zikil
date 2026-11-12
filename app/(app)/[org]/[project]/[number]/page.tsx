@@ -1079,6 +1079,9 @@ export default async function BugDetailPage({ params, searchParams }: BugPagePro
   const yourTurn: YourTurn | null = (() => {
     if (bug.isDeleted) return null;
     if (myHold?.status === "offered") return { kind: "offer", agentName: myHold.agent.name };
+    if (myHold?.status === "active" && bug.substatus === "in_progress" && bug.track !== "marketing") {
+      return { kind: "deliver", agentName: myHold.agent.name };
+    }
     if (!viewerAgent) return null;
     const confirmations = confirmationsData?.confirmations ?? 0;
     const needed = confirmationsData?.confirmationsNeeded ?? 0;

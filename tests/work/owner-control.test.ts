@@ -19,6 +19,8 @@ const organisationAccessFor = vi.hoisted(() => vi.fn());
 const submitTestVerdict = vi.hoisted(() => vi.fn());
 const webAgentFor = vi.hoisted(() => vi.fn());
 const checkPostForSecrets = vi.hoisted(() => vi.fn());
+const heldByMyAgent = vi.hoisted(() => vi.fn());
+const deliverWork = vi.hoisted(() => vi.fn());
 
 const tx = {
   $queryRaw: vi.fn(),
@@ -44,12 +46,13 @@ vi.mock("@/lib/agent-api/web-events", () => ({ publishWebEvent: vi.fn(), issueCh
 vi.mock("@/lib/points/award", () => ({ solverAwardFor: vi.fn(async () => null) }));
 vi.mock("@/lib/points/payout", () => ({ holdPayout: vi.fn() }));
 vi.mock("@/lib/agent-api/test-verdict", () => ({ submitTestVerdict }));
-vi.mock("@/lib/web-agent", () => ({ webAgentFor, heldByMyAgent: vi.fn() }));
+vi.mock("@/lib/web-agent", () => ({ webAgentFor, heldByMyAgent }));
+vi.mock("@/lib/agent-api/delivery", () => ({ deliverWork }));
 vi.mock("@/lib/security/secret-guard", () => ({ checkPostForSecrets }));
 
 import { ownerMove } from "@/lib/owner-moves";
 import { ownerAcceptIdeaAction, ownerMoveIssueAction } from "@/app/actions/owner-moves";
-import { giveTestVerdictAction } from "@/app/actions/human-steps";
+import { deliverForMyAgentAction, giveTestVerdictAction } from "@/app/actions/human-steps";
 
 const inProgress = {
   id: "bug-1",
@@ -138,5 +141,20 @@ describe("acting through your agent (#owner-control)", () => {
     const result = await giveTestVerdictAction("bug-1", { goodToMerge: true, summary: "Works.", description: "Tried it.", files: "" });
     expect("error" in result).toBe(true);
     expect(submitTestVerdict).not.toHaveBeenCalled();
+  });
+
+  it("delivers only while my agent holds the work, with the agent's own checks", async () => {
+    const work = { pullRequestUrl: "https://github.com/emerjent/ziki/pull/1", summary: "Done.", description: "Changed it.", proof: "Tests pass." };
+    heldByMyAgent.mockResolvedValue(null);
+    expect("error" in (await deliverForMyAgentAction("bug-1", work))).toBe(true);
+    expect(deliverWork).not.toHaveBeenCalled();
+
+    const agent = { agentId: "agent-1", name: "Builder" };
+    heldByMyAgent.mockResolvedValue({ claimId: "claim-1", status: "active", projectId: "project-1", agent });
+    bugFindFirst.mockResolvedValue({ id: "bug-1", organisationId: "org-1", projectId: "project-1" });
+    checkPostForSecrets.mockResolvedValue({ ok: true });
+    deliverWork.mockResolvedValue({ status: 400, error: "invalid_request", message: "That is not a GitHub pull request URL." });
+    expect(await deliverForMyAgentAction("bug-1", work)).toEqual({ error: "That is not a GitHub pull request URL." });
+    expect(deliverWork).toHaveBeenCalledWith(agent, "bug-1", expect.objectContaining({ pullRequestUrl: work.pullRequestUrl, testResults: "Tests pass." }));
   });
 });
