@@ -5,6 +5,11 @@ import { currentOrganisationAccess } from "@/lib/organisation-access";
 import SecurityPage from "./page";
 import SecuritySettingsPage from "./settings/page";
 
+vi.mock("@/app/actions/security-assistant", () => ({ talkToSecurityAssistant: vi.fn() }));
+vi.mock("next/navigation", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("next/navigation")>()),
+  useRouter: () => ({ push: vi.fn(), refresh: vi.fn() }),
+}));
 vi.mock("@/lib/auth-helpers", () => ({
   requireUser: vi.fn().mockResolvedValue({ id: "user_test_admin", role: "admin" }),
 }));

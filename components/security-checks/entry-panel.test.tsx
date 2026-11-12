@@ -2,6 +2,11 @@ import { describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 
 vi.mock("@/app/actions/security-checks", () => ({ addSecurityTarget: vi.fn(), paySecurityCheck: vi.fn() }));
+vi.mock("@/app/actions/security-assistant", () => ({ talkToSecurityAssistant: vi.fn() }));
+vi.mock("next/navigation", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("next/navigation")>()),
+  useRouter: () => ({ push: vi.fn(), refresh: vi.fn() }),
+}));
 vi.mock("@/lib/prisma", () => ({ prisma: {} }));
 vi.mock("@/components/local-time", () => ({ LocalTime: () => <time>2 days ago</time> }));
 
