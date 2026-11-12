@@ -16,17 +16,18 @@ export function canPayForCheck(check: { paidAt: Date | null; status: SecurityChe
 }
 
 /**
- * Mark a workspace's check as paid. Safe to call twice: only the first call
- * sets `paidAt`, so a double click never pays twice.
+ * Mark the person's own check as paid. Safe to call twice: only the first call
+ * sets `paidAt`, so a double click never pays twice. Someone else's check, even
+ * in the same workspace, is `not_found`.
  */
-export async function payForCheck(checkId: string, organisationId: string, now = new Date()): Promise<PayOutcome> {
+export async function payForCheck(checkId: string, organisationId: string, userId: string, now = new Date()): Promise<PayOutcome> {
   const { count } = await prisma.securityCheck.updateMany({
-    where: { id: checkId, organisationId, paidAt: null, status: { not: "cancelled" } },
+    where: { id: checkId, organisationId, requestedById: userId, paidAt: null, status: { not: "cancelled" } },
     data: { paidAt: now },
   });
   if (count === 1) return "paid";
   const check = await prisma.securityCheck.findFirst({
-    where: { id: checkId, organisationId },
+    where: { id: checkId, organisationId, requestedById: userId },
     select: { paidAt: true, status: true },
   });
   if (!check) return "not_found";

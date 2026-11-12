@@ -127,6 +127,8 @@ describe("SecurityPage (/security)", () => {
     expect(markup).toContain("Check a site");
     expect(markup).not.toContain('name="target"');
     expect(markup).toContain('href="/security?view=findings"');
+    expect(markup).toContain('href="/security/work"');
+    expect(markup).not.toContain('href="/security/activity"');
     expect(markup).not.toContain("Open findings");
     expect(markup).not.toContain("Apply filters");
   });

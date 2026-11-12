@@ -46,7 +46,7 @@ describe("addTargetAndCheck (#security-checks part 1)", () => {
     expect(added).toMatchObject({ checkId: "c2", verified: true, reused: false });
   });
 
-  it("reuses an unfinished check instead of opening a second one", async () => {
+  it("reuses the person's own unfinished check instead of opening a second one", async () => {
     prismaMock.securityTarget.findUnique.mockResolvedValue({ id: "t1", verifiedAt: null });
     prismaMock.securityCheck.findFirst.mockResolvedValue({ id: "c-open" });
 
@@ -55,7 +55,7 @@ describe("addTargetAndCheck (#security-checks part 1)", () => {
     expect(added).toEqual({ targetId: "t1", checkId: "c-open", verified: false, reused: true });
     expect(prismaMock.securityCheck.create).not.toHaveBeenCalled();
     expect(prismaMock.securityCheck.findFirst.mock.calls[0][0].where).toMatchObject({
-      targetId: "t1", organisationId: "org1", status: { notIn: expect.arrayContaining(["done", "cancelled"]) },
+      targetId: "t1", organisationId: "org1", requestedById: "u1", status: { notIn: expect.arrayContaining(["done", "cancelled"]) },
     });
   });
 
@@ -84,17 +84,17 @@ describe("nextStepPath", () => {
 });
 
 describe("listWorkspaceChecks", () => {
-  it("lists only this workspace's checks, newest first, without results", async () => {
+  it("lists only the checks this person asked for in this workspace, newest first, without results", async () => {
     const createdAt = new Date("2026-11-11T10:00:00Z");
     prismaMock.securityCheck.findMany.mockResolvedValue([
       { id: "c1", status: "awaiting_ownership", paidAt: null, priceCoins: 50, createdAt, target: { id: "t1", kind: "website", value: "settle.ng", verifiedAt: null } },
       { id: "c2", status: "checking", paidAt: createdAt, priceCoins: 50, createdAt, target: { id: "t2", kind: "repo", value: "settle/app", verifiedAt: createdAt } },
     ]);
 
-    const rows = await listWorkspaceChecks("org1");
+    const rows = await listWorkspaceChecks("org1", "u1");
 
     const query = prismaMock.securityCheck.findMany.mock.calls[0][0];
-    expect(query.where).toEqual({ organisationId: "org1" });
+    expect(query.where).toEqual({ organisationId: "org1", requestedById: "u1" });
     expect(query.orderBy).toEqual({ createdAt: "desc" });
     expect(query.select.results).toBeUndefined();
     expect(rows.map((r) => [r.id, r.value, r.verified, r.paid])).toEqual([
@@ -105,13 +105,13 @@ describe("listWorkspaceChecks", () => {
 });
 
 describe("payment (simulated)", () => {
-  it("only sets paidAt, once, for this workspace's live check", async () => {
+  it("only sets paidAt, once, for the person's own live check", async () => {
     prismaMock.securityCheck.updateMany.mockResolvedValue({ count: 1 });
     const now = new Date("2026-11-11T12:00:00Z");
 
-    expect(await payForCheck("c1", "org1", now)).toBe("paid");
+    expect(await payForCheck("c1", "org1", "u1", now)).toBe("paid");
     expect(prismaMock.securityCheck.updateMany).toHaveBeenCalledWith({
-      where: { id: "c1", organisationId: "org1", paidAt: null, status: { not: "cancelled" } },
+      where: { id: "c1", organisationId: "org1", requestedById: "u1", paidAt: null, status: { not: "cancelled" } },
       data: { paidAt: now },
     });
   });
@@ -119,11 +119,12 @@ describe("payment (simulated)", () => {
   it("never pays twice, and says why it didn't pay", async () => {
     prismaMock.securityCheck.updateMany.mockResolvedValue({ count: 0 });
     prismaMock.securityCheck.findFirst.mockResolvedValueOnce({ paidAt: new Date(), status: "queued" });
-    expect(await payForCheck("c1", "org1")).toBe("already_paid");
+    expect(await payForCheck("c1", "org1", "u1")).toBe("already_paid");
     prismaMock.securityCheck.findFirst.mockResolvedValueOnce({ paidAt: null, status: "cancelled" });
-    expect(await payForCheck("c1", "org1")).toBe("cancelled");
+    expect(await payForCheck("c1", "org1", "u1")).toBe("cancelled");
     prismaMock.securityCheck.findFirst.mockResolvedValueOnce(null);
-    expect(await payForCheck("other-orgs-check", "org1")).toBe("not_found");
+    expect(await payForCheck("someone-elses-check", "org1", "u1")).toBe("not_found");
+    expect(prismaMock.securityCheck.findFirst.mock.calls.at(-1)?.[0].where).toEqual({ id: "someone-elses-check", organisationId: "org1", requestedById: "u1" });
   });
 
   it("knows which checks can still be paid", () => {

@@ -63,7 +63,7 @@ describe("paySecurityCheck", () => {
   it("marks the check paid in this workspace, then goes back to the list", async () => {
     mocks.payForCheck.mockResolvedValue("paid");
     await expect(paySecurityCheck("c1")).rejects.toThrow("REDIRECT /security?check=c1&paid=1");
-    expect(mocks.payForCheck).toHaveBeenCalledWith("c1", "org1");
+    expect(mocks.payForCheck).toHaveBeenCalledWith("c1", "org1", "u1");
   });
 
   it("treats paying twice as done", async () => {

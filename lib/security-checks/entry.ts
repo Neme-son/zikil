@@ -26,8 +26,9 @@ export function newOwnershipToken(): string {
 
 /**
  * Store the target (or reuse the workspace's existing one) and open a check.
- * A target that already has an unfinished check reuses it rather than opening
- * a second one, so pasting the same site twice doesn't charge twice.
+ * The person's own unfinished check on that target is reused rather than
+ * opening a second one, so pasting the same site twice doesn't charge twice.
+ * Checks are per person: someone else in the workspace gets their own.
  */
 export async function addTargetAndCheck(
   organisationId: string,
@@ -38,7 +39,7 @@ export async function addTargetAndCheck(
   const verified = stored.verifiedAt !== null;
 
   const open = await prisma.securityCheck.findFirst({
-    where: { targetId: stored.id, organisationId, status: { notIn: [...FINISHED_CHECK_STATUSES] } },
+    where: { targetId: stored.id, organisationId, requestedById: userId, status: { notIn: [...FINISHED_CHECK_STATUSES] } },
     orderBy: { createdAt: "desc" },
     select: { id: true },
   });
@@ -103,9 +104,10 @@ export type WorkspaceCheckRow = {
 };
 
 /** The workspace's checks, newest first: the returning user's list on the Security page. */
-export async function listWorkspaceChecks(organisationId: string, take = 20): Promise<WorkspaceCheckRow[]> {
+export async function listWorkspaceChecks(organisationId: string, userId: string, take = 20): Promise<WorkspaceCheckRow[]> {
   const rows = await prisma.securityCheck.findMany({
-    where: { organisationId },
+    // Only the checks this person asked for: others in the workspace don't see them.
+    where: { organisationId, requestedById: userId },
     orderBy: { createdAt: "desc" },
     take,
     select: {

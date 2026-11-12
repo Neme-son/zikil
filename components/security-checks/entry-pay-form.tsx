@@ -8,21 +8,18 @@ import { paySecurityCheck } from "@/app/actions/security-checks";
 export function PayCheckForm({ checkId, priceCoins, skipHref }: { checkId: string; priceCoins: number; skipHref: string }) {
   const [state, action, pending] = useActionState<{ error?: string }, FormData>(() => paySecurityCheck(checkId), {});
   return (
-    <form action={action} className="space-y-3">
-      <div className="flex flex-wrap items-center gap-3">
-        <button
-          type="submit"
-          disabled={pending}
-          className="inline-flex h-12 items-center rounded-full bg-electric-blue-strong px-6 text-[15px] font-bold text-white transition hover:brightness-105 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-electric-blue focus-visible:ring-offset-2 disabled:opacity-60"
-        >
-          {pending ? "Paying…" : `Pay ${priceCoins} coins`}
-        </button>
-        <Link href={skipHref} className="inline-flex h-12 items-center rounded-full px-4 text-sm font-semibold text-zk-text2 hover:bg-zk-chip">
-          Skip for now
-        </Link>
-      </div>
+    <form action={action} className="flex flex-col gap-2.5">
+      <button
+        type="submit"
+        disabled={pending}
+        className="inline-flex h-12 w-full items-center justify-center gap-2 rounded-full bg-electric-blue-strong px-6 text-[15px] font-bold text-white transition hover:brightness-105 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-electric-blue focus-visible:ring-offset-2 disabled:opacity-60"
+      >
+        {pending ? "Paying…" : `Pay ${priceCoins} coins`}
+      </button>
       {state.error ? <p role="alert" className="m-0 text-sm text-zk-bad-fg">{state.error}</p> : null}
-      <p className="m-0 text-xs text-zk-muted">Test payment: no coins are taken yet. Skip and you&apos;ll see a preview of the report, then pay to see all of it.</p>
+      <Link href={skipHref} className="mx-auto text-sm text-zk-text2 underline-offset-4 hover:text-zk-text hover:underline">
+        Not now
+      </Link>
     </form>
   );
 }

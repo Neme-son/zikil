@@ -45,7 +45,7 @@ export async function paySecurityCheck(checkId: string): Promise<{ error?: strin
   const access = await currentOrganisationAccess(user.id, user.role);
   if (!access.organisationId) return { error: NO_WORKSPACE };
 
-  const outcome = await payForCheck(checkId, access.organisationId);
+  const outcome = await payForCheck(checkId, access.organisationId, user.id);
   if (outcome === "not_found") return { error: "That check isn't in this workspace." };
   if (outcome === "cancelled") return { error: "That check was cancelled, so there's nothing to pay." };
   revalidatePath("/security");
