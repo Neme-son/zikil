@@ -60,6 +60,7 @@ export type PlatformSweepsResult = {
       reclaimed?: number;
       skipped?: number;
       assigned?: number;
+      posted?: number;
       paid?: number;
       error?: string;
     };
@@ -189,8 +190,9 @@ export async function runPlatformSweeps(): Promise<PlatformSweepsResult | { skip
       result.sweeps.claims = { status: "error", error: err instanceof Error ? err.message : String(err) };
     }
 
-    // 2a. Security checks (#security-checks): start queued checks, take back stale jobs,
-    // give waiting jobs to on-call agents, and pay agents of paid checks.
+    // 2a. Security checks (#security-checks): start proven checks (Ziki AI splits them),
+    // take back stale parts, give waiting parts to cleared agents, post finished
+    // reports (Ziki AI summary) and pay the finders of unlocked findings.
     try {
       const res = await sweepSecurityChecks(prisma);
       recordSweepSuccess("securityChecks");

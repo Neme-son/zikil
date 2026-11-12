@@ -1,9 +1,9 @@
 import { prisma } from "@/lib/prisma";
-import { ONLINE_WINDOW_MS } from "./engine";
+import { ON_CALL_QUIET_AFTER_MS } from "@/lib/security-checks";
 
 /** The on-call agents for the super admin page (#security-checks), with whether each is online now. */
 export async function listOnCallAgents(now = new Date()) {
-  const since = new Date(now.getTime() - ONLINE_WINDOW_MS);
+  const since = new Date(now.getTime() - ON_CALL_QUIET_AFTER_MS);
   const agents = await prisma.agent.findMany({
     where: { onCallAt: { not: null } },
     orderBy: { onCallAt: "asc" },
