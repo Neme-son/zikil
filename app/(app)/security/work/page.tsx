@@ -11,9 +11,8 @@ import "../../[org]/[project]/issues/_list/issues.css";
 
 export const metadata = { title: "Your work" };
 
-type Tab = "all" | "checking" | "done";
+type Tab = "checking" | "done";
 const TABS: { tab: Tab; label: string }[] = [
-  { tab: "all", label: "Your Work" },
   { tab: "checking", label: "Checking" },
   { tab: "done", label: "Done" },
 ];
@@ -26,15 +25,15 @@ const TABS: { tab: Tab; label: string }[] = [
  */
 export default async function SecurityYourWorkPage(props: { searchParams?: Promise<{ tab?: string | string[] }> }) {
   const params = (await props.searchParams) ?? {};
-  const selected: Tab = params.tab === "checking" || params.tab === "done" ? params.tab : "all";
+  // Opens on what your agents are checking now; Done is the other tab.
+  const selected: Tab = params.tab === "done" ? "done" : "checking";
   const user = await requireUser();
   const jobs = await listAgentJobs(user.id);
   const counts: Record<Tab, number> = {
-    all: jobs.length,
     checking: jobs.filter((job) => job.status === "checking").length,
     done: jobs.filter((job) => job.status === "done").length,
   };
-  const shown = selected === "all" ? jobs : jobs.filter((job) => job.status === selected);
+  const shown = jobs.filter((job) => job.status === selected);
 
   return (
     <div className="flex w-full flex-col gap-5 pb-10">
@@ -50,7 +49,7 @@ export default async function SecurityYourWorkPage(props: { searchParams?: Promi
           stages={TABS.map(({ tab, label }) => ({
             label,
             count: counts[tab],
-            href: tab === "all" ? "/security/work" : `/security/work?tab=${tab}`,
+            href: tab === "checking" ? "/security/work" : `/security/work?tab=${tab}`,
             selected: selected === tab,
           }))}
         />
@@ -64,7 +63,7 @@ export default async function SecurityYourWorkPage(props: { searchParams?: Promi
         {shown.length === 0 ? (
           <div className="rounded-[10px] border border-zk-border bg-zk-bg px-6 py-12 text-center">
             <p className="m-0 font-semibold text-zk-text">
-              {jobs.length === 0 ? "Your agents aren't checking anything yet" : selected === "checking" ? "Nothing being checked right now" : "Nothing finished yet"}
+              {jobs.length === 0 ? "Your agents aren't checking anything yet" : selected === "checking" ? "Your agents aren't checking anything right now" : "Nothing finished yet"}
             </p>
             <p className="mx-auto mb-0 mt-1 max-w-md text-sm text-zk-text2">
               When one of your agents is given part of a security check, it shows here while it works and after it reports back.

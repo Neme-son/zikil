@@ -1,0 +1,55 @@
+"use server";
+
+import { revalidatePath } from "next/cache";
+import { redirect } from "next/navigation";
+import { requireUser } from "@/lib/auth-helpers";
+import { currentOrganisationAccess } from "@/lib/organisation-access";
+import { prisma } from "@/lib/prisma";
+import { OWNERSHIP_METHODS, proveOwnership, recordOwnership, type OwnershipMethod } from "@/lib/security-checks/ownership";
+
+/**
+ * Step 2, show it's yours (#security-checks, part 2). One "Check now" tries
+ * every way the target allows; only when one of them is really there is the
+ * target marked proven and its checks let go to the agents (part 3).
+ */
+
+export type VerifyState = {
+  /** Something that stops the check as a whole. */
+  error?: string;
+  /** Why each way that was tried isn't there yet, shown under that way. */
+  missing?: Partial<Record<OwnershipMethod, string>>;
+};
+
+/** Look for the proof, every allowed way, and once one is there go on to pay or skip. */
+export async function verifySecurityTarget(targetId: string): Promise<VerifyState> {
+  const user = await requireUser();
+  const access = await currentOrganisationAccess(user.id, user.role);
+  if (!access.organisationId) return { error: "Join or create a workspace to check a site." };
+
+  const target = await prisma.securityTarget.findFirst({
+    where: { id: targetId, organisationId: access.organisationId },
+    select: { id: true, organisationId: true, kind: true, value: true, ownershipToken: true, verifiedAt: true },
+  });
+  if (!target) return { error: "That site isn't in this workspace." };
+
+  // Proven once, never asked again: skip the proof and go straight on.
+  let proven: OwnershipMethod | null = null;
+  const missing: Partial<Record<OwnershipMethod, string>> = {};
+  if (target.verifiedAt) {
+    proven = OWNERSHIP_METHODS[target.kind][0]!;
+  } else {
+    for (const method of OWNERSHIP_METHODS[target.kind]) {
+      const proof = await proveOwnership(target, method);
+      if (proof.ok) {
+        proven = method;
+        break;
+      }
+      missing[method] = proof.reason;
+    }
+  }
+  if (!proven) return { missing };
+
+  const { checkId } = await recordOwnership(target.id, target.organisationId, user.id, proven);
+  revalidatePath("/security");
+  redirect(checkId ? `/security/checks/${encodeURIComponent(checkId)}/pay` : "/security");
+}

@@ -43,7 +43,7 @@ export const CHECK_STATUS_LABEL: Record<SecurityCheckStatus, string> = {
   cancelled: "Cancelled",
 };
 
-export const SECURITY_CHECK_ITEM_KINDS = ["split", "check"] as const satisfies readonly SecurityCheckItemKind[];
+export const SECURITY_CHECK_ITEM_KINDS = ["split", "check", "collate"] as const satisfies readonly SecurityCheckItemKind[];
 
 export const SECURITY_CHECK_ITEM_STATUSES = ["waiting", "checking", "done", "skipped"] as const satisfies readonly SecurityCheckItemStatus[];
 
@@ -80,4 +80,14 @@ export function agentsMayWork(check: { status: SecurityCheckStatus }, target: { 
 /** Whether the client sees the full report (and agents get paid): only once paid. */
 export function isCheckPaid(check: { paidAt: Date | null }): boolean {
   return check.paidAt !== null;
+}
+
+/**
+ * Whether the client may see the check's results: only once an always-on agent
+ * has collated every part and posted the one report (#security-checks). Before
+ * that the client sees progress only. The report page, its PDF and Fix on Ziki
+ * all use this rule; paying (isCheckPaid) then decides teaser or full report.
+ */
+export function isReportPosted(check: { postedAt: Date | null }): boolean {
+  return check.postedAt !== null;
 }

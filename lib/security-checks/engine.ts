@@ -11,10 +11,15 @@ import { pickAgentFor, type CandidateAgent } from "./assign";
  * 2. Waiting jobs are given to online always-on agents, a few at a time each,
  *    preferring agents active in the client's workspace (its default agents).
  * 3. The split job's agent adds the parts to check; the check moves to `checking`.
- * 4. Each part's agent reports what it found; when every part is reported the
- *    check is `done`.
- * 5. A job not reported within JOB_TIMEOUT_MINUTES goes back to waiting.
- * 6. Once the client has paid, each reported job pays its agent's owner once.
+ * 4. Each part's agent reports what it found.
+ * 5. When every part is in, the check gets one `collate` job: an always-on
+ *    agent reads every result and writes the summary. Posting it makes the
+ *    check `done`, and only then does the client see the results (isReportPosted).
+ * 6. A job not reported within JOB_TIMEOUT_MINUTES goes back to waiting, so a
+ *    failed part goes to another agent and the collate job waits for it.
+ * 7. Once the client has paid, each reported job's pay is released once.
+ *    Always-on agents are run by Ziki and earn nothing (Mark, 12 Nov): their
+ *    pay is marked released with no points.
  *
  * Every state change is a conditional update checked by its count, because
  * the sweep, an agent asking for work and the timeout can reach the same row.
@@ -35,6 +40,8 @@ export const PART_JOB_POINTS = 3;
 export const MIN_PARTS = 1;
 export const MAX_PARTS = 30;
 export const MAX_RESULTS_PER_PART = 20;
+export const SUMMARY_MIN = 20;
+export const SUMMARY_MAX = 5_000;
 
 export class SecurityJobError extends Error {
   constructor(
@@ -52,7 +59,9 @@ export function securityJobSourceKey(itemId: string): string {
   return `security-check:${itemId}`;
 }
 
-export function jobPoints(kind: "split" | "check"): number {
+/** What a job would pay an agent that isn't always-on. The collate job is always-on work and pays nothing. */
+export function jobPoints(kind: "split" | "check" | "collate"): number {
+  if (kind === "collate") return 0;
   return kind === "split" ? SPLIT_JOB_POINTS : PART_JOB_POINTS;
 }
 
@@ -164,17 +173,23 @@ export async function assignWaitingJobs(db: Db, now = new Date(), onlyAgentId?: 
   return assigned;
 }
 
+const SEVERITY_ORDER: Record<SecuritySeverity, number> = { critical: 0, high: 1, medium: 2, low: 3 };
+
 // ---------------------------------------------------------------------------
 // The agent's side.
 
+export type SecurityJobResult = { severity: SecuritySeverity; title: string; description: string; howToFix: string };
+
 export type SecurityJob = {
   id: string;
-  kind: "split" | "check";
+  kind: "split" | "check" | "collate";
   title: string;
   instructions: string | null;
   assignedAt: Date | null;
   reportBy: Date | null;
   check: { id: string; target: { kind: string; value: string } };
+  /** For a collate job only: every result of the check, worst first. Private: served only to the holder. */
+  results?: SecurityJobResult[];
 };
 
 /** The jobs this agent holds now. It is given waiting work first if it has room. */
@@ -192,9 +207,24 @@ export async function listAgentJobs(db: Db, agentId: string, now = new Date()): 
       check: { select: { id: true, target: { select: { kind: true, value: true } } } },
     },
   });
+  const collateCheckIds = items.filter((item) => item.kind === "collate").map((item) => item.check.id);
+  const results = collateCheckIds.length
+    ? await db.securityCheckResult.findMany({
+        where: { checkId: { in: collateCheckIds } },
+        select: { checkId: true, severity: true, title: true, description: true, howToFix: true },
+      })
+    : [];
   return items.map((item) => ({
     ...item,
     reportBy: item.assignedAt ? new Date(item.assignedAt.getTime() + JOB_TIMEOUT_MINUTES * 60_000) : null,
+    ...(item.kind === "collate"
+      ? {
+          results: results
+            .filter((r) => r.checkId === item.check.id)
+            .sort((a, b) => SEVERITY_ORDER[a.severity] - SEVERITY_ORDER[b.severity])
+            .map(({ severity, title, description, howToFix }) => ({ severity, title, description, howToFix })),
+        }
+      : {}),
   }));
 }
 
@@ -237,7 +267,7 @@ export async function submitSplit(db: Transactional, agentId: string, itemId: st
   }
   const result = await db.$transaction(async (tx) => {
     const item = await heldJob(tx, agentId, itemId);
-    if (item.kind !== "split") throw new SecurityJobError(409, "not_a_split", "This job is a part to check: report what you found instead.");
+    if (item.kind !== "split") throw new SecurityJobError(409, "not_a_split", "This job isn't a split: report what you found, or post the summary.");
     await markReported(tx, agentId, itemId, now);
     await tx.securityCheckItem.createMany({
       data: parts.map((part) => ({
@@ -263,16 +293,17 @@ export async function submitReport(db: Transactional, agentId: string, itemId: s
   }
   return db.$transaction(async (tx) => {
     const item = await heldJob(tx, agentId, itemId);
-    if (item.kind !== "check") throw new SecurityJobError(409, "is_a_split", "This is the split job: add the parts to check instead.");
+    if (item.kind === "split") throw new SecurityJobError(409, "is_a_split", "This is the split job: add the parts to check instead.");
+    if (item.kind === "collate") throw new SecurityJobError(409, "is_a_collate", "This is the collate job: post the summary instead.");
     await markReported(tx, agentId, itemId, now);
     if (results.length > 0) {
       await tx.securityCheckResult.createMany({
         data: results.map((r) => ({ checkId: item.checkId, itemId, severity: r.severity, title: r.title, description: r.description, howToFix: r.howToFix })),
       });
     }
-    const finished = await finishCheckIfComplete(tx, item.checkId, now);
+    const collating = await queueCollateIfComplete(tx, item.checkId, now);
     await releasePaidJobs(tx, item.checkId, now);
-    return { checkId: item.checkId, results: results.length, checkDone: finished };
+    return { checkId: item.checkId, results: results.length, collating };
   });
 }
 
@@ -285,34 +316,70 @@ export async function releaseJob(db: Db, agentId: string, itemId: string): Promi
   if (count !== 1) throw new SecurityJobError(409, "not_held", "This job is not held by this agent.");
 }
 
-/** `checking` → `done` once the check has parts and none is still open. */
-export async function finishCheckIfComplete(tx: Db, checkId: string, now = new Date()): Promise<boolean> {
+/**
+ * Once the check has parts and none is still open, queues its one collate job
+ * (guarded by `collatingAt`, so two reports finishing together queue it once).
+ * True when this call queued it.
+ */
+export async function queueCollateIfComplete(tx: Tx, checkId: string, now = new Date()): Promise<boolean> {
   const [open, parts] = await Promise.all([
     tx.securityCheckItem.count({ where: { checkId, status: { in: ["waiting", "checking"] } } }),
     tx.securityCheckItem.count({ where: { checkId, kind: "check" } }),
   ]);
   if (open > 0 || parts === 0) return false;
   const { count } = await tx.securityCheck.updateMany({
-    where: { id: checkId, status: "checking" },
-    data: { status: "done", finishedAt: now },
+    where: { id: checkId, status: "checking", collatingAt: null },
+    data: { collatingAt: now },
   });
-  return count === 1;
+  if (count !== 1) return false;
+  const check = await tx.securityCheck.findUnique({ where: { id: checkId }, select: { target: { select: { value: true } } } });
+  await tx.securityCheckItem.create({
+    data: {
+      checkId,
+      kind: "collate",
+      title: `Write the report for ${check?.target.value ?? "this check"}`,
+      instructions:
+        "Read every result of this check and write one plain-language summary for the owner: what was checked, the worst problems first, and what to do next. Don't repeat secrets.",
+    },
+  });
+  return true;
+}
+
+/** The collate job: posts the summary. The check becomes `done` and the client sees the report. */
+export async function submitSummary(db: Transactional, agentId: string, itemId: string, summary: string, now = new Date()) {
+  const text = summary.trim();
+  if (text.length < SUMMARY_MIN || text.length > SUMMARY_MAX) {
+    throw new SecurityJobError(400, "invalid_summary", `Write a summary of ${SUMMARY_MIN} to ${SUMMARY_MAX} characters.`);
+  }
+  return db.$transaction(async (tx) => {
+    const item = await heldJob(tx, agentId, itemId);
+    if (item.kind !== "collate") throw new SecurityJobError(409, "not_a_collate", "Only the collate job posts the summary.");
+    await markReported(tx, agentId, itemId, now);
+    const { count } = await tx.securityCheck.updateMany({
+      where: { id: item.checkId, status: "checking", postedAt: null },
+      data: { status: "done", finishedAt: now, postedAt: now, summary: text },
+    });
+    if (count !== 1) throw new SecurityJobError(409, "already_posted", "This check's report was already posted.");
+    await releasePaidJobs(tx, item.checkId, now);
+    return { checkId: item.checkId, posted: true };
+  });
 }
 
 // ---------------------------------------------------------------------------
 // 6. Pay, only once the client has paid.
 
 /**
- * Pays each reported, unpaid job of a paid check: `jobPoints` to the agent's
- * owner, into the client's workspace ledger, once per job (the source key and
- * the conditional `payoutReleasedAt` both guard it). An unpaid check pays nobody.
+ * Releases each reported job's pay on a paid check, once per job (the source
+ * key and the conditional `payoutReleasedAt` both guard it): `jobPoints` to
+ * the agent's owner, into the client's workspace ledger, except for always-on
+ * agents, which earn nothing. An unpaid check pays nobody.
  */
 export async function releasePaidJobs(tx: Tx, checkId: string, now = new Date()): Promise<number> {
   const check = await tx.securityCheck.findUnique({ where: { id: checkId }, select: { organisationId: true, paidAt: true } });
   if (!check?.paidAt) return 0;
   const due = await tx.securityCheckItem.findMany({
     where: { checkId, status: "done", payoutReleasedAt: null, agentId: { not: null } },
-    select: { id: true, kind: true, agentId: true, agent: { select: { ownerUserId: true } } },
+    select: { id: true, kind: true, agentId: true, agent: { select: { ownerUserId: true, alwaysOnAt: true } } },
   });
   let paid = 0;
   for (const item of due) {
@@ -322,13 +389,17 @@ export async function releasePaidJobs(tx: Tx, checkId: string, now = new Date())
       data: { payoutReleasedAt: now },
     });
     if (count !== 1) continue;
+    // Always-on agents are run by Ziki and earn nothing: released, no points.
+    if (item.agent.alwaysOnAt) continue;
+    const points = jobPoints(item.kind);
+    if (points <= 0) continue;
     await award(tx, {
       organisationId: check.organisationId,
       userId: item.agent.ownerUserId,
       agentId: item.agentId,
       bugId: null,
       role: "security_check",
-      points: jobPoints(item.kind),
+      points,
       sourceKey: securityJobSourceKey(item.id),
     });
     paid++;

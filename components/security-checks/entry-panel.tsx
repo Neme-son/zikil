@@ -4,6 +4,7 @@ import { nextStepPath, type WorkspaceCheckRow } from "@/lib/security-checks/entr
 import { LocalTime } from "@/components/local-time";
 import { KindIcon } from "./entry-box";
 import { CheckSiteButton } from "./entry-dialog";
+import { FlashNote } from "./flash-note";
 
 const card = "rounded-[24px] border border-zk-border bg-zk-surface";
 const PRIMARY_ROW_BUTTON =
@@ -54,14 +55,10 @@ export function SecurityChecksPanel({ checks, highlight }: { checks: WorkspaceCh
             </div>
           </div>
           {highlight?.added && !highlight.paid ? (
-            <p role="status" className="mx-4 mb-4 mt-0 rounded-[14px] border border-zk-border bg-zk-ok-bg px-3 py-2 text-sm text-zk-ok-fg sm:mx-6">
-              Saved. Next, you show it&apos;s yours, then agents can start. You can pay now or later.
-            </p>
+            <FlashNote>Saved. Next, you show it&apos;s yours, then agents can start. You can pay now or later.</FlashNote>
           ) : null}
           {highlight?.paid ? (
-            <p role="status" className="mx-6 mb-4 mt-0 rounded-[14px] border border-zk-border bg-zk-ok-bg px-3 py-2 text-sm text-zk-ok-fg">
-              Paid. You&apos;ll see the full report, with how to fix each problem, once agents finish.
-            </p>
+            <FlashNote>Paid. You&apos;ll see the full report, with how to fix each problem, once agents finish.</FlashNote>
           ) : null}
           <ul className="m-0 list-none divide-y divide-zk-border border-t border-zk-border p-0">
             {checks.map((check) => (
@@ -113,7 +110,7 @@ function CheckRow({ check, highlighted }: { check: WorkspaceCheckRow; highlighte
           </Step>
           <StepLine />
           <Step state={check.status === "done" ? "done" : running && check.paid ? "now" : "later"}>
-            {running ? CHECK_STATUS_LABEL[check.status] : "Agents check"}
+            {running ? CHECK_STATUS_LABEL[check.status] : "Check"}
           </Step>
         </ol>
       )}
