@@ -10,13 +10,14 @@ import {
   SPLIT_JOB_POINTS,
   SecurityJobError,
   assignWaitingJobs,
-  finishCheckIfComplete,
+  queueCollateIfComplete,
   reclaimStaleJobs,
   releasePaidJobs,
   securityJobSourceKey,
   startQueuedChecks,
   submitReport,
   submitSplit,
+  submitSummary,
 } from "@/lib/security-checks/engine";
 
 /** A fake Prisma client: every model method is a mock, and $transaction runs the callback on the same fake. */
@@ -24,7 +25,7 @@ function fakeDb() {
   const db = {
     securityCheck: { findMany: vi.fn(), findUnique: vi.fn(), updateMany: vi.fn() },
     securityCheckItem: { findMany: vi.fn(), findUnique: vi.fn(), updateMany: vi.fn(), create: vi.fn(), createMany: vi.fn(), count: vi.fn() },
-    securityCheckResult: { createMany: vi.fn() },
+    securityCheckResult: { createMany: vi.fn(), findMany: vi.fn() },
     agent: { findMany: vi.fn() },
     $transaction: vi.fn(),
   };
@@ -145,16 +146,21 @@ describe("the split job", () => {
 describe("reporting a part", () => {
   const found = [{ severity: "high" as const, title: "Admin page open", description: "The /admin page loads with no login.", howToFix: "Require a signed-in admin for /admin." }];
 
-  it("stores the results and finishes the check when every part is in", async () => {
+  it("stores the results and, when every part is in, queues the collate job instead of finishing", async () => {
     const db = fakeDb();
     db.securityCheckItem.findUnique.mockResolvedValue(heldItem());
     db.securityCheckItem.updateMany.mockResolvedValue({ count: 1 });
     db.securityCheckItem.count.mockResolvedValueOnce(0).mockResolvedValueOnce(5);
     db.securityCheck.updateMany.mockResolvedValue({ count: 1 });
-    db.securityCheck.findUnique.mockResolvedValue({ organisationId: "client", paidAt: null });
+    db.securityCheck.findUnique
+      .mockResolvedValueOnce({ target: { value: "settle.ng" } })
+      .mockResolvedValue({ organisationId: "client", paidAt: null });
     const result = await submitReport(asDb(db), "agentA", "item1", found, now);
-    expect(result).toEqual({ checkId: "check1", results: 1, checkDone: true });
+    expect(result).toEqual({ checkId: "check1", results: 1, collating: true });
     expect(db.securityCheckResult.createMany.mock.calls[0][0].data[0]).toMatchObject({ checkId: "check1", itemId: "item1", severity: "high" });
+    // Still checking: the client sees nothing until the collated report is posted.
+    expect(db.securityCheck.updateMany).toHaveBeenCalledWith({ where: { id: "check1", status: "checking", collatingAt: null }, data: { collatingAt: now } });
+    expect(db.securityCheckItem.create.mock.calls[0][0].data).toMatchObject({ checkId: "check1", kind: "collate" });
   });
 
   it("refuses a late report after the job was taken back", async () => {
@@ -178,14 +184,54 @@ describe("reporting a part", () => {
   });
 });
 
-describe("finishing a check", () => {
+describe("collating and posting one report (#security-checks)", () => {
   it("waits while any part is open, and needs at least one part", async () => {
     const db = fakeDb();
     db.securityCheckItem.count.mockResolvedValueOnce(1).mockResolvedValueOnce(3);
-    expect(await finishCheckIfComplete(asDb(db), "check1", now)).toBe(false);
+    expect(await queueCollateIfComplete(asDb(db), "check1", now)).toBe(false);
     db.securityCheckItem.count.mockResolvedValueOnce(0).mockResolvedValueOnce(0);
-    expect(await finishCheckIfComplete(asDb(db), "check1", now)).toBe(false);
+    expect(await queueCollateIfComplete(asDb(db), "check1", now)).toBe(false);
     expect(db.securityCheck.updateMany).not.toHaveBeenCalled();
+  });
+
+  it("queues the collate job once, even when two last reports race", async () => {
+    const db = fakeDb();
+    db.securityCheckItem.count.mockResolvedValue(0).mockResolvedValueOnce(0).mockResolvedValueOnce(4);
+    db.securityCheck.updateMany.mockResolvedValue({ count: 0 });
+    expect(await queueCollateIfComplete(asDb(db), "check1", now)).toBe(false);
+    expect(db.securityCheckItem.create).not.toHaveBeenCalled();
+  });
+
+  it("posts the summary: the check is done and the report is out", async () => {
+    const db = fakeDb();
+    db.securityCheckItem.findUnique.mockResolvedValue(heldItem({ kind: "collate" }));
+    db.securityCheckItem.updateMany.mockResolvedValue({ count: 1 });
+    db.securityCheck.updateMany.mockResolvedValue({ count: 1 });
+    db.securityCheck.findUnique.mockResolvedValue({ organisationId: "client", paidAt: null });
+    const summary = "Two problems found: the admin page is open to anyone, and cookies lack the Secure flag.";
+    expect(await submitSummary(asDb(db), "agentA", "item1", summary, now)).toEqual({ checkId: "check1", posted: true });
+    expect(db.securityCheck.updateMany).toHaveBeenCalledWith({
+      where: { id: "check1", status: "checking", postedAt: null },
+      data: { status: "done", finishedAt: now, postedAt: now, summary },
+    });
+  });
+
+  it("only the collate job posts a summary, and only once", async () => {
+    const db = fakeDb();
+    const summary = "Nothing serious found across the twelve parts checked.";
+    db.securityCheckItem.findUnique.mockResolvedValue(heldItem({ kind: "check" }));
+    await expect(submitSummary(asDb(db), "agentA", "item1", summary, now)).rejects.toMatchObject({ status: 409, code: "not_a_collate" });
+    db.securityCheckItem.findUnique.mockResolvedValue(heldItem({ kind: "collate" }));
+    db.securityCheckItem.updateMany.mockResolvedValue({ count: 1 });
+    db.securityCheck.updateMany.mockResolvedValue({ count: 0 });
+    await expect(submitSummary(asDb(db), "agentA", "item1", summary, now)).rejects.toMatchObject({ status: 409, code: "already_posted" });
+    await expect(submitSummary(asDb(db), "agentA", "item1", "too short", now)).rejects.toMatchObject({ status: 400 });
+  });
+
+  it("refuses a report on the collate job", async () => {
+    const db = fakeDb();
+    db.securityCheckItem.findUnique.mockResolvedValue(heldItem({ kind: "collate" }));
+    await expect(submitReport(asDb(db), "agentA", "item1", [], now)).rejects.toMatchObject({ status: 409, code: "is_a_collate" });
   });
 });
 
@@ -197,13 +243,26 @@ describe("paying agents (#security-checks)", () => {
     expect(award).not.toHaveBeenCalled();
   });
 
-  it("pays each reported job once the client pays: 5 for the split, 3 per part", async () => {
+  it("pays always-on agents nothing, but still marks their pay released so it is never retried", async () => {
     const db = fakeDb();
     db.securityCheck.findUnique.mockResolvedValue({ organisationId: "client", paidAt: now });
     db.securityCheckItem.findMany.mockResolvedValue([
-      { id: "split1", kind: "split", agentId: "agentA", agent: { ownerUserId: "ownerA" } },
-      { id: "part1", kind: "check", agentId: "agentB", agent: { ownerUserId: "ownerB" } },
-      { id: "part2", kind: "check", agentId: "agentB", agent: { ownerUserId: "ownerB" } },
+      { id: "split1", kind: "split", agentId: "agala", agent: { ownerUserId: "ziki", alwaysOnAt: now } },
+      { id: "collate1", kind: "collate", agentId: "agala", agent: { ownerUserId: "ziki", alwaysOnAt: now } },
+    ]);
+    db.securityCheckItem.updateMany.mockResolvedValue({ count: 1 });
+    expect(await releasePaidJobs(asDb(db), "check1", now)).toBe(0);
+    expect(award).not.toHaveBeenCalled();
+    expect(db.securityCheckItem.updateMany).toHaveBeenCalledTimes(2);
+  });
+
+  it("pays agents that aren't always-on once the client pays: 5 for the split, 3 per part", async () => {
+    const db = fakeDb();
+    db.securityCheck.findUnique.mockResolvedValue({ organisationId: "client", paidAt: now });
+    db.securityCheckItem.findMany.mockResolvedValue([
+      { id: "split1", kind: "split", agentId: "agentA", agent: { ownerUserId: "ownerA", alwaysOnAt: null } },
+      { id: "part1", kind: "check", agentId: "agentB", agent: { ownerUserId: "ownerB", alwaysOnAt: null } },
+      { id: "part2", kind: "check", agentId: "agentB", agent: { ownerUserId: "ownerB", alwaysOnAt: null } },
     ]);
     // part2 was paid by a concurrent run: its conditional update matches nothing.
     db.securityCheckItem.updateMany.mockResolvedValueOnce({ count: 1 }).mockResolvedValueOnce({ count: 1 }).mockResolvedValueOnce({ count: 0 });

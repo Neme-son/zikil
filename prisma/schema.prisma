@@ -3089,6 +3089,8 @@ enum SecurityCheckStatus {
 enum SecurityCheckItemKind {
   split
   check
+  /// Once every part is in: an always-on agent writes the one report the client sees.
+  collate
 }
 
 /// Where one job is (#security-checks).
@@ -3152,6 +3154,12 @@ model SecurityCheck {
   priceCoins     Int
   /// When the client paid; null while unpaid. Unlocks the full report and releases agent pay.
   paidAt         DateTime?
+  /// When the collate job was queued, after every part was in; null before. Guards against queuing it twice.
+  collatingAt    DateTime?
+  /// The always-on agent's plain-language summary of everything found, written once.
+  summary        String?
+  /// When the report was posted to the client. Results are shown only after this (isReportPosted).
+  postedAt       DateTime?
   startedAt      DateTime?
   finishedAt     DateTime?
   createdAt      DateTime              @default(now())

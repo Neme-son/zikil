@@ -11,6 +11,7 @@ import {
   TARGET_KIND_LABEL,
   agentsMayWork,
   isCheckPaid,
+  isReportPosted,
   isSecurityCheckItemStatus,
   isSecurityCheckStatus,
   isSecurityTargetKind,
@@ -50,6 +51,11 @@ describe("security check words (#security-checks)", () => {
     expect(agentsMayWork({ status: "checking" }, verified)).toBe(true);
     expect(agentsMayWork({ status: "done" }, verified)).toBe(false);
     expect(agentsMayWork({ status: "cancelled" }, verified)).toBe(false);
+  });
+
+  it("show results only once the collated report is posted", () => {
+    expect(isReportPosted({ postedAt: null })).toBe(false);
+    expect(isReportPosted({ postedAt: new Date() })).toBe(true);
   });
 
   it("unlock the report only once paid", () => {

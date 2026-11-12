@@ -6,7 +6,7 @@ import { withAgentBudgetHeaders } from "@/lib/agents/rate-budget-headers";
 import { logger } from "@/lib/logger";
 import { prisma } from "@/lib/prisma";
 import { SECURITY_SEVERITIES } from "@/lib/security-severity";
-import { MAX_PARTS, MAX_RESULTS_PER_PART, MIN_PARTS, SecurityJobError } from "./engine";
+import { MAX_PARTS, MAX_RESULTS_PER_PART, MIN_PARTS, SUMMARY_MAX, SUMMARY_MIN, SecurityJobError } from "./engine";
 
 /**
  * Shared handling for the security-check job routes (#security-checks).
@@ -92,4 +92,8 @@ export const reportBodySchema = z.object({
       }),
     )
     .max(MAX_RESULTS_PER_PART),
+});
+
+export const summaryBodySchema = z.object({
+  summary: z.string().trim().min(SUMMARY_MIN).max(SUMMARY_MAX),
 });
