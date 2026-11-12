@@ -7,7 +7,7 @@ const FADE_MS = 400;
 
 /**
  * A short confirmation after paying or adding a site (#security-checks): it
- * shows for a few seconds, fades out, and takes `paid`/`added`/`check` off the
+ * shows for a few seconds, fades out, and takes `unlocked`/`added`/`check` off the
  * address, so reloading the page doesn't bring it back.
  */
 export function FlashNote({ children }: { children: React.ReactNode }) {
@@ -15,8 +15,8 @@ export function FlashNote({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     const url = new URL(window.location.href);
-    if (["paid", "added", "check"].some((key) => url.searchParams.has(key))) {
-      for (const key of ["paid", "added", "check"]) url.searchParams.delete(key);
+    if (["unlocked", "added", "check"].some((key) => url.searchParams.has(key))) {
+      for (const key of ["unlocked", "added", "check"]) url.searchParams.delete(key);
       window.history.replaceState(window.history.state, "", url.pathname + url.search + url.hash);
     }
     const fade = window.setTimeout(() => setPhase("fading"), SHOW_MS);

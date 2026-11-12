@@ -1,10 +1,10 @@
-import Link from "next/link";
 import { requireUser } from "@/lib/auth-helpers";
 import { TARGET_KIND_LABEL } from "@/lib/security-checks";
-import { jobLabel, jobReward, listAgentJobs, type AgentJobRow } from "@/lib/security-checks/your-work";
+import { listAgentJobs, type AgentJobRow } from "@/lib/security-checks/your-work";
 import { formatZ } from "@/lib/points/rules";
 import { KindIcon } from "@/components/security-checks/entry-box";
 import { SecurityTabs } from "@/components/security-checks/security-tabs";
+import { StageSidebar } from "@/components/stage-sidebar";
 import { currentOrganisationAccess } from "@/lib/organisation-access";
 import { listWorkspaceChecks } from "@/lib/security-checks/entry";
 import { LocalTime } from "@/components/local-time";
@@ -48,23 +48,19 @@ export default async function SecurityYourWorkPage(props: { searchParams?: Promi
       <SecurityTabs selected="work" checks={checkCount} jobs={jobs.length} />
 
       <section aria-label="Jobs" className="rounded-[20px] border border-zk-border bg-zk-surface p-3 sm:p-6">
-        {/* Checking or Done, like the filter at the top of a project's list. */}
-        <div className="mb-4 flex flex-wrap items-center justify-between gap-3 px-1">
-          <nav aria-label="Show" className="inline-flex rounded-lg border border-zk-border bg-zk-bg p-0.5 text-[13px] font-semibold">
-            {TABS.map(({ tab, label }) => (
-              <Link
-                key={tab}
-                href={tab === "checking" ? "/security/work" : `/security/work?tab=${tab}`}
-                aria-current={selected === tab ? "page" : undefined}
-                className={`rounded-md px-3 py-1.5 ${selected === tab ? "bg-zk-surface text-zk-text shadow-[0_1px_2px_rgba(11,23,51,0.12)]" : "text-zk-muted hover:text-zk-text"}`}
-              >
-                {label} <span className="tabular-nums text-zk-muted">{counts[tab]}</span>
-              </Link>
-            ))}
-          </nav>
-          <p className="m-0 text-sm text-zk-muted">Jobs your agents do for others. You see the job and the pay, not their results.</p>
-        </div>
+        <p className="mb-4 mt-0 px-1 text-sm text-zk-muted">Jobs your agents do for others. You see the job and the pay, not their results.</p>
 
+        {/* Checking or Done down the left, like the steps beside a project's issues. */}
+        <div className="flex items-start gap-5 max-lg:flex-col max-lg:gap-3">
+        <StageSidebar
+          steps={TABS.map(({ tab, label }) => ({
+            label,
+            count: counts[tab],
+            href: tab === "checking" ? "/security/work" : `/security/work?tab=${tab}`,
+            selected: selected === tab,
+          }))}
+        />
+        <div className="w-full min-w-0 flex-1">
         {shown.length === 0 ? (
           <div className="rounded-[10px] border border-zk-border bg-zk-bg px-6 py-12 text-center">
             <p className="m-0 font-semibold text-zk-text">
@@ -78,7 +74,7 @@ export default async function SecurityYourWorkPage(props: { searchParams?: Promi
           <>
             <div className="issues-table">
               <div className="issues-table-heading">
-                <span className="w-[76px] shrink-0 text-center">Reward</span>
+                <span className="w-[76px] shrink-0 text-center">Earned</span>
                 <span className="min-w-0 flex-1">Job</span>
                 <span className="hidden w-[120px] shrink-0 md:block">Status</span>
               </div>
@@ -93,31 +89,38 @@ export default async function SecurityYourWorkPage(props: { searchParams?: Promi
             </p>
           </>
         )}
+        </div>
+        </div>
       </section>
     </div>
   );
 }
 
 function JobRow({ job, last }: { job: AgentJobRow; last: boolean }) {
-  const reward = jobReward(job);
   const status = statusOf(job);
   return (
     <li className={`issues-row flex items-center ${last ? "" : "border-b border-zk-divider"}`}>
+      {/* A finding pays its price once the client unlocks it: until then, nothing is earned yet. */}
       <span className="flex w-[76px] shrink-0 justify-center">
-        <span className={`font-mono text-[14px] font-bold tabular-nums ${job.paid ? "text-zk-text" : "text-zk-ok-fg"}`} title={`Pays ${formatZ(reward)}`}>
-          {formatZ(reward)}
-        </span>
+        {job.earned > 0 ? (
+          <span className="font-mono text-[14px] font-bold tabular-nums text-zk-ok-fg" title={`Earned ${formatZ(job.earned)} from unlocked findings`}>
+            {formatZ(job.earned)}
+          </span>
+        ) : (
+          <span className="text-sm text-zk-muted" title="Earns once the client unlocks its findings">–</span>
+        )}
       </span>
       <span className="flex min-w-0 flex-1 items-center gap-3">
         <span className="hidden h-8 w-8 shrink-0 place-items-center rounded-lg bg-zk-bg sm:grid">
           <KindIcon kind={job.targetKind} className="h-4 w-4 text-zk-text2" />
         </span>
         <span className="min-w-0">
-          <span className="issues-row-title text-zk-text">{jobLabel(job)}</span>
+          <span className="issues-row-title text-zk-text">{job.title}</span>
           <span className="issues-row-meta flex items-center text-zk-muted">
             <span className="font-medium text-zk-text2">{job.targetValue}</span>
             <span>{TARGET_KIND_LABEL[job.targetKind]}</span>
             <span>{job.agentName}</span>
+            {job.status === "done" ? <span>{job.findings === 1 ? "1 finding" : `${job.findings} findings`}</span> : null}
             {job.status === "checking" && job.assignedAt ? <LocalTime date={job.assignedAt} /> : job.reportedAt ? <LocalTime date={job.reportedAt} /> : null}
             <span className={`rounded-md px-1.5 py-0.5 text-[11px] font-bold md:hidden ${status.tone}`}>{status.label}</span>
           </span>
@@ -130,9 +133,9 @@ function JobRow({ job, last }: { job: AgentJobRow; last: boolean }) {
   );
 }
 
-/** The job's status in one word: checking, reported, or paid to you. */
+/** The job's status in one word: checking, reported, or earned. */
 function statusOf(job: AgentJobRow): { label: string; tone: string } {
   if (job.status === "checking") return { label: "Checking", tone: "bg-blue-50 text-blue-700 dark:bg-blue-500/15 dark:text-blue-300" };
-  if (job.paid) return { label: "Paid", tone: "bg-emerald-50 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300" };
+  if (job.earned > 0) return { label: job.paid ? "Paid" : "Earned", tone: "bg-emerald-50 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300" };
   return { label: "Reported", tone: "bg-zk-chip text-zk-text2" };
 }

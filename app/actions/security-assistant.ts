@@ -5,7 +5,7 @@ import { requireUser } from "@/lib/auth-helpers";
 import { currentOrganisationAccess } from "@/lib/organisation-access";
 import { checkRateLimit, RATE_LIMIT_MESSAGE } from "@/lib/rate-limit";
 import { parseSecurityTarget, PRIVATE_TARGET_ERROR } from "@/lib/security-checks/target";
-import { addTargetAndCheck, nextStepPath } from "@/lib/security-checks/entry";
+import { addTargetAndCheck, nextStepPath, refusedMessage } from "@/lib/security-checks/entry";
 import {
   ASSISTANT_HISTORY_MAX,
   ASSISTANT_MESSAGE_MAX,
@@ -67,10 +67,10 @@ async function addAndGo(
   reply: string,
 ): Promise<ChatAnswer> {
   const added = await addTargetAndCheck(organisationId, userId, target);
+  if ("refused" in added) return { kind: "reply", reply: refusedMessage(added.refused, target.value) };
   revalidatePath("/security");
   // Not proven yet: on to "Show it's yours". Proven already: back to Your sites, where the free scan starts.
-  const href = added.verified ? `/security?check=${encodeURIComponent(added.checkId)}&added=1` : nextStepPath(added);
-  return { kind: "go", reply, href };
+  return { kind: "go", reply, href: nextStepPath(added) };
 }
 
 /** Only well-formed turns, trimmed to the limits, at most the last few. */

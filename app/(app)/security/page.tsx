@@ -21,7 +21,7 @@ import {
 import { LocalTime } from "@/components/local-time";
 import { SecurityChecksPanel } from "@/components/security-checks/entry-panel";
 import { SecurityTabs } from "@/components/security-checks/security-tabs";
-import { listWorkspaceChecks } from "@/lib/security-checks/entry";
+import { listWorkspaceChecks, parseSiteFilter } from "@/lib/security-checks/entry";
 import { countAgentJobs } from "@/lib/security-checks/your-work";
 import { OrgPageHeader, ReadOnlyNote, orgCard, orgListCard } from "../[org]/[project]/org/org-ui";
 
@@ -41,9 +41,10 @@ type SearchParams = Promise<{
   assignee?: string | string[];
   reporter?: string | string[];
   check?: string | string[];
-  paid?: string | string[];
+  unlocked?: string | string[];
   added?: string | string[];
   view?: string | string[];
+  show?: string | string[];
 }>;
 
 const FINDINGS_PATH = "/security?view=findings";
@@ -85,13 +86,13 @@ export default async function SecurityPage(props: {
   const showFindings = params.view === "findings" || FINDINGS_FILTERS.some((key) => params[key] !== undefined);
   if (!showFindings) {
     const [checks, jobs] = await Promise.all([listWorkspaceChecks(organisationId, user.id), countAgentJobs(user.id)]);
-    const highlight = typeof params.check === "string" ? { checkId: params.check, paid: params.paid === "1", added: params.added === "1" } : undefined;
+    const highlight = typeof params.check === "string" ? { checkId: params.check, unlocked: Number(params.unlocked) > 0 ? Number(params.unlocked) : 0, added: params.added === "1" } : undefined;
     // Your sites and Your work are always there. With nothing added yet, Your sites holds the box and the three steps.
     return (
       <div className="flex w-full flex-col gap-5 pb-10">
         <h1 className="sr-only">Security</h1>
         <SecurityTabs selected="checks" checks={checks.length} jobs={jobs} />
-        <SecurityChecksPanel checks={checks} highlight={highlight} />
+        <SecurityChecksPanel checks={checks} highlight={highlight} show={parseSiteFilter(params.show)} />
       </div>
     );
   }

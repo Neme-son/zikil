@@ -1,47 +1,58 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import type { SecuritySeverity } from "@prisma/client";
 import { requireUser } from "@/lib/auth-helpers";
 import { currentOrganisationAccess } from "@/lib/organisation-access";
-import type { SecurityTargetKind } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
-import { TARGET_KIND_LABEL } from "@/lib/security-checks";
-import { canPayForCheck } from "@/lib/security-checks/payment";
-import { PayCheckForm } from "@/components/security-checks/entry-pay-form";
+import { CHECK_STATUS_LABEL, TARGET_KIND_LABEL, isReportPosted } from "@/lib/security-checks";
+import { findingPrice } from "@/lib/security-checks/payment";
+import { SECURITY_SEVERITIES, SEVERITY_LABEL } from "@/lib/security-severity";
 import { KindIcon } from "@/components/security-checks/entry-box";
+import { UnlockFixesForm, type UnlockRow } from "@/components/security-checks/unlock-fixes-form";
 
 export const metadata = { title: "Unlock fixes" };
 
 /**
- * Step 3, pay or skip (#security-checks, part 1). Paying is simulated for now:
- * it only marks the check paid. Skipping keeps it unpaid; the client sees a
- * teaser of the report and can pay from there later.
+ * Unlock fixes (#security-checks, plan C1). The scan is free; each finding
+ * costs its severity's price to unlock (critical 5, high 3, medium 2, low 1
+ * coins), and the client unlocks all of them or the ones they pick. The report
+ * links here with `?results=id1,id2` to preselect. A locked finding's title
+ * and details never reach this page: only its severity and price.
  */
-export default async function PaySecurityCheckPage({ params }: { params: Promise<{ id: string }> }) {
-  const [{ id }, user] = await Promise.all([params, requireUser()]);
+export default async function UnlockFixesPage({
+  params,
+  searchParams,
+}: {
+  params: Promise<{ id: string }>;
+  searchParams?: Promise<{ results?: string | string[] }>;
+}) {
+  const [{ id }, query, user] = await Promise.all([params, searchParams ?? Promise.resolve({} as { results?: string | string[] }), requireUser()]);
   const access = await currentOrganisationAccess(user.id, user.role);
   if (!access.organisationId) notFound();
 
   const check = await prisma.securityCheck.findFirst({
-    // Only the person who asked for the check can see or pay for it.
+    // Only the person who asked for the check can see or unlock it.
     where: { id, organisationId: access.organisationId, requestedById: user.id },
     select: {
       id: true,
       status: true,
-      paidAt: true,
-      priceCoins: true,
-      target: { select: { kind: true, value: true, verifiedAt: true } },
+      postedAt: true,
+      target: { select: { kind: true, value: true } },
+      // Severity, price and whether it's unlocked: never the title or details here.
+      results: { select: { id: true, severity: true, priceCoins: true, unlockedAt: true } },
     },
   });
   if (!check) notFound();
 
-  const payable = canPayForCheck(check);
-  const verified = check.target.verifiedAt !== null;
   const back = `/security?check=${encodeURIComponent(check.id)}`;
   const site = check.target.value;
   const kind = check.target.kind;
+  const posted = isReportPosted(check);
+  const rows = toRows(check.results);
+  const preselected = typeof query.results === "string" ? query.results.split(",").filter(Boolean) : [];
 
   return (
-    <div className="mx-auto flex w-full max-w-[520px] flex-col pb-12 pt-2">
+    <div className="mx-auto flex w-full max-w-[560px] flex-col pb-12 pt-2">
       <Link href={back} className="inline-flex w-fit items-center gap-1.5 text-sm text-zk-text2 hover:text-zk-text">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M15 18l-6-6 6-6" /></svg>
         Your sites
@@ -51,70 +62,68 @@ export default async function PaySecurityCheckPage({ params }: { params: Promise
       <h1 className="mb-0 mt-1 text-[28px] font-bold leading-tight tracking-tight text-zk-text">
         Unlock fixes for <span className="break-all">{site}</span>
       </h1>
-      <p className="mb-0 mt-2 text-[15px] leading-relaxed text-zk-text2">{WHAT_AGENTS_DO[kind](site)} The scan is free. Paying shows every problem in full, with how to fix it.</p>
+      <p className="mb-0 mt-2 text-[15px] leading-relaxed text-zk-text2">
+        The scan was free. Unlock a finding to see what&apos;s wrong in full and how to fix it. You pay per finding, by how serious it is.
+      </p>
 
-      <section aria-label="Receipt" className="mt-8 rounded-2xl border border-zk-border bg-zk-surface">
-        <div className="flex items-center gap-3 border-b border-zk-border px-5 py-4">
-          <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-zk-bg">
-            <KindIcon kind={kind} className="h-[18px] w-[18px] text-zk-text2" />
-          </span>
-          <div className="min-w-0">
-            <p className="m-0 truncate text-[15px] font-semibold text-zk-text">{site}</p>
-            <p className="m-0 text-[13px] text-zk-muted">{TARGET_KIND_LABEL[kind]}</p>
-          </div>
-        </div>
-
-        <dl className="m-0 px-5 py-4 text-[15px]">
-          <Line label="Basic scan" detail={`Agents go through ${site} part by part`} value="Free" muted />
-          <Line label="Every problem in full" detail="Worst first, with how to fix each one" value={`${check.priceCoins} coins`} />
-          <Line label="PDF or Fix on Ziki" detail="Download it, or send problems to your team" value="Included" muted />
-          <div className="mt-3 flex items-baseline justify-between border-t border-dashed border-zk-border pt-4">
-            <dt className="font-semibold text-zk-text">Total</dt>
-            <dd className="m-0 text-xl font-bold tabular-nums text-zk-text">{check.priceCoins} coins</dd>
-          </div>
-        </dl>
-      </section>
-
-      {!verified && !check.paidAt && payable ? (
-        <p className="mb-0 mt-4 text-[13px] leading-relaxed text-zk-text2">
-          The free scan starts once you&apos;ve shown {site} is yours. You can unlock fixes now or when the scan is done.
+      <div className="mt-6 flex items-center gap-3">
+        <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg border border-zk-border bg-zk-surface">
+          <KindIcon kind={kind} className="h-[18px] w-[18px] text-zk-text2" />
+        </span>
+        <p className="m-0 min-w-0 text-[15px]">
+          <span className="font-semibold text-zk-text">{site}</span>
+          <span className="text-zk-muted"> · {TARGET_KIND_LABEL[kind]}</span>
         </p>
-      ) : null}
+      </div>
 
-      <div className="mt-6">
-        {check.paidAt ? (
+      <div className="mt-5">
+        {!posted ? (
           <div role="status" className="rounded-2xl border border-zk-border bg-zk-surface px-5 py-4">
-            <p className="m-0 font-semibold text-zk-ok-fg">Fixes unlocked</p>
-            <p className="m-0 mt-1 text-sm text-zk-text2">Fixes are unlocked. You&apos;ll see every problem on {site} in full once the scan finishes.</p>
+            <p className="m-0 font-semibold text-zk-text">The report isn&apos;t ready yet</p>
+            <p className="m-0 mt-1 text-sm text-zk-text2">
+              {check.status === "awaiting_ownership"
+                ? `Show ${site} is yours first, then your free scan starts.`
+                : `Status: ${CHECK_STATUS_LABEL[check.status]}. You can unlock fixes once the report is posted.`}
+            </p>
             <Link href={back} className="mt-3 inline-flex text-sm font-semibold text-zk-accent hover:underline">Back to your sites</Link>
           </div>
-        ) : payable ? (
-          <PayCheckForm checkId={check.id} priceCoins={check.priceCoins} skipHref={back} />
+        ) : rows.length === 0 ? (
+          <div role="status" className="rounded-2xl border border-zk-border bg-zk-surface px-5 py-4">
+            <p className="m-0 font-semibold text-zk-ok-fg">No problems found</p>
+            <p className="m-0 mt-1 text-sm text-zk-text2">Agents checked {site} and found nothing to fix, so there&apos;s nothing to unlock.</p>
+          </div>
+        ) : rows.every((row) => row.unlocked) ? (
+          <div role="status" className="rounded-2xl border border-zk-border bg-zk-surface px-5 py-4">
+            <p className="m-0 font-semibold text-zk-ok-fg">Every fix is unlocked</p>
+            <p className="m-0 mt-1 text-sm text-zk-text2">Open the report to read each problem and how to fix it.</p>
+            <Link href={`/security/checks/${check.id}`} className="mt-3 inline-flex text-sm font-semibold text-zk-accent hover:underline">Open the report</Link>
+          </div>
         ) : (
-          <p className="m-0 text-sm text-zk-text2">This check was cancelled, so there&apos;s nothing to pay.</p>
+          <UnlockFixesForm checkId={check.id} rows={rows} preselected={preselected} backHref={back} />
         )}
       </div>
 
-      <p className="mb-0 mt-6 text-center text-xs text-zk-muted">Test payment. No coins move yet.</p>
+      <p className="mb-0 mt-6 text-center text-xs text-zk-muted">
+        Prices: critical 5, high 3, medium 2, low 1 coins. Test payment, no coins move yet.
+      </p>
     </div>
   );
 }
 
-/** What agents will do, in the words that fit what was pasted. */
-const WHAT_AGENTS_DO: Record<SecurityTargetKind, (site: string) => string> = {
-  website: (site) => `Agents go through ${site} page by page, look for weaknesses, and write up each one with how to fix it. They never break in.`,
-  server: (site) => `Agents look at what ${site} has open to the internet, and write up each weakness with how to fix it. They never break in.`,
-  repo: (site) => `Agents read the code in ${site}, and write up each weakness they find with how to fix it. They never change your code.`,
-};
-
-function Line({ label, detail, value, muted = false }: { label: string; detail: string; value: string; muted?: boolean }) {
-  return (
-    <div className="flex items-start justify-between gap-4 py-2">
-      <dt className="min-w-0">
-        <span className="block text-zk-text">{label}</span>
-        <span className="block truncate text-[13px] text-zk-muted">{detail}</span>
-      </dt>
-      <dd className={`m-0 shrink-0 tabular-nums ${muted ? "text-zk-muted" : "font-medium text-zk-text"}`}>{value}</dd>
-    </div>
-  );
+/** Worst first, numbered within each severity ("High problem 2"), so no locked title is needed. */
+function toRows(results: { id: string; severity: SecuritySeverity; priceCoins: number | null; unlockedAt: Date | null }[]): UnlockRow[] {
+  const order = new Map(SECURITY_SEVERITIES.map((severity, index) => [severity, index]));
+  const sorted = [...results].sort((a, b) => (order.get(a.severity) ?? 9) - (order.get(b.severity) ?? 9) || a.id.localeCompare(b.id));
+  const seen = new Map<SecuritySeverity, number>();
+  return sorted.map((result) => {
+    const n = (seen.get(result.severity) ?? 0) + 1;
+    seen.set(result.severity, n);
+    return {
+      id: result.id,
+      severity: result.severity,
+      label: `${SEVERITY_LABEL[result.severity]} problem ${n}`,
+      price: findingPrice(result),
+      unlocked: result.unlockedAt !== null,
+    };
+  });
 }

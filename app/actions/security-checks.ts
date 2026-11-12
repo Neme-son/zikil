@@ -4,52 +4,34 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { requireUser } from "@/lib/auth-helpers";
 import { currentOrganisationAccess } from "@/lib/organisation-access";
-import { parseSecurityTarget } from "@/lib/security-checks/target";
-import { addTargetAndCheck } from "@/lib/security-checks/entry";
-import { payForCheck } from "@/lib/security-checks/payment";
+import { unlockFindings } from "@/lib/security-checks/payment";
 
 /**
- * Server actions for the Security box and the pay-or-skip screen
- * (#security-checks, part 1). The database is the handover to the other parts:
- * a new check waits in `awaiting_ownership` for part 2, and `paidAt` is all
- * that paying sets.
+ * Unlocking fixes on Security (#security-checks, plan C1). Adding a site is
+ * the chat's job (security-assistant.ts). The database is the handover to the
+ * other parts: unlocking sets `unlockedAt`, and the engine pays the finder.
  */
-
-export type AddTargetState = { error?: string; input?: string };
 
 const NO_WORKSPACE = "Join or create a workspace to check a site.";
 
 /**
- * Step 1: read the box, store the target and open a check. A target already
- * proven goes on to paying. Otherwise the client goes back to Security, where
- * the new check is highlighted and Continue leads to step 2 (part 2's page).
+ * Unlock fixes (plan C1): every locked finding on the check, or the ones
+ * chosen. Simulated payment: it only sets `unlockedAt`. Then back to Your
+ * sites, with a short note.
  */
-export async function addSecurityTarget(_previous: AddTargetState, form: FormData): Promise<AddTargetState> {
-  const user = await requireUser();
-  const access = await currentOrganisationAccess(user.id, user.role);
-  const raw = form.get("target");
-  const input = typeof raw === "string" ? raw : "";
-  if (!access.organisationId) return { error: NO_WORKSPACE, input };
-
-  const parsed = parseSecurityTarget(input);
-  if (!parsed.ok) return { error: parsed.error, input };
-
-  const added = await addTargetAndCheck(access.organisationId, user.id, parsed.target);
-  revalidatePath("/security");
-  // The first scan is free: a site already proven starts it straight away, so
-  // either way the client goes back to Security with the new check highlighted.
-  redirect(`/security?check=${encodeURIComponent(added.checkId)}&added=1`);
-}
-
-/** Step 3: "Pay 50 coins". Simulated: it only marks the check paid. */
-export async function paySecurityCheck(checkId: string): Promise<{ error?: string }> {
+export async function unlockSecurityFindings(checkId: string, which: "all" | string[]): Promise<{ error?: string }> {
   const user = await requireUser();
   const access = await currentOrganisationAccess(user.id, user.role);
   if (!access.organisationId) return { error: NO_WORKSPACE };
+  const ids = which === "all" ? "all" : which.filter((id) => typeof id === "string").slice(0, 200);
+  if (ids !== "all" && ids.length === 0) return { error: "Choose at least one finding to unlock." };
 
-  const outcome = await payForCheck(checkId, access.organisationId, user.id);
-  if (outcome === "not_found") return { error: "That check isn't in this workspace." };
-  if (outcome === "cancelled") return { error: "That check was cancelled, so there's nothing to pay." };
+  const outcome = await unlockFindings(checkId, access.organisationId, user.id, ids);
+  if (!outcome.ok) {
+    if (outcome.reason === "not_found") return { error: "That check isn't one of yours." };
+    if (outcome.reason === "not_posted") return { error: "The report isn't ready yet. You can unlock fixes once it's posted." };
+    return { error: "Those findings are already unlocked." };
+  }
   revalidatePath("/security");
-  redirect(`/security?check=${encodeURIComponent(checkId)}&paid=1`);
+  redirect(`/security?check=${encodeURIComponent(checkId)}&unlocked=${outcome.unlocked}`);
 }
