@@ -239,9 +239,6 @@ export async function publish(
     },
     select: { id: true },
   });
-  // Track event in publisher deduplication cache (#868)
-  recentPublishedEvents.set(dedupKey, { id: event.id, timestamp: now });
-
   const subscriptions = await db.webhookSubscription.findMany({
     where: { enabled: true, agent: { ...activeIn(params.organisationId), revokedAt: null,
       owner: { memberships: { some: { organisationId: params.organisationId } } } },
