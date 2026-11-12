@@ -21,7 +21,7 @@ export type VerifyState = {
 };
 
 /** Look for the proof, every allowed way, and once one is there go on to pay or skip. */
-export async function verifySecurityTarget(targetId: string, _previous: VerifyState, _form: FormData): Promise<VerifyState> {
+export async function verifySecurityTarget(targetId: string): Promise<VerifyState> {
   const user = await requireUser();
   const access = await currentOrganisationAccess(user.id, user.role);
   if (!access.organisationId) return { error: "Join or create a workspace to check a site." };
