@@ -178,6 +178,77 @@ export async function broadcastWhenCommitted(
   return false;
 }
 
+// ---------------------------------------------------------------------------
+// Publish & Deduplication
+// ---------------------------------------------------------------------------
+
+/**
+ * Publisher event deduplication (#868).
+ *
+ * Prevents duplicate events at the source (e.g. repeated issue.created when
+ * filing, or repeating review.requested). Recently published events are tracked
+ * within a sliding window and duplicates are suppressed so that duplicate
+ * events are not created in the database, delivered via webhooks, added to
+ * inboxes, or broadcast.
+ */
+export const EVENT_DEDUP_WINDOW_MS = 60_000;
+
+type PublishedEventEntry = { id: string; timestamp: number };
+
+const recentPublishedEvents = new Map<string, PublishedEventEntry>();
+
+function pruneRecentPublishedEvents(now = Date.now()): void {
+  for (const [key, entry] of recentPublishedEvents.entries()) {
+    if (now - entry.timestamp > EVENT_DEDUP_WINDOW_MS) {
+      recentPublishedEvents.delete(key);
+    }
+  }
+}
+
+/** Clear tracked events (primarily for test isolation). */
+export function clearRecentPublishedEvents(): void {
+  recentPublishedEvents.clear();
+}
+
+/** Stable JSON serialization for payload comparison. */
+function stableStringify(val: unknown): string {
+  if (val === null || typeof val !== "object") {
+    return JSON.stringify(val);
+  }
+  if (Array.isArray(val)) {
+    return `[${val.map(stableStringify).join(",")}]`;
+  }
+  const obj = val as Record<string, unknown>;
+  const keys = Object.keys(obj).sort();
+  return `{${keys.map((k) => `${JSON.stringify(k)}:${stableStringify(obj[k])}`).join(",")}}`;
+}
+
+/**
+ * Strips volatile timestamps from payload for deduplication comparison.
+ */
+function normalizePayloadForDedup(payload: EventPayload, type: string): unknown {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return payload;
+  }
+  const copy = { ...(payload as Record<string, unknown>) };
+  if (type === "review.requested" || type === "job.review.requested") {
+    delete copy.expiresAt;
+  }
+  return copy;
+}
+
+export function computeEventDeduplicationKey(params: {
+  organisationId: string;
+  type: string;
+  payload: EventPayload;
+  actorAgentId?: string | null;
+  bugId?: string | null;
+  projectId?: string | null;
+}): string {
+  const normPayload = normalizePayloadForDedup(params.payload, params.type);
+  return `${params.organisationId}:${params.type}:${params.bugId ?? ""}:${params.projectId ?? ""}:${params.actorAgentId ?? ""}:${stableStringify(normPayload)}`;
+}
+
 /**
  * Writes one `AgentEvent` row. Call this inside the same transaction that
  * performs the domain change so the event commits atomically with it.
@@ -197,6 +268,20 @@ export async function publish(
     projectId?: string | null;
   },
 ): Promise<{ id: string }> {
+  const now = Date.now();
+  pruneRecentPublishedEvents(now);
+
+  const dedupKey = computeEventDeduplicationKey(params);
+  const existing = recentPublishedEvents.get(dedupKey);
+  if (existing && now - existing.timestamp <= EVENT_DEDUP_WINDOW_MS) {
+    logger.info("suppressed duplicate event at publisher", {
+      type: params.type,
+      bugId: params.bugId,
+      eventId: existing.id,
+    });
+    return { id: existing.id };
+  }
+
   // Ensure payload carries track for issue and idea events if not already set (#M-API-9)
   let payload = params.payload;
   if (payload && typeof payload === "object" && !("track" in payload)) {
@@ -239,6 +324,9 @@ export async function publish(
     },
     select: { id: true },
   });
+  // Track event in publisher deduplication cache (#868)
+  recentPublishedEvents.set(dedupKey, { id: event.id, timestamp: now });
+
   const subscriptions = await db.webhookSubscription.findMany({
     where: { enabled: true, agent: { ...activeIn(params.organisationId), revokedAt: null,
       owner: { memberships: { some: { organisationId: params.organisationId } } } },
