@@ -18,6 +18,7 @@ vi.mock("@/lib/organisation-access", () => ({
 
 vi.mock("@/lib/prisma", () => ({
   prisma: {
+    securityCheck: { findMany: vi.fn().mockResolvedValue([]) },
     agentActivation: {
       findMany: vi.fn().mockResolvedValue([
         {
@@ -120,6 +121,27 @@ describe("SecurityPage (/security)", () => {
     expect(html).not.toContain('href="/issues/2829"');
   });
 
+  it("opens on Check a site, with the box closed and the findings one link away (#security-checks)", async () => {
+    const markup = renderToStaticMarkup(await SecurityPage({}));
+
+    expect(markup).toContain("Check a site");
+    expect(markup).not.toContain('name="target"');
+    expect(markup).toContain('href="/security?view=findings"');
+    expect(markup).toContain('href="/security/work"');
+    expect(markup).not.toContain('href="/security/activity"');
+    expect(markup).not.toContain("Open findings");
+    expect(markup).not.toContain("Apply filters");
+  });
+
+  it("shows the findings dashboard on the Findings view, without the box", async () => {
+    const markup = renderToStaticMarkup(await SecurityPage({ searchParams: Promise.resolve({ view: "findings" }) }));
+
+    expect(markup).toContain("Open findings");
+    expect(markup).toContain("Apply filters");
+    expect(markup).toContain('name="view" value="findings"');
+    expect(markup).not.toContain("Check a site");
+  });
+
   it("renders the Security settings gear link with its accessible name", async () => {
     const markup = renderToStaticMarkup(await SecurityPage({}));
 
@@ -158,7 +180,7 @@ describe("SecurityPage (/security)", () => {
       expect(markup).toContain(text);
     }
     expect(markup).toContain('aria-current="page"');
-    expect(markup).toContain('href="/security#agents-heading"');
+    expect(markup).toContain('href="/security?view=findings#agents-heading"');
   });
 
   it("shows only the no-workspace message when the user has no workspace", async () => {

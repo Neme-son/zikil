@@ -124,13 +124,13 @@ describe("security workflow-stage filters", () => {
       <SecurityStageFilterBar findings={findings} selected="open" severity="critical" />,
     );
 
-    expect(markup).toContain('href="/security?stage=open&amp;severity=critical"');
+    expect(markup).toContain('href="/security?view=findings&amp;stage=open&amp;severity=critical"');
     expect(markup).toContain('aria-current="page"');
     expect(markup).toContain('aria-label="All: 4 open findings"');
     expect(markup).toContain('aria-label="Reported: 1 open finding"');
     expect(markup).toContain('aria-label="Open: 2 open findings"');
     expect(markup).toContain('aria-label="In progress: 1 open finding"');
-    expect(markup).toContain('href="/security?stage=in-progress&amp;severity=critical"');
+    expect(markup).toContain('href="/security?view=findings&amp;stage=in-progress&amp;severity=critical"');
   });
 
   it("filters the loaded open table without revealing redacted finding details", async () => {
@@ -170,8 +170,8 @@ describe("security workflow-stage filters", () => {
     expect(markup).toContain("Critical open finding");
     expect(markup).not.toContain("High open finding");
     expect(markup).not.toContain("Critical in progress");
-    expect(markup).toContain('href="/security?severity=high&amp;stage=open"');
-    expect(markup).toContain('href="/security?stage=in-progress&amp;severity=critical"');
+    expect(markup).toContain('href="/security?view=findings&amp;severity=high&amp;stage=open"');
+    expect(markup).toContain('href="/security?view=findings&amp;stage=in-progress&amp;severity=critical"');
   });
 
   it("shows all findings for an invalid stage and keeps the bar visible with no findings", async () => {
@@ -190,7 +190,7 @@ describe("security workflow-stage filters", () => {
 
     loadDashboard.mockResolvedValueOnce(dashboard([]));
     const emptyPage = renderToStaticMarkup(
-      await SecurityPage({ searchParams: Promise.resolve({}) }),
+      await SecurityPage({ searchParams: Promise.resolve({ view: "findings" }) }),
     );
     expect(emptyPage).toContain('aria-label="All: 0 open findings"');
     expect(emptyPage).toContain('aria-label="Open: 0 open findings"');
@@ -205,7 +205,7 @@ describe("security workflow-stage filters", () => {
 
     expect(markup).toContain("Showing 0 of 1 open finding");
     expect(markup).toContain("No open findings in this stage yet.");
-    expect(markup).toContain('href="/security"');
+    expect(markup).toContain('href="/security?view=findings"');
     expect(markup).toContain(">Show all</a>");
   });
 });

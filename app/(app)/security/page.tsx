@@ -19,6 +19,9 @@ import {
   type SecurityStageFilter,
 } from "@/components/security-stage-filter";
 import { LocalTime } from "@/components/local-time";
+import { SecurityChecksPanel } from "@/components/security-checks/entry-panel";
+import { CheckSiteButton } from "@/components/security-checks/entry-dialog";
+import { listWorkspaceChecks } from "@/lib/security-checks/entry";
 import { OrgPageHeader, ReadOnlyNote, orgCard, orgListCard } from "../[org]/[project]/org/org-ui";
 
 export const metadata = { title: "Security" };
@@ -36,7 +39,14 @@ type SearchParams = Promise<{
   project?: string | string[];
   assignee?: string | string[];
   reporter?: string | string[];
+  check?: string | string[];
+  paid?: string | string[];
+  added?: string | string[];
+  view?: string | string[];
 }>;
+
+const FINDINGS_PATH = "/security?view=findings";
+const FINDINGS_FILTERS = ["severity", "stage", "q", "project", "assignee", "reporter"] as const;
 
 export default async function SecurityPage(props: {
   searchParams?: SearchParams;
@@ -69,6 +79,29 @@ export default async function SecurityPage(props: {
     );
   }
   const organisationId = access.organisationId;
+  // The page opens on the one box (#security-checks). The findings dashboard is
+  // one link away, and any old link that carries a findings filter still lands on it.
+  const showFindings = params.view === "findings" || FINDINGS_FILTERS.some((key) => params[key] !== undefined);
+  if (!showFindings) {
+    const checks = await listWorkspaceChecks(organisationId, user.id);
+    const highlight = typeof params.check === "string" ? { checkId: params.check, paid: params.paid === "1", added: params.added === "1" } : undefined;
+    return (
+      <div className="flex w-full flex-col gap-4 pb-10 sm:gap-6">
+        <OrgPageHeader heading="h1" title="Security" actions={
+          <div className="flex flex-wrap items-center gap-4">
+            <Link href={FINDINGS_PATH} className="text-sm font-semibold text-zk-accent hover:underline">Findings</Link>
+            {/* What your agents are checking (#security-checks). Activity lives with the findings. */}
+            <Link href="/security/work" className="text-sm font-semibold text-zk-accent hover:underline">Your work</Link>
+            <SecuritySettingsLink />
+            {checks.length ? <CheckSiteButton /> : null}
+          </div>
+        }>
+          Agents check your website, servers and code for holes and tell you privately what they find.
+        </OrgPageHeader>
+        <SecurityChecksPanel checks={checks} highlight={highlight} />
+      </div>
+    );
+  }
   const dashboard = await loadSecurityDashboard(organisationId, { kind: "person", userId: user.id, organisationId, organisationAdmin: access.admin }, undefined, search);
   const agents = access.admin
     ? (
@@ -101,7 +134,11 @@ export default async function SecurityPage(props: {
 
   return (
     <div className="flex w-full flex-col gap-4 pb-10 sm:gap-6">
-      <OrgPageHeader heading="h1" title="Security" actions={
+      <nav aria-label="Breadcrumb" className="text-sm text-zk-muted">
+        <Link href="/security" className="font-semibold text-zk-accent hover:underline">Security</Link>
+        <span aria-hidden="true"> / </span>Findings
+      </nav>
+      <OrgPageHeader heading="h1" title="Findings" actions={
         <div className="flex flex-wrap items-center gap-2">
           <Link href="/security/activity" className="text-sm font-semibold text-zk-accent hover:underline">Activity</Link>
           <SecuritySettingsLink />
@@ -112,6 +149,7 @@ export default async function SecurityPage(props: {
       </OrgPageHeader>
 
       <form action="/security" className="grid gap-3 rounded-[20px] border border-zk-border bg-zk-surface p-4 sm:grid-cols-2 lg:grid-cols-4">
+        <input type="hidden" name="view" value="findings" />
         {selectedSeverity !== "all" ? <input type="hidden" name="severity" value={selectedSeverity} /> : null}
         {selectedStage !== "all" ? <input type="hidden" name="stage" value={selectedStage} /> : null}
         <label htmlFor="security-q" className="space-y-1 text-sm text-zk-text2">Finding title or ID<Input id="security-q" name="q" defaultValue={search.q} maxLength={200} /></label>
@@ -172,14 +210,14 @@ export default async function SecurityPage(props: {
         ) : selectedSeverity === "all" && !searchQuery.size ? (
           <p className="mt-3 text-sm text-zk-text2">
             No open findings in this stage yet.{" "}
-            <Link href="/security" className="font-semibold text-zk-accent hover:underline">
+            <Link href={FINDINGS_PATH} className="font-semibold text-zk-accent hover:underline">
               Show all
             </Link>
           </p>
         ) : (
           <p className="mt-3 text-sm text-zk-text2">
             No open findings match these filters.{" "}
-            <Link href="/security" className="font-semibold text-zk-accent hover:underline">
+            <Link href={FINDINGS_PATH} className="font-semibold text-zk-accent hover:underline">
               Show all
             </Link>
           </p>
@@ -248,10 +286,10 @@ export default async function SecurityPage(props: {
 
 function securityFilterHref(severity: "all" | (typeof SECURITY_SEVERITIES)[number], stage: SecurityStageFilter, search?: URLSearchParams) {
   const params = new URLSearchParams(search);
+  params.set("view", "findings");
   if (severity !== "all") params.set("severity", severity);
   if (stage !== "all") params.set("stage", stage);
-  const query = params.toString();
-  return query ? `/security?${query}` : "/security";
+  return `/security?${params.toString()}`;
 }
 
 function Stat({ label, value, hint, alert = false }: { label: string; value: string; hint: string; alert?: boolean }) {

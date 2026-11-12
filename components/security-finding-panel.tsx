@@ -41,7 +41,7 @@ export function SecurityFindingPanel({ view, canDisclose, kind }: { view: Findin
           <span>
             Disclosed{view.disclosedAt ? <> <LocalTime date={view.disclosedAt} /></> : null}. Its details are now public below.
           </span>
-          <Link href="/security" className="font-semibold text-zk-accent hover:underline">All findings</Link>
+          <Link href="/security?view=findings" className="font-semibold text-zk-accent hover:underline">All findings</Link>
         </p>
       </section>
     );

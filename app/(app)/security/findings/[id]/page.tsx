@@ -52,11 +52,11 @@ export default async function FindingPage({ params, searchParams }: {
     kind: "person", userId: user.id, organisationId: access.organisationId, organisationAdmin: access.admin,
   })) notFound();
 
-  const query = new URLSearchParams();
+  const query = new URLSearchParams({ view: "findings" });
   for (const key of ["severity", "stage", "q", "project", "assignee", "reporter"] as const) {
     if (typeof filters[key] === "string") query.set(key, filters[key]);
   }
-  const back = query.size ? "/security?" + query.toString() : "/security";
+  const back = "/security?" + query.toString();
   const project = refOf(finding.project);
   const bug = finding.bug;
   const idea = finding.idea?.isDeleted ? null : finding.idea;
