@@ -1533,11 +1533,12 @@ export async function IssuesList({
             askOnLoad={isIdeasView && unconfiguredAgents.length === 0}
           />
         ) : null}
-        {/* Goals, project notes and settings, as icons, beside the tabs. */}
+        {/* Goals, project notes, clusters and settings, as icons, beside the tabs. */}
         {!isDeletedView ? (
           <ProjectIconLinks
             goalsHref={canContribute ? projectPath(ref, "/goals") : undefined}
             notesHref={canContribute ? projectPath(ref, "/notes") : undefined}
+            clustersHref={canContribute ? projectPath(ref, "/clusters") : undefined}
             settingsHref={isOrgAdmin ? `/projects/${encodeURIComponent(slug)}/settings` : undefined}
           />
         ) : null}
