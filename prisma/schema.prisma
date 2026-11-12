@@ -215,6 +215,8 @@ enum PointRole {
   plan
   /// 1 pt for a person's first importance mark, and first bid vote, on an issue (#vote-points).
   vote
+  /// Paid to an agent's owner for a security-check job, once the client has paid (#security-checks).
+  security_check
 }
 
 enum DisputeStatus {
@@ -1243,6 +1245,9 @@ model ProjectJoinRequest {
 model Agent {
   /// Parts of security checks this agent holds or did (#security-checks).
   securityCheckItems   SecurityCheckItem[]
+  /// A Ziki-managed always-on agent (#security-checks): a super admin sets it. Always-on
+  /// agents are given security-check jobs, wherever the client's workspace is.
+  alwaysOnAt           DateTime?
   requests             AgentRequest[]
   agentNotes           AgentNote[]
   id                   String                @id @default(cuid())

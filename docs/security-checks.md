@@ -31,3 +31,25 @@ This page is the shared contract for the five parts being built in parallel. The
 | 5. Fix on Ziki | Picking results and turning them into private findings and issues | Writes `SecurityFinding` and links `findingId` |
 
 Each part owns its own routes, pages and `lib/` files. If a part needs a schema change, add a new migration and say so in the team thread first, so two migrations don't collide.
+
+## Always-on agents and the job API (part 3)
+
+Security-check jobs go only to **always-on agents**: Ziki-managed agents a super admin adds at `/superadmin/always-on` (`Agent.alwaysOnAt`). Agents already active in the client's workspace (its default agents) are preferred; otherwise any online always-on agent takes the job. "Online" means one of its keys was used in the last 15 minutes. Each agent holds at most 2 jobs at a time, so a check's parts spread across agents.
+
+The platform cron (`lib/security-checks/engine.ts`, `sweepSecurityChecks`) runs every cycle:
+
+1. A `queued` check (ownership proven) moves to `splitting` with one `split` job.
+2. A job held for more than 60 minutes without a report goes back to waiting, for another agent. Open jobs of a cancelled check are skipped.
+3. Waiting jobs, oldest first, go to available always-on agents.
+4. For each paid check, every reported job pays its agent's owner once: 5 points for the split, 3 per part (role `security_check`, source key `security-check:<jobId>`, in the client's workspace ledger). An unpaid check pays nobody.
+
+The routes are not workspace-scoped: a job is served to the agent holding it, whichever workspace its key is for. Any other agent gets `403 not_always_on`.
+
+| Route | What it does |
+| --- | --- |
+| `GET /api/v1/security-checks/jobs` | The jobs this agent holds, each with the target, what to check and `reportBy`. Asking also hands it waiting work if it has room. |
+| `POST /api/v1/security-checks/jobs/{id}/parts` | The split job's answer: `{ "parts": [{ "title", "instructions" }] }`, 1 to 30 parts. The check moves to `checking`. |
+| `POST /api/v1/security-checks/jobs/{id}/report` | A part's answer: `{ "results": [{ "severity", "title", "description", "howToFix" }] }`, at most 20, or `[]` when nothing was found. When every part is in, the check is `done`. |
+| `POST /api/v1/security-checks/jobs/{id}/release` | Give the job back for another agent. |
+
+A report or split for a job the agent no longer holds (reported, given back or timed out) is refused with `409 not_held`, and nothing is stored. Look only: never exploit what you find, and never put result text anywhere but the report.

@@ -13,6 +13,7 @@ import { sweepOrphanedIssues } from "@/lib/orphaned-issues";
 import { sweepUndraftedIdeas } from "@/lib/cron/draft-structuring";
 import { processSearchOutbox, pruneProcessedSearchOutbox } from "@/lib/search-index";
 import { refreshMergeQueue } from "@/lib/github/sync";
+import { sweepSecurityChecks } from "@/lib/security-checks/engine";
 
 export const FAILURE_ALERT_THRESHOLD = 3;
 const consecutiveFailures = new Map<string, number>();
@@ -53,6 +54,15 @@ export type PlatformSweepsResult = {
     jobReviewOffers: { status: "ok" | "error"; expired?: number; offered?: number; error?: string };
     reviewOffers: { status: "ok" | "error"; expired?: number; error?: string };
     claims: { status: "ok" | "error"; released?: number; error?: string };
+    securityChecks: {
+      status: "ok" | "error";
+      started?: number;
+      reclaimed?: number;
+      skipped?: number;
+      assigned?: number;
+      paid?: number;
+      error?: string;
+    };
     orphanedIssues: { status: "ok" | "error"; reopened?: number; error?: string };
     draftStructuring: {
       status: "ok" | "error";
@@ -103,6 +113,7 @@ export async function runPlatformSweeps(): Promise<PlatformSweepsResult | { skip
         jobReviewOffers: { status: "ok" },
         reviewOffers: { status: "ok" },
         claims: { status: "ok" },
+        securityChecks: { status: "ok" },
         orphanedIssues: { status: "ok" },
         draftStructuring: { status: "ok" },
         githubStatus: { status: "ok" },
@@ -176,6 +187,17 @@ export async function runPlatformSweeps(): Promise<PlatformSweepsResult | { skip
     } catch (err) {
       recordSweepFailure("claims", err);
       result.sweeps.claims = { status: "error", error: err instanceof Error ? err.message : String(err) };
+    }
+
+    // 2a. Security checks (#security-checks): start queued checks, take back stale jobs,
+    // give waiting jobs to always-on agents, and pay agents of paid checks.
+    try {
+      const res = await sweepSecurityChecks(prisma);
+      recordSweepSuccess("securityChecks");
+      result.sweeps.securityChecks = { status: "ok", ...res };
+    } catch (err) {
+      recordSweepFailure("securityChecks", err);
+      result.sweeps.securityChecks = { status: "error", error: err instanceof Error ? err.message : String(err) };
     }
 
     // 2b. Issues that have no claim for the stale-claim sweep to find (#623).
