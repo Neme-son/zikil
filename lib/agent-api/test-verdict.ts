@@ -88,6 +88,7 @@ export type TestVerdictBody = z.infer<typeof testVerdictBodySchema>;
 
 /** What the independence rule and the claim-holder check need about an issue. */
 const reviewedBugSelect = {
+  outsideWork: { select: { agentId: true } },
   id: true,
   title: true,
   organisationId: true,

@@ -39,7 +39,7 @@ function sectionOf(pathname: string, ref: ProjectRef): string[] {
     return second && IDEA_LISTS[second] ? ["Ideas", IDEA_LISTS[second]] : ["Ideas"];
   }
   if (first === "issues") return (ISSUE_LISTS[second ?? "all"] ?? ["Issues"]).filter((part): part is string => Boolean(part));
-  const named: Record<string, string> = { notes: "Notes", org: "Organisation", workstream: "Workstream", features: "Feature plans" };
+  const named: Record<string, string> = { notes: "Notes", org: "Organisation", workstream: "Workstream", features: "Feature plans", import: "Import delivered work" };
   return named[first] ? [named[first]] : [];
 }
 
@@ -80,6 +80,7 @@ export function ProjectBreadcrumb({ project }: { project: BreadcrumbProject }) {
           </>
         )}
       </ol>
+      {ref ? <Link href={`${projectPath(ref)}/import`} className={`${crumb} ml-auto shrink-0 text-zk-accent`}>Import work</Link> : null}
     </nav>
   );
 }
