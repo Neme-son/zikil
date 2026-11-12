@@ -10,7 +10,12 @@ const db = vi.hoisted(() => ({
   idempotencyKey: { findUnique: vi.fn(), create: vi.fn(), update: vi.fn(), deleteMany: vi.fn() },
   issueType: { findUnique: vi.fn() },
   bug: { findMany: vi.fn(), count: vi.fn(), groupBy: vi.fn(), findFirst: vi.fn() },
-  idea: { findMany: vi.fn(), count: vi.fn(), findFirst: vi.fn(), findUniqueOrThrow: vi.fn(), groupBy: vi.fn() },
+  idea: { create: vi.fn(), findMany: vi.fn(), count: vi.fn(), findFirst: vi.fn(), findUnique: vi.fn(), findUniqueOrThrow: vi.fn(), groupBy: vi.fn() },
+  user: { upsert: vi.fn() },
+  featurePlan: { upsert: vi.fn(), findFirst: vi.fn(), update: vi.fn() },
+  featurePlanItem: { findMany: vi.fn(), create: vi.fn() },
+  // #security-findings: no idea in these tests is a private finding.
+  securityFinding: { findUnique: vi.fn(async () => null) },
   ideaVerdict: { groupBy: vi.fn(async () => []) },
   category: { findMany: vi.fn() },
   projectArea: { findMany: vi.fn() },
@@ -21,6 +26,10 @@ const db = vi.hoisted(() => ({
   $transaction: vi.fn(),
 }));
 const indexedSearch = vi.hoisted(() => vi.fn());
+const featurePublish = vi.hoisted(() => vi.fn());
+const featureMembership = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/agent-api/events", () => ({ publish: featurePublish }));
+vi.mock("@/lib/project-permissions", () => ({ canContributeToProject: featureMembership }));
 vi.mock("@/lib/prisma", () => ({ prisma: db }));
 vi.mock("@/lib/search-index", () => ({ searchWorkItems: indexedSearch }));
 
@@ -36,6 +45,8 @@ vi.mock("@/lib/project-context", () => ({ activeProjectIdFor: activeProject.get 
 const rateLimit = vi.hoisted(() => ({ consume: vi.fn() }));
 vi.mock("@/lib/rate-limit", () => ({
   consumeRateLimit: rateLimit.consume,
+  consumeRateLimits: rateLimit.consume,
+  clientRateLimitKey: () => "ip:203.0.113.7",
   RATE_LIMIT_MESSAGE: "Please wait before searching again.",
 }));
 
@@ -64,6 +75,11 @@ import { GET as suggestIssues } from "@/app/api/issues/suggest/route";
 import { NextRequest } from "next/server";
 import { structureIdea } from "@/lib/idea-structuring";
 import { parseIdeaTrack } from "@/lib/marketing/idea-track";
+import { createPublicIdea, findPublicIdeaMatches, publicIdeaSchema } from "@/lib/public-idea-intake";
+import { POST as submitPublicIdea } from "@/app/api/public/projects/[org]/[project]/ideas/route";
+import { createFeaturePlan, featureProject, featureWorkState, findFeatureWork, publishFeaturePlan, saveFeaturePlan } from "@/lib/feature-plans";
+import { generateFeatureDraft } from "@/lib/feature-plan-generation";
+import { featureDraftSchema, type FeatureDraft } from "@/lib/validations/feature-plan";
 
 const NOW = new Date("2026-10-19T12:00:00Z");
 const agent = { agentId: "agent1", organisationId: "organisation_zedu" };
@@ -80,9 +96,23 @@ const input = (overrides: Partial<CreatePolicyInput> = {}): CreatePolicyInput =>
   ...overrides,
 });
 const similarRow = { id: "b1", number: 12, title: "Login button does nothing in Safari", status: "open", voteCount: 3, score: 0.8 };
+const publicProject = { id: "public-project", name: "Ziki", organisationId: "organisation_zedu" };
+const publicHeaders = new Headers({ "x-forwarded-for": "203.0.113.7", "user-agent": "test-browser" });
+const publicInput = (overrides: Record<string, unknown> = {}) => ({
+  title: "Public issue intake drops the report",
+  summary: "A signed-out report disappears after submission.",
+  description: "Submitting the public form does not create an idea for review.",
+  stepsToReproduce: "Open the public project page and submit the report form.",
+  expectedBehavior: "The report is saved as an idea.",
+  actualBehavior: "The report disappears.",
+  website: "",
+  acknowledgeSimilar: false,
+  trackingToken: "a".repeat(32),
+  ...overrides,
+});
 const idea = {
   id: "i1", number: 12, title: "Export activity as CSV", summary: "People want a CSV.", description: "People want their data.",
-  track: "product" as const, rationale: null as string | null, status: "open" as const, score: 3, typeId: null, areaId: null, proofLinks: [], projectId: "p1",
+  source: "internal", track: "product" as const, rationale: null as string | null, status: "open" as const, score: 3, typeId: null, areaId: null, proofLinks: [], projectId: "p1",
   reporterId: "ada", beneficiaryUserId: "ada", createdByAgentId: null, convertedAt: null, archiveReason: null,
   archiveEvidence: null, archiveDuplicateOf: null, archivedAt: null, archivedByAgentId: null,
   createdAt: new Date("2026-10-20T10:00:00Z"), updatedAt: new Date("2026-10-20T10:00:00Z"), area: null, issue: null,
@@ -154,10 +184,170 @@ beforeEach(() => {
   db.idea.findMany.mockResolvedValue([idea]);
   db.idea.count.mockResolvedValue(1);
   db.idea.findFirst.mockResolvedValue({ id: "i1" });
+  db.idea.findUnique.mockResolvedValue(null);
+  db.idea.create.mockResolvedValue({ id: "public-idea", number: 77 });
   db.idea.findUniqueOrThrow.mockResolvedValue({ ...idea, attachments: [] });
+  db.user.upsert.mockResolvedValue({ id: "public-reporter" });
   db.bug.count.mockResolvedValue(1);
   indexedSearch.mockRejectedValue(new Error("Typesense is unavailable in this test."));
   insert.mockResolvedValue({ id: "new-idea" });
+});
+
+describe("signed-out public idea intake (#3464)", () => {
+  const ref = { orgSlug: "zedu", projectSlug: "web" };
+  const emit = vi.fn().mockResolvedValue({ id: "event-1" });
+
+  beforeEach(() => {
+    db.project.findFirst.mockResolvedValue(publicProject);
+    rateLimit.consume.mockResolvedValue({ allowed: true, retryAfterMs: 0 });
+    emit.mockClear();
+  });
+
+  it("is unavailable unless the project is public and explicitly opted in", async () => {
+    db.project.findFirst.mockResolvedValue(null);
+
+    await expect(createPublicIdea(ref, publicInput(), publicHeaders, {
+      db: db as never,
+      consume: rateLimit.consume,
+      emit,
+    })).resolves.toMatchObject({ status: 404, error: "not_found" });
+    expect(db.idea.create).not.toHaveBeenCalled();
+  });
+
+  it("bounds duplicate searches before querying the project", async () => {
+    await expect(findPublicIdeaMatches(ref, "x".repeat(201), publicHeaders, {
+      db: db as never,
+      consume: rateLimit.consume,
+    })).resolves.toMatchObject({ status: 400, error: "invalid_request" });
+    expect(db.project.findFirst).not.toHaveBeenCalled();
+  });
+
+  it("shows scoped duplicate candidates before it creates anything", async () => {
+    db.$queryRaw.mockResolvedValue([{ ...similarRow, kind: "issue" }]);
+
+    await expect(createPublicIdea(ref, publicInput(), publicHeaders, {
+      db: db as never,
+      consume: rateLimit.consume,
+      emit,
+    })).resolves.toMatchObject({
+      status: 409,
+      error: "similar_ideas",
+      matches: [{ kind: "issue", number: 12, title: similarRow.title, status: "open" }],
+    });
+    expect(db.idea.create).not.toHaveBeenCalled();
+  });
+
+  it("creates an ordinary public-source idea with a synthetic reporter and hashed tracking token", async () => {
+    const result = await createPublicIdea(ref, publicInput({ acknowledgeSimilar: true }), publicHeaders, {
+      db: db as never,
+      consume: rateLimit.consume,
+      emit,
+    });
+
+    expect(result).toEqual({
+      status: 201,
+      ideaId: "public-idea",
+      ideaNumber: 77,
+      trackingPath: `/zedu/web/track/${"a".repeat(32)}`,
+      replayed: false,
+    });
+    expect(db.user.upsert).toHaveBeenCalledWith(expect.objectContaining({
+      create: expect.objectContaining({
+        email: expect.stringMatching(/@system\.ziki\.invalid$/),
+        passwordHash: null,
+        emailNotifications: false,
+      }),
+    }));
+    const created = db.idea.create.mock.calls[0][0].data;
+    expect(created).toMatchObject({
+      source: "public",
+      reporterId: "public-reporter",
+      beneficiaryUserId: "public-reporter",
+      organisationId: "organisation_zedu",
+      projectId: "public-project",
+      track: "product",
+    });
+    expect(created.publicTrackingTokenHash).toMatch(/^[a-f0-9]{64}$/);
+    expect(created.publicTrackingTokenHash).not.toContain("a".repeat(32));
+    expect(emit).toHaveBeenCalledWith(db, expect.objectContaining({
+      type: "idea.created",
+      payload: expect.objectContaining({ source: "public", ideaId: "public-idea" }),
+    }));
+  });
+
+  it("replays the same tracking token without consuming another limit or creating another idea", async () => {
+    db.idea.findUnique.mockResolvedValue({ id: "existing", number: 76, projectId: publicProject.id });
+
+    await expect(createPublicIdea(ref, publicInput(), publicHeaders, {
+      db: db as never,
+      consume: rateLimit.consume,
+      emit,
+    })).resolves.toMatchObject({ status: 200, ideaId: "existing", replayed: true });
+    expect(rateLimit.consume).not.toHaveBeenCalled();
+    expect(db.idea.create).not.toHaveBeenCalled();
+  });
+
+  it("rejects honeypot submissions and rate-limited clients", async () => {
+    await expect(createPublicIdea(ref, publicInput({ website: "https://spam.test" }), publicHeaders, {
+      db: db as never,
+      consume: rateLimit.consume,
+      emit,
+    })).resolves.toMatchObject({ status: 400, error: "bot_detected" });
+    expect(db.project.findFirst).not.toHaveBeenCalled();
+
+    rateLimit.consume.mockResolvedValue({ allowed: false, retryAfterMs: 2_500 });
+    await expect(createPublicIdea(ref, publicInput(), publicHeaders, {
+      db: db as never,
+      consume: rateLimit.consume,
+      emit,
+    })).resolves.toMatchObject({ status: 429, error: "rate_limited", retryAfterSeconds: 3 });
+    expect(db.idea.create).not.toHaveBeenCalled();
+  });
+
+  it("sanitizes markup while allowing reports to describe URL schemes as text", () => {
+    const sanitized = publicIdeaSchema.parse(publicInput({
+      summary: "<b>A public report is not stored after submission.</b>",
+      description: "<!-- template -->The report is not stored after submission.",
+    }));
+    expect(sanitized.summary).toBe("A public report is not stored after submission.");
+    expect(sanitized.description).not.toContain("template");
+    expect(publicIdeaSchema.safeParse(publicInput({ description: "Open javascript:alert(1) after submitting; expected data: 5." })).success).toBe(true);
+  });
+
+  it("rejects cross-origin and oversized API submissions before database work", async () => {
+    const context = { params: Promise.resolve({ org: "zedu", project: "web" }) };
+    const crossOrigin = new NextRequest("https://ziki.dev/api/public/projects/zedu/web/ideas", {
+      method: "POST",
+      headers: { "content-type": "application/json", origin: "https://attacker.test" },
+      body: JSON.stringify(publicInput()),
+    });
+    expect((await submitPublicIdea(crossOrigin, context)).status).toBe(403);
+
+    const oversized = new NextRequest("https://ziki.dev/api/public/projects/zedu/web/ideas", {
+      method: "POST",
+      headers: { "content-type": "application/json", "content-length": String(25 * 1024), origin: "https://ziki.dev", host: "ziki.dev" },
+      body: "{}",
+    });
+    expect((await submitPublicIdea(oversized, context)).status).toBe(413);
+    expect(db.project.findFirst).not.toHaveBeenCalled();
+  });
+
+  it("accepts the public forwarded host when the server request URL uses its bind address", async () => {
+    const context = { params: Promise.resolve({ org: "zedu", project: "web" }) };
+    const proxied = new NextRequest("http://0.0.0.0:3000/api/public/projects/zedu/web/ideas", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        origin: "https://ziki.dev",
+        host: "0.0.0.0:3000",
+        "x-forwarded-host": "ziki.dev",
+      },
+      body: JSON.stringify(publicInput({ acknowledgeSimilar: true })),
+    });
+
+    expect((await submitPublicIdea(proxied, context)).status).toBe(201);
+    expect(db.idea.create).toHaveBeenCalled();
+  });
 });
 
 describe("creating an idea", () => {
@@ -507,6 +697,147 @@ describe("structuring an idea as it is submitted", () => {
 });
 
 /** Already vetted: an idea the owner says was approved elsewhere skips the verdicts, with a note and a daily limit. */
+describe("feature plans feed the existing idea lifecycle", () => {
+  const user = { id: "owner", role: "user" as const, name: "Owner" };
+  const project = { id: "p1", name: "Appointments", slug: "web", goal: null, organisationId: "t1", organisation: { slug: "team" } };
+  const request = { title: "Appointment booking", request: "Customers can book an available appointment and receive confirmation." };
+  const makeDraft = (): FeatureDraft => ({
+    outcome: "A customer can book an available appointment and see confirmation.",
+    definitionOfDone: ["A booking reserves the selected time and shows confirmation."],
+    tasks: [
+      { title: "Book an available appointment", description: "Let customers choose an available time and reserve it.", acceptanceCriteria: ["A booked time is no longer available."], scope: "first", existing: null },
+      { title: "Reschedule a booking", description: "Let customers move an existing booking to another available time.", acceptanceCriteria: ["Rescheduling releases the old time."], scope: "later", existing: null },
+    ],
+  });
+  let plan: { id: string; projectId: string; creatorId: string; title: string; request: string; draft: FeatureDraft; version: number; publishedAt: Date | null };
+  let receipts: Array<{ position: number; ideaId?: string | null; bugId?: string | null }>;
+  beforeEach(() => {
+    plan = { id: "plan1", projectId: "p1", creatorId: user.id, ...request, draft: makeDraft(), version: 1, publishedAt: null };
+    receipts = [];
+    featureMembership.mockResolvedValue(true);
+    db.project.findFirst.mockResolvedValue(project);
+    db.featurePlan.findFirst.mockImplementation(async ({ where }) => where.creatorId === plan.creatorId && where.projectId === plan.projectId ? plan : null);
+    db.featurePlan.update.mockImplementation(async ({ data }) => { plan = { ...plan, ...data, version: data.version ? plan.version + 1 : plan.version }; return { id: plan.id, version: plan.version }; });
+    db.featurePlanItem.findMany.mockImplementation(async () => receipts);
+    db.featurePlanItem.create.mockImplementation(async ({ data }) => { receipts.push(data); return data; });
+    db.idea.create.mockImplementation(async () => ({ id: `idea-${receipts.length}`, number: receipts.length + 1 }));
+    featurePublish.mockResolvedValue(undefined);
+  });
+
+  it("refuses non-members before searching, drafting or writing in a public project", async () => {
+    featureMembership.mockResolvedValue(false);
+    await expect(featureProject(user, "p1")).rejects.toThrow(/membership/);
+    await expect(findFeatureWork(user, "p1", "appointment")).rejects.toThrow(/membership/);
+    await expect(createFeaturePlan(user, "p1", "new", request, makeDraft())).rejects.toThrow(/membership/);
+    await expect(publishFeaturePlan(user, "p1", plan.id, 1, "first")).rejects.toThrow(/membership/);
+    expect(db.idea.create).not.toHaveBeenCalled();
+    expect(db.featurePlan.upsert).not.toHaveBeenCalled();
+  });
+
+  it("keeps a saved draft out of the idea/work queues", async () => {
+    db.featurePlan.upsert.mockResolvedValue({ id: "new", version: 1, ...request, draft: makeDraft() });
+    await expect(createFeaturePlan(user, "p1", "new", request, makeDraft())).resolves.toEqual({ id: "new", version: 1 });
+    expect(db.idea.create).not.toHaveBeenCalled();
+    expect(featurePublish).not.toHaveBeenCalled();
+  });
+
+  it("refuses to silently discard changed content when a draft creation is retried", async () => {
+    db.featurePlan.upsert.mockResolvedValue({ id: "new", version: 1, ...request, draft: makeDraft() });
+    const edited = makeDraft(); edited.outcome = "A changed outcome that must not be silently discarded.";
+    await expect(createFeaturePlan(user, "p1", "new", request, edited)).rejects.toThrow(/already saved/);
+    expect(db.idea.create).not.toHaveBeenCalled();
+  });
+
+  it("prevents another creator, stale editors and changes to published scope", async () => {
+    await expect(saveFeaturePlan({ ...user, id: "other" }, "p1", plan.id, 1, request, makeDraft())).rejects.toThrow(/not found/);
+    await saveFeaturePlan(user, "p1", plan.id, 1, request, makeDraft());
+    await expect(saveFeaturePlan(user, "p1", plan.id, 1, request, makeDraft())).rejects.toThrow(/another tab/);
+    await expect(publishFeaturePlan(user, "p1", plan.id, 1, "first")).rejects.toThrow(/another tab/);
+    plan.publishedAt = NOW;
+    await expect(saveFeaturePlan(user, "p1", plan.id, 2, request, makeDraft())).rejects.toThrow(/Published plans/);
+  });
+
+  it("publishes only the first version as ordinary ideas and makes response-loss retries idempotent", async () => {
+    await expect(publishFeaturePlan(user, "p1", plan.id, 1, "first")).resolves.toEqual({ created: 1, linked: 0, replayed: false });
+    expect(db.idea.create).toHaveBeenCalledOnce();
+    const created = db.idea.create.mock.calls[0][0].data;
+    expect(created).toMatchObject({ projectId: "p1", organisationId: "t1", reporterId: user.id, beneficiaryUserId: user.id });
+    expect(created.status).toBeUndefined(); // The normal open idea default; no conversion or approval bypass.
+    expect(created.description).toContain(plan.draft.outcome);
+    expect(created.description).toContain(plan.draft.definitionOfDone[0]);
+    expect(created.description).toContain("/team/web/features/plan1");
+    expect(featurePublish).toHaveBeenCalledWith(db, expect.objectContaining({ type: "idea.created", projectId: "p1" }));
+    await expect(publishFeaturePlan(user, "p1", plan.id, 1, "first")).resolves.toEqual({ created: 0, linked: 0, replayed: true });
+    expect(db.idea.create).toHaveBeenCalledOnce();
+    await expect(publishFeaturePlan(user, "p1", plan.id, 1, "later")).resolves.toEqual({ created: 1, linked: 0, replayed: false });
+    await publishFeaturePlan(user, "p1", plan.id, 1, "later");
+    expect(db.idea.create).toHaveBeenCalledTimes(2);
+  });
+
+  it("refuses later publication before first-version review", async () => {
+    await expect(publishFeaturePlan(user, "p1", plan.id, 1, "later")).rejects.toThrow(/first version/);
+    expect(db.idea.create).not.toHaveBeenCalled();
+  });
+
+  it("links existing project work without rewriting it or filing another idea", async () => {
+    plan.draft.tasks[0].existing = "issue:existing";
+    db.bug.findFirst.mockResolvedValue({ id: "existing" });
+    await expect(publishFeaturePlan(user, "p1", plan.id, 1, "first")).resolves.toEqual({ created: 0, linked: 1, replayed: false });
+    expect(db.bug.findFirst).toHaveBeenCalledWith({ where: expect.objectContaining({ id: "existing", projectId: "p1", organisationId: "t1", isDeleted: false, track: "product" }), select: { id: true } });
+    expect(receipts[0]).toMatchObject({ position: 0, bugId: "existing", ideaId: null });
+    expect(db.idea.create).not.toHaveBeenCalled();
+    expect(featurePublish).not.toHaveBeenCalled();
+  });
+
+  it("rejects deleted, foreign-project or invented links before creating any new ideas", async () => {
+    plan.draft.tasks[1] = { ...plan.draft.tasks[1], scope: "first", existing: "idea:foreign" };
+    db.idea.findFirst.mockResolvedValue(null);
+    await expect(publishFeaturePlan(user, "p1", plan.id, 1, "first")).rejects.toThrow(/no longer available/);
+    expect(db.idea.findFirst).toHaveBeenCalledWith({ where: expect.objectContaining({ id: "foreign", projectId: "p1", organisationId: "t1", isDeleted: false }), select: { id: true } });
+    expect(db.idea.create).not.toHaveBeenCalled();
+    expect(db.featurePlanItem.create).not.toHaveBeenCalled();
+  });
+
+  it("does not finish publication when event delivery recording fails", async () => {
+    featurePublish.mockRejectedValueOnce(new Error("event storage unavailable"));
+    await expect(publishFeaturePlan(user, "p1", plan.id, 1, "first")).rejects.toThrow(/event storage/);
+    expect(db.featurePlanItem.create).not.toHaveBeenCalled();
+    expect(plan.publishedAt).toBeNull();
+  });
+
+  it("requires a first version, bounded criteria and unique existing references", () => {
+    const laterOnly = makeDraft(); laterOnly.tasks.forEach((task) => { task.scope = "later"; });
+    expect(featureDraftSchema.safeParse(laterOnly).success).toBe(false);
+    const repeated = makeDraft(); repeated.tasks.forEach((task) => { task.existing = "idea:same"; });
+    expect(featureDraftSchema.safeParse(repeated).success).toBe(false);
+    expect(featureDraftSchema.safeParse({ ...makeDraft(), definitionOfDone: [] }).success).toBe(false);
+  });
+
+  it("keeps idea verdicts, issue delivery and actual deployment distinct, including unavailable work", () => {
+    const issue = { isDeleted: false, status: "done", substatus: "accepted" };
+    expect(featureWorkState({ idea: null, bug: issue })).toEqual({ kind: "issue", status: "done", substatus: "accepted" });
+    expect(featureWorkState({ idea: { isDeleted: false, status: "converted", issue: { ...issue, status: "resolved", substatus: "on_prod" } }, bug: null })).toMatchObject({ kind: "issue", substatus: "on_prod" });
+    expect(featureWorkState({ idea: { isDeleted: false, status: "rejected", issue: null }, bug: null })).toMatchObject({ kind: "idea", status: "rejected" });
+    expect(featureWorkState({ idea: null, bug: { ...issue, isDeleted: true } })).toMatchObject({ kind: "unavailable" });
+    expect(featureWorkState({ idea: { isDeleted: true, status: "open", issue: null }, bug: null })).toMatchObject({ kind: "unavailable" });
+  });
+
+  it("never trusts generated references and returns no proposal when AI is unavailable", async () => {
+    vi.stubEnv("ZIKI_CLAUDE_API_KEY", "");
+    const context = { project: project.name, goal: null, brief: null, notes: null, work: [] };
+    expect(await generateFeatureDraft(request, context)).toBeNull();
+    vi.stubEnv("ZIKI_CLAUDE_API_KEY", "test");
+    const proposed = makeDraft(); proposed.tasks[0].existing = "issue:invented";
+    claude.parse.mockResolvedValueOnce({ stop_reason: "end_turn", parsed_output: proposed });
+    const constrained = { ...request, request: `${request.request}\n\nConstraints:\nNo payments in the first version.` };
+    const result = await generateFeatureDraft(constrained, context);
+    expect(JSON.parse(claude.parse.mock.calls.at(-1)![0].messages[0].content).request.request).toContain("No payments in the first version.");
+    expect(result?.tasks[0].existing).toBeNull();
+    claude.parse.mockRejectedValueOnce(new Error("offline"));
+    expect(await generateFeatureDraft(request, context)).toBeNull();
+  });
+});
+
 describe("already vetted ideas", () => {
   const owner = { agentId: "agent1", name: "Ada's Claude", ownerId: "ada", organisationId: "t1", level: "working" as const, burst: false, keyId: "k1" };
 

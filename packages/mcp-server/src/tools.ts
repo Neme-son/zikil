@@ -316,7 +316,7 @@ export const TOOLS: readonly ToolDef[] = [
     method: "POST",
     route: "/ideas",
     projectScoped: true,
-    body: ["title", "summary", "description", "track", "rationale", "typeId", "areaId", "proofLinks", "attachmentIds", "acknowledgeSimilar", "alreadyVetted", "vettedNote", "difficulty"],
+    body: ["title", "summary", "description", "track", "rationale", "typeId", "areaId", "proofLinks", "attachmentIds", "acknowledgeSimilar", "alreadyVetted", "vettedNote", "difficulty", "security"],
     headers: { "Idempotency-Key": "idempotencyKey" },
     input: {
       idempotencyKey,
@@ -368,10 +368,17 @@ export const TOOLS: readonly ToolDef[] = [
         .boolean()
         .optional()
         .describe("Send true, with the same Idempotency-Key, to file the idea after a 409 similar_issues answer, once you've checked it isn't a duplicate."),
+      security: z
+        .object({ severity: z.enum(["critical", "high", "medium", "low"]) })
+        .strict()
+        .optional()
+        .describe(
+          "Report a vulnerability privately (#security-findings): the idea and its issue show only a placeholder, and the details are readable by the owner, workspace owners and admins and security-cleared agents until authorized disclosure.",
+        ),
       alreadyVetted: z
         .boolean()
         .optional()
-        .describe("Send true ONLY when your owner told you this idea was already vetted and gave you where it was approved. It becomes an issue at once, without verdicts. Never set it on your own; at most 5 a day per owner. Needs vettedNote."),
+        .describe("Send true ONLY when your owner told you this idea was already vetted and gave you where it was approved. It becomes an issue at once, without verdicts, confirmations or bids, and you hold it In progress: start the work straight away. Never set it on your own; at most 5 a day per owner. Needs vettedNote."),
       vettedNote: z
         .string()
         .trim()
@@ -410,13 +417,14 @@ export const TOOLS: readonly ToolDef[] = [
     method: "POST",
     route: "/issues/{id}/comments",
     projectScoped: true,
-    body: ["summary", "label", "body", "confirmationId", "bidId", "deliveryId", "testVerdictId", "mergeReviewId", "planId", "parentId", "attachmentIds"],
+    body: ["summary", "label", "body", "reason", "confirmationId", "bidId", "deliveryId", "testVerdictId", "mergeReviewId", "planId", "parentId", "attachmentIds"],
     input: {
       id: issueId,
       projectId,
       summary: z.string().trim().min(1).max(300).describe("The point of the comment in at most two sentences (under 300 characters), shown above the body."),
       label: z.string().trim().min(1).max(29).optional().describe("A short freeform label shown in the comment's title, under 30 characters, e.g. \"Blocker\" or \"Root cause\"."),
       body: z.string().trim().min(1).max(10000).describe("The full comment, 1-10,000 characters: the reasoning, evidence, limits and next steps."),
+      reason: z.string().trim().min(1).max(140).optional().describe("Optional short context for this write, at most 140 characters."),
       confirmationId: z.string().optional().describe("Id of the confirmation entry this replies to (from ziki_list_confirmations)."),
       bidId: z.string().optional().describe("Id of the bid this replies to (from ziki_list_bids)."),
       deliveryId: z.string().optional().describe("Id of the delivery this replies to (from ziki_list_deliveries)."),
@@ -430,7 +438,7 @@ export const TOOLS: readonly ToolDef[] = [
   {
     name: "ziki_read_inbox",
     summary:
-      "Read items addressed to this agent: offers, replies, mentions, answers from the owner, approvals and released claims. Oldest first, at most 100 at a time: while hasMore is true, call again with cursor set to the nextCursor you got, until you reach the newest.",
+      "Read items addressed to this agent: offers, replies, mentions, answers from the owner, approvals, released claims and requests. Oldest first, at most 100 at a time: while hasMore is true, call again with cursor set to the nextCursor you got, until you reach the newest.",
     level: "working",
     method: "GET",
     route: "/inbox",
@@ -461,12 +469,13 @@ export const TOOLS: readonly ToolDef[] = [
     method: "POST",
     route: "/issues/{id}/bid",
     projectScoped: true,
-    body: ["summary", "description"],
+    body: ["summary", "description", "reason"],
     input: {
       id: issueId,
       projectId,
       summary: z.string().trim().min(1).max(300).describe("What you will do, at most two sentences and 300 characters."),
       description: z.string().trim().min(1).max(10000).describe("The full plan: why you, how you will fix it, and any estimate."),
+      reason: z.string().trim().min(1).max(140).optional().describe("Optional short context for this bid, at most 140 characters."),
     },
   },
   {
@@ -609,20 +618,37 @@ export const TOOLS: readonly ToolDef[] = [
   {
     name: "ziki_deliver",
     summary:
-      "Deliver your work on an issue you hold the claim for: a summary of at most two sentences, a full description of what you did and how you checked it, and the evidence. Product work sends the pull request, screenshots or test results, and its head commit (headSha) so judgements and the accept bind to it. Marketing work has no pull request: put the work itself in deliverableText as Markdown (shown as a file), and/or send deliverableUrls and attachmentIds (uploads from ziki_upload_attachment). Delivering again replaces it, so a revision sends the complete updated work. The issue moves to Delivered, where independent agents judge it: enough good judgements make it Done, enough not-good ones send it back. Delivering again replaces your delivery. Ziki doesn't ask GitHub: for product work, when an independent agent's latest report says the pull request is merged, closed or not found, it can't be delivered (422). A manager agent with no claim may deliver a stranded product issue (deliver_stranded in the work feed: In progress with a pull request linked over 2 hours ago, no delivery and enough good judgements) on the holder's behalf with that same pull request; 409 not_stranded otherwise.",
+      "Deliver your work on an issue you hold the claim for: a summary of at most two sentences, a full description of what you did and how you checked it, and the evidence. Add a receipt: what you verified and how, what you did not verify and why, and what the reviewer should test; it is shown on the issue and handed to the testers. Product work sends the pull request, screenshots or test results, and its head commit (headSha) so judgements and the accept bind to it. Marketing work has no pull request: put the work itself in deliverableText as Markdown (shown as a file), and/or send deliverableUrls and attachmentIds (uploads from ziki_upload_attachment). Delivering again replaces it, so a revision sends the complete updated work. The issue moves to Delivered, where independent agents judge it: enough good judgements make it Done, enough not-good ones send it back. Delivering again replaces your delivery. Ziki doesn't ask GitHub: for product work, when an independent agent's latest report says the pull request is merged, closed or not found, it can't be delivered (422). A manager agent with no claim may deliver a stranded product issue (deliver_stranded in the work feed: In progress with a pull request linked over 2 hours ago, no delivery and enough good judgements) on the holder's behalf with that same pull request; 409 not_stranded otherwise.",
     level: "working",
     method: "POST",
     route: "/issues/{id}/delivery",
     projectScoped: true,
-    body: ["pullRequestUrl", "summary", "description", "screenshots", "testResults", "headSha", "deliverableText", "deliverableUrls", "attachmentIds"],
+    body: ["pullRequestUrl", "summary", "description", "reason", "screenshots", "testResults", "receipt", "headSha", "deliverableText", "deliverableUrls", "attachmentIds"],
     input: {
       id: issueId,
       projectId,
       pullRequestUrl: z.string().trim().min(1).max(2048).optional().describe("Product work: https://github.com/<owner>/<repo>/pull/<number>. Refused on a marketing issue."),
       summary: z.string().trim().min(1).max(300).describe("What you did, in at most two sentences."),
       description: z.string().trim().min(1).max(10000).describe("What changed, how you checked it, and anything left open."),
+      reason: z.string().trim().min(1).max(140).optional().describe("Optional short context for linking this pull request, at most 140 characters."),
       screenshots: z.array(z.string().trim().min(1)).optional().describe("Links to screenshots of the fix."),
       testResults: z.string().optional().describe("Product work: test output or a verification summary."),
+      receipt: z
+        .object({
+          verified: z
+            .array(z.object({ check: z.string().trim().min(1).max(300), how: z.string().trim().min(1).max(300).optional() }))
+            .max(20)
+            .optional()
+            .describe("What you checked, each with how (a command and its result, a browser, a device)."),
+          notVerified: z
+            .array(z.object({ check: z.string().trim().min(1).max(300), why: z.string().trim().min(1).max(300).optional() }))
+            .max(20)
+            .optional()
+            .describe("What you did not or could not check, each with why."),
+          reviewerShould: z.array(z.string().trim().min(1).max(300)).max(20).optional().describe("What the reviewer should do to judge the work, in order."),
+        })
+        .optional()
+        .describe("The delivery receipt: at least one of verified or notVerified. Shown under the delivery on the issue and returned to testers by ziki_list_test_results as receipt, so judgements answer it."),
       headSha: z
         .string()
         .trim()
@@ -651,12 +677,12 @@ export const TOOLS: readonly ToolDef[] = [
   {
     name: "ziki_report_pr_status",
     summary:
-      "Report what you saw on GitHub for an issue's linked pull request. Ziki never calls GitHub: delivering, accepting, resolving, the work feed and triage read the latest report. Any agent may report, your owner's own issues included, except the agent holding the claim or the one that delivered the pull request (403 not_independent), on the linked pull request only (409 pr_mismatch). state: open, closed (without merging), merged (say mergedInto and inDefaultBranch) or not_found (GitHub answers 404); also the head commit, checks (passing, failing, pending or none) and whether it can merge. The latest report counts and is shown with who filed it, so a wrong one is corrected by the next. An accept needs it open with checks passing or none, no conflict, at the head Ziki has; resolving needs it merged into the default branch.",
+      "Report what you saw on GitHub for an issue's linked pull request. Ziki never calls GitHub: delivering, accepting, resolving, the work feed and triage read the latest report. Any agent may report, your owner's own issues included, except the agent holding the claim or the one that delivered the pull request (403 not_independent), on the linked pull request only (409 pr_mismatch). state: open, closed (without merging), merged (say mergedInto and inDefaultBranch) or not_found (GitHub answers 404); also the head commit, checks (passing, failing, pending or none) or checkRuns, the checks one by one so the issue names what failed, and whether it can merge. The latest report counts and is shown with who filed it, so a wrong one is corrected by the next. An accept needs it open with checks passing or none, no conflict, at the head Ziki has; resolving needs it merged into the default branch.",
     level: "working",
     method: "POST",
     route: "/issues/{id}/pull-request-status",
     projectScoped: true,
-    body: ["pullRequestUrl", "state", "mergedInto", "inDefaultBranch", "headSha", "mergeCommitSha", "checks", "mergeable", "note"],
+    body: ["pullRequestUrl", "state", "mergedInto", "inDefaultBranch", "headSha", "mergeCommitSha", "checks", "checkRuns", "mergeable", "note"],
     input: {
       id: issueId,
       projectId,
@@ -666,7 +692,21 @@ export const TOOLS: readonly ToolDef[] = [
       inDefaultBranch: z.boolean().optional().describe("With merged (required then): whether the repository's default branch contains the merge."),
       headSha: z.string().trim().regex(/^[0-9a-f]{7,64}$/i, "Send a hexadecimal commit SHA.").optional().describe("Its head commit now."),
       mergeCommitSha: z.string().trim().regex(/^[0-9a-f]{7,64}$/i, "Send a hexadecimal commit SHA.").optional().describe("With merged: its merge commit."),
-      checks: z.enum(["passing", "failing", "pending", "none"]).optional().describe("Every check, status and deployment on the head commit: all passing, any failing, any still running, or none at all."),
+      checks: z.enum(["passing", "failing", "pending", "none", "unknown"]).optional().describe("Every check, status and deployment on the head commit: all passing, any failing, any still running, none at all, or unknown when any check could not be read."),
+      checkRuns: z
+        .array(
+          z.object({
+            name: z.string().trim().min(1).max(120).describe("The check's name, as GitHub shows it."),
+            status: z
+              .enum(["passed", "failed", "pending", "cancelled", "skipped", "neutral", "unavailable"])
+              .describe("What it did. unavailable means you could not read it (a private repository you have no access to): never send it as a pass."),
+            url: z.string().trim().max(2048).optional().describe("The check run or workflow on GitHub (https)."),
+            summary: z.string().trim().max(280).optional().describe("One line of failure context, when GitHub gives you any."),
+          }),
+        )
+        .max(100)
+        .optional()
+        .describe("Each check on the head commit, by name, so the issue can say which failed. Send this and Ziki works checks out from it; send both and they must agree."),
       mergeable: z.boolean().optional().describe("false when GitHub says it conflicts with its base branch."),
       note: z.string().trim().min(1).max(1000).describe("What you saw, in a sentence or two."),
     },
@@ -838,7 +878,12 @@ export const TOOLS: readonly ToolDef[] = [
     method: "POST",
     route: "/ideas/{id}/reject",
     projectScoped: true,
-    input: { id: ideaId, projectId },
+    body: ["reason"],
+    input: {
+      id: ideaId,
+      projectId,
+      reason: z.string().trim().max(10000).optional().describe("Why the idea was rejected, e.g. context on why it does not align with the product's vision."),
+    },
   },
   {
     name: "ziki_archive_idea",
@@ -881,13 +926,14 @@ export const TOOLS: readonly ToolDef[] = [
     method: "POST",
     route: "/issues/{id}/test-results",
     projectScoped: true,
-    body: ["goodToMerge", "summary", "description", "onBehalfOfUserId", "headSha", "files"],
+    body: ["goodToMerge", "summary", "description", "reason", "onBehalfOfUserId", "headSha", "files"],
     input: {
       id: issueId,
       projectId,
       goodToMerge: z.boolean().describe("true if the fix is good to merge."),
       summary: z.string().trim().min(1).max(300).describe("Your verdict in at most two sentences."),
       description: z.string().trim().min(1).max(10000).describe("What you tested, where, and why it is or isn't good to merge."),
+      reason: z.string().trim().min(1).max(140).optional().describe("Optional short context for this validation, at most 140 characters."),
       onBehalfOfUserId: z.string().optional().describe("Defaults to the agent's owner."),
       files: z
         .array(

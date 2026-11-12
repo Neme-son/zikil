@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useMarketingArea } from "@/components/marketing/marketing-area";
-import { ideasPath, type ProjectRef } from "@/lib/project-paths";
+import { ideasPath, orgPath, type ProjectRef } from "@/lib/project-paths";
 import { useProjectRef } from "@/lib/use-project-ref";
 import { SignOutButton } from "@/components/sign-out-button";
 import { OrganisationSwitcher, type OrganisationOption, type ExternalProjectChoice } from "@/components/organisation-switcher";
@@ -12,10 +12,14 @@ import {
   MANAGE_AGENTS_HREF,
   isNavItemActive,
   marketingTabHref,
+  MY_STAKES_HREF,
   realRoleOf,
   roleViewLabels,
 } from "@/lib/header-nav";
 import { type AppRole } from "@/lib/roles";
+import { type OrganisationRole } from "@/lib/organisation-role";
+import { roleAccessFor, type RoleAccess } from "@/lib/role-access";
+import { RoleAccessBadge } from "@/components/role-access-tooltip";
 import { Avatar } from "@/components/avatar";
 import { AccountThemeSelector } from "@/components/theme-toggle";
 import { CookieSettingsLink } from "@/components/consent-banner";
@@ -25,9 +29,8 @@ import { LocalTime } from "@/components/local-time";
 import { BASE_PATH } from "@/lib/base-path";
 import { PAGE_CONTAINER_CLASS } from "@/components/page-container";
 import { ZikiMark } from "@/components/ziki-mark";
-import { EarnPill } from "@/components/earn-pill";
-import { isEarnPath } from "@/lib/earn/paths";
-import type { WithdrawInfo } from "@/lib/earn/draft";
+import { formatZ } from "@/lib/points/rules";
+import { WithdrawWindow } from "@/components/withdraw-window";
 
 const linkFocus =
   "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-electric-blue focus-visible:ring-offset-2";
@@ -152,6 +155,12 @@ function TopNav({ pathname, projectSlug }: { pathname: string | null; projectSlu
         <NavIcon>
           <path d="M12 3 4 6v6c0 4.5 3.4 8.3 8 9 4.6-.7 8-4.5 8-9V6l-8-3Z" />
           <path d="m9 12 2 2 4-4" />
+        </NavIcon>
+      </TopNavLink>
+      <TopNavLink href="/discover" active={isNavItemActive(pathname, "/discover")} label="Discover">
+        <NavIcon>
+          <circle cx="12" cy="12" r="9" />
+          <path d="m15.5 8.5-2 5-5 2 2-5 5-2Z" />
         </NavIcon>
       </TopNavLink>
       <TopNavLink href="/forum" active={isNavItemActive(pathname, "/forum")} label="Forum">
@@ -283,21 +292,19 @@ export function AppHeader({
   organisationOptions = [],
   externalProjects = [],
   activeOrganisationId = null,
+  organisationRole = null,
   reportFormUrl,
   defaultProjectSlug = null,
   earned = null,
-  inEarnOrganisation = false,
-  withdraw = null,
+  earningsOrganisationId = null,
   version,
 }: {
   /** The running version (package version), shown with Cookie settings at the foot of the account menu. */
   version?: string;
-  /** Earn (#earn-drafts): what the Withdraw window shows; null for everyone else. */
-  withdraw?: WithdrawInfo | null;
-  /** Earn (#earn-drafts): an earner's dollars, shown with Withdraw in the header; null for everyone else. */
+  /** Earnings (#earnings): what the person earned in the workspace they're in, shown with Withdraw on every page; null when unknown. */
   earned?: number | null;
-  /** The person is working in the Earn organisation: the header is Earn's on every page there. */
-  inEarnOrganisation?: boolean;
+  /** The workspace the $ and Withdraw are for (#earnings): the one the person is in. */
+  earningsOrganisationId?: string | null;
   /** The first project in the current organisation, for pages whose URL names none yet. */
   defaultProjectSlug?: ProjectRef | null;
   userName?: string | null;
@@ -311,6 +318,8 @@ export function AppHeader({
   organisationOptions?: OrganisationOption[];
   externalProjects?: ExternalProjectChoice[];
   activeOrganisationId?: string | null;
+  /** The person's role in the organisation they are in, for the role tooltip in the account menu. */
+  organisationRole?: OrganisationRole | null;
   reportFormUrl?: string;
 }) {
   const pathname = usePathname();
@@ -328,18 +337,22 @@ export function AppHeader({
   }
 
   const realRole = realRoleOf({ isRealSuperAdmin, isRealAdmin });
-  // Earn (#earn-drafts): an earner on the earn pages, or anywhere in the Earn organisation, sees only what they came for.
-  const earnQuiet = earned !== null && (isEarnPath(pathname) || inEarnOrganisation);
+  // The workspace the header $ is for, named so the amount is never read as the total (#862).
+  const activeOrganisationName = organisationOptions.find((organisation) => organisation.id === activeOrganisationId)?.name ?? null;
+  const roleAccess = roleAccessFor(organisationRole, realRole);
+  // There is no request form yet: the members page names the admins who can change a role.
+  const requestAccessHref = projectSlug ? orgPath(projectSlug, "members") : "/organisations";
+  const earningsWorkspaceName = organisationOptions.find((organisation) => organisation.id === earningsOrganisationId)?.name ?? null;
 
   return (
     // Sticky only from lg: on phones and tablets the toolbar wraps onto rows,
     // and a header that tall pinned to the top covers the page under it.
     <header className="relative z-40 border-b border-zk-border bg-zk-surface shadow-[0_1px_3px_rgba(0,0,0,0.04)] lg:sticky lg:top-0">
-      <div className={`${PAGE_CONTAINER_CLASS} flex flex-wrap items-center gap-x-3 gap-y-2 py-3 max-sm:py-2 sm:px-6 ${earnQuiet ? "max-sm:flex-nowrap" : ""}`}>
+      <div className={`${PAGE_CONTAINER_CLASS} flex flex-wrap items-center gap-x-3 gap-y-2 py-3 max-sm:flex-nowrap max-sm:gap-x-2 max-sm:py-2 sm:px-6`}>
         {/* Below lg the nav lives in the bottom strip, leaving one row here.
             The logo (the mark alone) is the way to the Dashboard. */}
         <div className="flex min-w-0 items-center gap-2">
-          <Link href={earnQuiet ? "/earn/home" : projectSlug ? ideasPath(projectSlug) : "/home"} aria-label="Ziki" className={`flex shrink-0 items-center gap-2 rounded-full ${linkFocus}`}>
+          <Link href={projectSlug ? ideasPath(projectSlug) : "/home"} aria-label="Ziki" className={`flex shrink-0 items-center gap-2 rounded-full ${linkFocus}`}>
             {/* The mark alone; the link's name says Ziki. */}
             <ZikiMark className="h-8 w-auto text-zk-text max-sm:h-7" />
           </Link>
@@ -349,22 +362,39 @@ export function AppHeader({
             externalProjects={externalProjects}
             activeOrganisationId={activeOrganisationId}
             tone="bar"
-            className={`min-w-0 max-sm:max-w-44 ${earnQuiet ? "max-sm:hidden" : ""}`}
+            className="min-w-0"
           />
         </div>
 
-        {/* Earn (#earn-drafts): an earner on the earn pages sees none of the builders' links. */}
-        {earnQuiet ? null : <TopNav pathname={pathname} projectSlug={projectSlug} />}
+        <TopNav pathname={pathname} projectSlug={projectSlug} />
 
-        {/* Phones and tablets: min-w-0 lets the group narrow so its flex-wrap
-            breaks the chips onto rows (no sideways scroll at 360px or 768px).
-            From lg up it keeps shrink-0 so the account controls are never
-            squeezed. */}
-        <div className={`ml-auto flex min-w-0 items-center justify-end gap-2 max-sm:gap-1 lg:shrink-0 ${earnQuiet ? "max-sm:flex-nowrap" : "flex-wrap"}`}>
-          {earned !== null && withdraw ? (
-            // Earn (#earn-drafts): the balance as one pill, in reach from every page. It drops a panel down (the bar, the
-            // next task, Withdraw); Withdraw opens a window over the page, never another page.
-            <EarnPill info={withdraw} />
+        {/* Phones: one row. These controls never wrap or shrink; the workspace
+            name on the left narrows (down to its badge) instead. Tablets: min-w-0
+            lets the group narrow and its flex-wrap break the chips onto rows (no
+            sideways scroll at 768px). From lg up it keeps shrink-0. */}
+        <div className={`ml-auto flex min-w-0 items-center justify-end gap-2 max-sm:shrink-0 max-sm:flex-nowrap max-sm:gap-1.5 lg:shrink-0 flex-wrap`}>
+          {earned !== null ? (
+            // Earnings (#earnings), on every page: the amount opens Your earnings; Withdraw opens a window over the page.
+            <div className="inline-flex h-10 shrink-0 items-center gap-1 rounded-full border border-zk-border bg-zk-surface p-1">
+              <Link
+                href={projectSlug ? `/earnings?in=${projectSlug}` : "/earnings"}
+                aria-current={isNavItemActive(pathname, "/earnings") ? "page" : undefined}
+                title={earningsWorkspaceName ? `Earned in ${earningsWorkspaceName}. Your earnings adds up every workspace.` : undefined}
+                className={`rounded-full px-2.5 py-1 text-sm font-bold tabular-nums text-zk-text hover:bg-zk-chip ${linkFocus}`}
+              >
+                {formatZ(earned)}
+                <span className="sr-only"> earned{earningsWorkspaceName ? ` in ${earningsWorkspaceName}` : ""}: Your earnings</span>
+              </Link>
+              <WithdrawWindow earned={earned} organisationId={earningsOrganisationId} className={`inline-flex items-center justify-center rounded-full bg-electric-blue-strong px-3 py-1.5 text-xs font-bold text-white hover:bg-[#2552af] max-sm:h-8 max-sm:w-8 max-sm:p-0 ${linkFocus}`}>
+                {/* Phones: a wallet icon; tablets and up: the word. Either way it is called Withdraw. */}
+                <svg viewBox="0 0 24 24" className="h-[18px] w-[18px] sm:hidden" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M19 7V5a2 2 0 0 0-2-2H5a2 2 0 0 0 0 4h14a2 2 0 0 1 2 2v3" />
+                  <path d="M3 5v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-3" />
+                  <path d="M21 12h-4a2 2 0 0 0 0 4h4z" />
+                </svg>
+                <span className="max-sm:sr-only">Withdraw</span>
+              </WithdrawWindow>
+            </div>
           ) : null}
 
           <div ref={accountRef} className="relative">
@@ -375,7 +405,7 @@ export function AppHeader({
               aria-expanded={accountOpen}
               aria-controls="account-menu"
               onClick={() => setAccountOpen((open) => !open)}
-              className={`inline-flex h-11 max-w-full items-center gap-2 rounded-full border border-zk-border bg-zk-surface py-[5px] pl-[5px] pr-3 text-zk-text hover:bg-zk-chip ${linkFocus}`}
+              className={`inline-flex h-11 max-w-full items-center gap-2 rounded-full border border-zk-border bg-zk-surface py-[5px] pl-[5px] pr-3 text-zk-text hover:bg-zk-chip max-sm:h-auto max-sm:border-0 max-sm:p-0 ${linkFocus}`}
             >
               <span className="sr-only">Account menu for </span>
               <Avatar name={userName} image={userImage} size="md" variant="solid" />
@@ -397,12 +427,19 @@ export function AppHeader({
                   userName={userName}
                   userImage={userImage}
                   realRole={realRole}
+                  roleAccess={roleAccess}
+                  organisationName={activeOrganisationName}
+                  requestAccessHref={requestAccessHref}
                 />
                 <AccountThemeSelector />
                 <div className="mx-2 h-px bg-zk-divider" />
                 {/* What your agents are doing and what needs you (#849). */}
                 <MenuLink href="/activity" active={isNavItemActive(pathname, "/activity")}>
                   Activity
+                </MenuLink>
+                {/* Your agents' stakes on issues and ideas, with their clocks (#my-stakes). */}
+                <MenuLink href={MY_STAKES_HREF} active={isNavItemActive(pathname, MY_STAKES_HREF)}>
+                  My stakes
                 </MenuLink>
                 <MenuLink href={MANAGE_AGENTS_HREF} active={Boolean(pathname?.startsWith(MANAGE_AGENTS_HREF))}>
                   Manage agents
@@ -412,6 +449,10 @@ export function AppHeader({
                 </MenuLink>
                 <MenuLink href="/docs" active={isNavItemActive(pathname, "/docs")}>
                   Documentation
+                </MenuLink>
+                {/* The skills library is public, but signed-in people look for it here (GAP 1). */}
+                <MenuLink href="/skills" active={isNavItemActive(pathname, "/skills")}>
+                  Skills library
                 </MenuLink>
                 <div className="mx-2 h-px bg-zk-divider" />
                 <SignOutButton
@@ -431,7 +472,7 @@ export function AppHeader({
           </div>
 
           {/* Escalations, as an envelope, then the bell last. */}
-          {earnQuiet ? null : <InboxEnvelope key={`${userId}:${activeOrganisationId}:${pathname}`} unreadCount={unreadCount} pendingEscalations={pendingEscalationsCount} active={isNavItemActive(pathname, "/inbox")} />}
+          <InboxEnvelope key={`${userId}:${activeOrganisationId}:${pathname}`} unreadCount={unreadCount} pendingEscalations={pendingEscalationsCount} active={isNavItemActive(pathname, "/inbox")} />
         </div>
       </div>
     </header>
@@ -442,19 +483,31 @@ function AccountSummary({
   userName,
   userImage,
   realRole,
+  roleAccess,
+  organisationName,
+  requestAccessHref,
 }: {
   userName?: string | null;
   userImage?: string | null;
   realRole: AppRole;
+  /** What the role can do, when there is a summary for it; the badge then explains itself on hover. */
+  roleAccess: RoleAccess | null;
+  organisationName: string | null;
+  requestAccessHref: string;
 }) {
   const roleLabel = realRole === "user" ? "Member" : roleViewLabels[realRole];
   return (
-    <div className="flex items-center gap-3 rounded-[14px] bg-zk-tint p-3">
+    // Relative: the role tooltip is positioned against this row, so it is as wide as the menu.
+    <div className="relative flex items-center gap-3 rounded-[14px] bg-zk-tint p-3">
       <Avatar name={userName} image={userImage} size="lg" variant="solid" />
       <div className="min-w-0">
         <p className="truncate text-base font-extrabold text-zk-text">{userName}</p>
         <p className="mt-1 flex flex-wrap items-center gap-1.5 text-xs">
-          <span className="rounded-full bg-zk-surface px-2 py-0.5 font-bold text-zk-text2">{roleLabel}</span>
+          {roleAccess ? (
+            <RoleAccessBadge label={roleLabel} access={roleAccess} organisationName={organisationName} requestHref={requestAccessHref} />
+          ) : (
+            <span className="rounded-full bg-zk-surface px-2 py-0.5 font-bold text-zk-text2">{roleLabel}</span>
+          )}
         </p>
       </div>
     </div>

@@ -4,6 +4,7 @@ import { sweepExpiredOffers } from "@/lib/agent-api/offer";
 import { sweepPlanWindows } from "@/lib/agent-api/plan";
 import { sweepStakes } from "@/lib/agent-api/stakes";
 import { sweepJobReviewOffers } from "@/lib/jobs/review";
+import { sweepReviewOffers } from "@/lib/agent-api/review-offer";
 import { sweepStaleClaims } from "@/lib/agent-api/availability";
 import { dispatchDueDeliveries } from "@/lib/webhooks/deliver";
 import { pruneAgentRows, type AgentRetentionCounts } from "@/lib/agent-retention";
@@ -12,6 +13,7 @@ import { sweepOrphanedIssues } from "@/lib/orphaned-issues";
 import { sweepUndraftedIdeas } from "@/lib/cron/draft-structuring";
 import { processSearchOutbox, pruneProcessedSearchOutbox } from "@/lib/search-index";
 import { refreshMergeQueue } from "@/lib/github/sync";
+import { sweepSecurityChecks } from "@/lib/security-checks/engine";
 
 export const FAILURE_ALERT_THRESHOLD = 3;
 const consecutiveFailures = new Map<string, number>();
@@ -50,7 +52,17 @@ export type PlatformSweepsResult = {
     plans: { status: "ok" | "error"; expired?: number; error?: string };
     stakes: { status: "ok" | "error"; settled?: number; error?: string };
     jobReviewOffers: { status: "ok" | "error"; expired?: number; offered?: number; error?: string };
+    reviewOffers: { status: "ok" | "error"; expired?: number; error?: string };
     claims: { status: "ok" | "error"; released?: number; error?: string };
+    securityChecks: {
+      status: "ok" | "error";
+      started?: number;
+      reclaimed?: number;
+      skipped?: number;
+      assigned?: number;
+      paid?: number;
+      error?: string;
+    };
     orphanedIssues: { status: "ok" | "error"; reopened?: number; error?: string };
     draftStructuring: {
       status: "ok" | "error";
@@ -99,7 +111,9 @@ export async function runPlatformSweeps(): Promise<PlatformSweepsResult | { skip
         plans: { status: "ok" },
         stakes: { status: "ok" },
         jobReviewOffers: { status: "ok" },
+        reviewOffers: { status: "ok" },
         claims: { status: "ok" },
+        securityChecks: { status: "ok" },
         orphanedIssues: { status: "ok" },
         draftStructuring: { status: "ok" },
         githubStatus: { status: "ok" },
@@ -152,6 +166,19 @@ export async function runPlatformSweeps(): Promise<PlatformSweepsResult | { skip
       };
     }
 
+    // 1c. PR Review Offers (#592)
+    try {
+      const res = await sweepReviewOffers();
+      recordSweepSuccess("reviewOffers");
+      result.sweeps.reviewOffers = { status: "ok", expired: res.expired };
+    } catch (err) {
+      recordSweepFailure("reviewOffers", err);
+      result.sweeps.reviewOffers = {
+        status: "error",
+        error: err instanceof Error ? err.message : String(err),
+      };
+    }
+
     // 2. Stale Claims
     try {
       const res = await sweepStaleClaims();
@@ -160,6 +187,17 @@ export async function runPlatformSweeps(): Promise<PlatformSweepsResult | { skip
     } catch (err) {
       recordSweepFailure("claims", err);
       result.sweeps.claims = { status: "error", error: err instanceof Error ? err.message : String(err) };
+    }
+
+    // 2a. Security checks (#security-checks): start queued checks, take back stale jobs,
+    // give waiting jobs to always-on agents, and pay agents of paid checks.
+    try {
+      const res = await sweepSecurityChecks(prisma);
+      recordSweepSuccess("securityChecks");
+      result.sweeps.securityChecks = { status: "ok", ...res };
+    } catch (err) {
+      recordSweepFailure("securityChecks", err);
+      result.sweeps.securityChecks = { status: "error", error: err instanceof Error ? err.message : String(err) };
     }
 
     // 2b. Issues that have no claim for the stale-claim sweep to find (#623).
@@ -243,6 +281,7 @@ export async function runPlatformSweeps(): Promise<PlatformSweepsResult | { skip
     logger.info("[cron] Platform sweeps finished", {
       offers: result.sweeps.offers,
       jobReviewOffers: result.sweeps.jobReviewOffers,
+      reviewOffers: result.sweeps.reviewOffers,
       claims: result.sweeps.claims,
       orphanedIssues: result.sweeps.orphanedIssues,
       draftStructuring: result.sweeps.draftStructuring,

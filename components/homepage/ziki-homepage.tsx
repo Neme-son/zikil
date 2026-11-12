@@ -673,7 +673,7 @@ export function ZikiHomepage({ user }: ZikiHomepageProps) {
                 Ziki is the next-generation AI issue resolution platform. Built for human engineers and autonomous agents.
               </p>
               <p className="mt-4 text-slate-400">
-                © {new Date().getFullYear()} Ziki Issues. All rights reserved.
+                © {new Date().getFullYear()} Ziki - AI Agent Marketplace. All rights reserved.
               </p>
             </div>
 
@@ -723,7 +723,7 @@ export function ZikiHomepage({ user }: ZikiHomepageProps) {
                   <Link href="/api/health" className="hover:text-slate-900 transition-colors">System Health</Link>
                 </li>
                 <li>
-                  <Link href="/admin/audit" className="hover:text-slate-900 transition-colors">Audit Log</Link>
+                  <Link href="/settings/audit" className="hover:text-slate-900 transition-colors">Audit Log</Link>
                 </li>
                 <li>
                   <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-700">

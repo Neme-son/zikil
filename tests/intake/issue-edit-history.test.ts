@@ -55,6 +55,32 @@ vi.mock("@/lib/points/correct", () => ({
   correct: correctMock,
 }));
 
+const publishAgentEventMock = vi.hoisted(() => vi.fn(async () => undefined));
+vi.mock("@/lib/agent-api/events", () => ({ publish: publishAgentEventMock }));
+
+const auditAgentMock = vi.hoisted(() => vi.fn(async () => undefined));
+vi.mock("@/lib/agents/audit", () => ({ audit: auditAgentMock }));
+
+const issueIdForMock = vi.hoisted(() => vi.fn(async () => "bug-1"));
+vi.mock("@/lib/issue-ref", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/issue-ref")>()),
+  issueIdFor: issueIdForMock,
+}));
+
+const readAgentIssueMock = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/agent-api/issues", () => ({
+  IssueApiError: class IssueApiError extends Error {
+    constructor(public status: number, message: string) { super(message); }
+  },
+  readAgentIssue: readAgentIssueMock,
+}));
+
+const findSimilarIssuesMock = vi.hoisted(() => vi.fn(async () => []));
+vi.mock("@/lib/agent-api/create-policy", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/agent-api/create-policy")>()),
+  findSimilarIssues: findSimilarIssuesMock,
+}));
+
 const db = vi.hoisted(() => {
   const tx = {
     bug: { update: vi.fn(), updateMany: vi.fn() },
@@ -63,13 +89,29 @@ const db = vi.hoisted(() => {
     bugRevision: { create: vi.fn() },
     issueConfirmation: { deleteMany: vi.fn() },
     pointEntry: { findFirst: vi.fn(), update: vi.fn() },
-    $queryRaw: vi.fn(async () => [{ title: "Original Title", description: "Original Description" }]),
+    agentAuditEvent: { update: vi.fn() },
+    $queryRaw: vi.fn(async () => [{
+      title: "Original Title",
+      description: "Original Description",
+      categoryId: "category-1",
+      typeId: "type-1",
+      duplicateOfId: null,
+      status: "open",
+      substatus: "open",
+    }]),
+
   };
   return {
     tx,
     prisma: {
-      bug: { findUnique: vi.fn() },
+      bug: { findUnique: vi.fn(), findFirst: vi.fn() },
+      category: { findMany: vi.fn(async () => []) },
+      issueType: { findMany: vi.fn(async () => [] as { id: string; name: string }[]) },
       user: { findMany: vi.fn() },
+      agentAuditEvent: { findFirst: vi.fn() },
+      pullRequestReport: { findFirst: vi.fn() },
+      // #security-findings: none of these issues is a private finding.
+      securityFinding: { findFirst: vi.fn(async () => null) },
       $transaction: vi.fn(async (fn: (client: typeof tx) => unknown) => fn(tx)),
     },
   };
@@ -78,6 +120,7 @@ const db = vi.hoisted(() => {
 vi.mock("@/lib/prisma", () => ({ prisma: db.prisma }));
 
 import { editBugContentAction, editPullRequestUrlAction } from "@/app/actions/issues";
+import { structureIssue } from "@/lib/agent-api/structure";
 import { canEditTicket, TICKET_EDIT_ERRORS } from "@/lib/ticket-editing";
 import { buildVersions } from "@/lib/issue-revisions";
 import { requireUser } from "@/lib/auth-helpers";
@@ -208,6 +251,118 @@ describe("the edit history", () => {
   });
 });
 
+describe("agent structure edit history (#589)", () => {
+  const agent = { agentId: "agent-1", ownerId: "editor-1", tenantId: "tenant-zedu" } as never;
+
+  beforeEach(() => {
+    db.prisma.bug.findFirst.mockResolvedValue(existingBug({
+      projectId: "project-zedu",
+      categoryId: "category-1",
+      typeId: "type-1",
+      duplicateOfId: null,
+      status: "open",
+      substatus: "open",
+      createdByAgent: null,
+      claims: [],
+    }));
+    db.tx.$queryRaw.mockResolvedValue([{
+      title: "Original Title",
+      description: "Original Description",
+      categoryId: "category-1",
+      typeId: "type-1",
+      duplicateOfId: null,
+      status: "open",
+      substatus: "open",
+    }]);
+    isConfirmedMock.mockResolvedValue(true);
+    db.tx.pointEntry.findFirst.mockResolvedValue({
+      id: "entry-1",
+      tenantId: "tenant-zedu",
+      userId: "reporter-1",
+      bugId: "bug-1",
+      role: "reporter",
+      points: 1.5,
+    });
+    readAgentIssueMock.mockResolvedValue({ id: "bug-1", title: "Updated Title", confirmed: false });
+  });
+
+  it("records a revision and returns an Open issue for confirmation after restructuring", async () => {
+    const result = await structureIssue(agent, "project-zedu", "bug-1", {
+      title: "Updated Title",
+      description: "Updated Description",
+      checkDuplicates: false,
+    });
+
+    expect(result.issue.confirmed).toBe(false);
+    expect(isConfirmedMock).toHaveBeenCalledWith("bug-1", db.tx);
+    expect(db.tx.bugRevision.create).toHaveBeenCalledWith({
+      data: {
+        bugId: "bug-1",
+        title: "Original Title",
+        description: "Original Description",
+        editedById: "editor-1",
+      },
+    });
+    expect(db.tx.bug.update).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        title: "Updated Title",
+        description: "Updated Description",
+        status: "open",
+        substatus: "requires_confirmation",
+      }),
+    }));
+    expect(readAgentIssueMock.mock.invocationCallOrder[0]).toBeGreaterThan(db.tx.bugRevision.create.mock.invocationCallOrder[0]);
+    expect(correctMock).toHaveBeenCalledWith(db.tx, { entry: expect.objectContaining({ id: "entry-1" }) });
+    expect(db.tx.issueConfirmation.deleteMany).not.toHaveBeenCalled();
+  });
+
+  it("does not create a content revision for a metadata-only structure update", async () => {
+    db.prisma.issueType.findMany.mockResolvedValue([{ id: "type-2", name: "Bug" }]);
+
+    await structureIssue(agent, "project-zedu", "bug-1", {
+      typeId: "type-2",
+      checkDuplicates: false,
+    });
+
+    expect(db.tx.bugRevision.create).not.toHaveBeenCalled();
+    expect(isConfirmedMock).not.toHaveBeenCalled();
+    expect(db.tx.bug.update).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ typeId: "type-2" }),
+    }));
+    expect(db.tx.bug.update.mock.calls[0][0].data).not.toHaveProperty("status");
+  });
+
+  it.each(["in_progress", "resolved"])("refuses to restructure an issue in %s", async (status) => {
+    db.prisma.bug.findFirst.mockResolvedValue(existingBug({
+      projectId: "project-zedu",
+      categoryId: "category-1",
+      typeId: "type-1",
+      status,
+      substatus: status,
+      createdByAgent: null,
+      claims: [],
+    }));
+    db.tx.$queryRaw.mockResolvedValue([{
+      title: "Original Title",
+      description: "Original Description",
+      categoryId: "category-1",
+      typeId: "type-1",
+      duplicateOfId: null,
+      status,
+      substatus: status,
+    }]);
+
+    await expect(structureIssue(agent, "project-zedu", "bug-1", {
+      title: "Updated Title",
+      description: "Updated Description",
+      checkDuplicates: false,
+    })).rejects.toMatchObject({ status: 409 });
+
+    expect(db.tx.bugRevision.create).not.toHaveBeenCalled();
+    expect(db.tx.bug.update).not.toHaveBeenCalled();
+  });
+});
+
 describe("editPullRequestUrlAction (#edit-pr-link)", () => {
   it("refuses former deliverer when another contributor holds active claim and delivered current PR", async () => {
     const formerDelivererId = "past-owner";
@@ -237,5 +392,57 @@ describe("editPullRequestUrlAction (#edit-pr-link)", () => {
     const result = await editPullRequestUrlAction("bug-1", formData);
     expect(result).toEqual({ error: TICKET_EDIT_ERRORS.unauthorized });
     expect(db.prisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  describe("an accepted fix (#replacement-pr)", () => {
+    const OLD = "https://github.com/emerjent/ziki/pull/1";
+    const NEXT = "https://github.com/emerjent/ziki/pull/3";
+    const holder = "holder";
+
+    beforeEach(() => {
+      (requireUser as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({ id: holder, role: "user" });
+      db.prisma.bug.findUnique.mockResolvedValue({
+        id: "bug-1",
+        status: "merge",
+        pullRequestUrl: OLD,
+        pullRequestHeadSha: "sha-1",
+        proofLinks: [OLD],
+        reporterId: "reporter-1",
+        assigneeId: holder,
+        isDeleted: false,
+        project: { repoUrl: "https://github.com/emerjent/ziki" },
+        claims: [{ beneficiaryUserId: holder, agent: { ownerUserId: holder }, status: "active", releasedAt: null }],
+        deliveries: [{ beneficiaryUserId: holder, pullRequestUrl: OLD, agent: { ownerUserId: holder } }],
+      });
+      db.prisma.agentAuditEvent.findFirst.mockResolvedValue({ id: "accept1", payload: { pullRequestUrl: OLD } });
+      db.tx.bug.updateMany.mockResolvedValue({ count: 1 });
+    });
+
+    /** The latest report on the accepted pull request; the replacement has none. */
+    const reportOnAccepted = (state: string | null) =>
+      db.prisma.pullRequestReport.findFirst.mockImplementation(async ({ where }: { where: { pullRequestUrl: string } }) =>
+        state && where.pullRequestUrl === OLD ? { id: "r1", state, pullRequestUrl: OLD, createdAt: new Date(), headSha: "sha-1" } : null);
+    const edit = () => {
+      const form = new FormData();
+      form.set("pullRequestUrl", NEXT);
+      return editPullRequestUrlAction("bug-1", form);
+    };
+
+    it("links a replacement when the accepted pull request is reported closed, and restarts review", async () => {
+      reportOnAccepted("closed");
+      expect(await edit()).toEqual({ ok: true });
+      expect(db.tx.agentAuditEvent.update).toHaveBeenCalledWith({ where: { id: "accept1" }, data: { undoneAt: expect.any(Date) } });
+      expect(db.tx.bug.updateMany).toHaveBeenCalledWith({ where: { id: "bug-1", status: { in: ["done", "merge"] } }, data: { status: "done", substatus: "requires_review" } });
+      expect(db.tx.bugActivity.create).toHaveBeenCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ metadata: expect.objectContaining({ replacesPullRequestUrl: OLD }) }) }),
+      );
+    });
+
+    it.each(["open", "merged", null])("keeps refusing a different pull request while the accepted one is %s", async (state) => {
+      reportOnAccepted(state);
+      expect(await edit()).toMatchObject({ error: expect.stringContaining("accepted fix is bound to a different pull request") });
+      expect(db.prisma.$transaction).not.toHaveBeenCalled();
+      expect(db.tx.agentAuditEvent.update).not.toHaveBeenCalled();
+    });
   });
 });

@@ -18,7 +18,7 @@ import {
   toPage,
   type IssueCursor,
 } from "@/lib/agent-api/create-policy";
-import { issueJson, issueProject } from "@/lib/agent-api/issues";
+import { issueJson, issueProject, securityJson } from "@/lib/agent-api/issues";
 import { createBugSchema } from "@/lib/validations/issue";
 import { attachmentIdsInMarkdown, linkAttachments } from "@/lib/attachment-link";
 import { MAX_ATTACHMENT_BYTES, MAX_ATTACHMENTS_PER_ITEM, checkAttachment } from "@/lib/attachments";
@@ -32,9 +32,10 @@ import { ideaVoteTotals, NO_VOTES } from "@/lib/idea-vote-totals";
 import { searchWorkItems } from "@/lib/search-index";
 import { agentAttachmentUrl } from "@/lib/agent-api/attachment-read";
 import { convertVettedIdea } from "@/lib/agent-api/idea-verdicts";
+import { agentFindingViewer, createFinding, findingForIdea, placeholderTitle, type FindingViewer, PLACEHOLDER_DESCRIPTION, PLACEHOLDER_SUMMARY, SECURITY_SEVERITIES } from "@/lib/security-findings";
 import { difficultySchema } from "@/lib/difficulty";
 
-/** How many ideas one person's agents may file as already vetted in 24 hours. */
+/** How many ideas one person's agents may file as already vetted (and start at once, #vetted-start-now) in 24 hours. */
 export const VETTED_IDEAS_PER_DAY = 5;
 
 /**
@@ -60,7 +61,7 @@ export const createIdeaSchema = createBugSchema
     track: z.unknown().optional(),
     rationale: z.unknown().optional(),
     acknowledgeSimilar: z.unknown().optional(),
-    /** The owner says this idea was already vetted elsewhere: it becomes an issue at once (needs `vettedNote`). */
+    /** The owner says this idea was already vetted elsewhere: it becomes an issue at once, held by this agent, In progress (needs `vettedNote`). */
     alreadyVetted: z.boolean().optional(),
     /** Where and by whom it was approved, for example "Approved by Mark, sheet row 42". Shown on the issue. */
     vettedNote: z.string().trim().min(5).max(300).optional(),
@@ -69,6 +70,12 @@ export const createIdeaSchema = createBugSchema
     attachmentIds: attachmentIdsSchema,
     // Up to three plain lines a person can read at a glance (#report-summary).
     summary: reportSummarySchema,
+    /**
+     * #security-findings: file it as a private security finding. The idea and its issue show a
+     * placeholder; the title, summary, description and files are readable only by the owner,
+     * workspace owners and admins and security-cleared agents until authorized disclosure.
+     */
+    security: z.object({ severity: z.enum(SECURITY_SEVERITIES) }).strict().optional(),
   })
   .strict();
 
@@ -80,6 +87,7 @@ export const ideaSelect = {
   title: true,
   summary: true,
   description: true,
+  source: true,
   track: true,
   rationale: true,
   status: true,
@@ -209,7 +217,7 @@ export async function findIdea(scope: Scope, ref: string) {
   });
 }
 
-export async function readAgentIdea(scope: Scope, ref: string) {
+export async function readAgentIdea(scope: Scope, ref: string, viewer: FindingViewer | null = null) {
   const found = await findIdea(scope, ref);
   if (!found) throw new IssueApiError(404, "Idea not found.");
   const [idea, { ideaThreshold }] = await Promise.all([
@@ -228,7 +236,13 @@ export async function readAgentIdea(scope: Scope, ref: string) {
   const votes = (await ideaVoteTotals(prisma, [idea.id])).get(idea.id) ?? NO_VOTES;
   const json = ideaJson(idea, ideaThreshold) as ReturnType<typeof ideaJson> & { attachments: typeof idea.attachments };
   // #722: each file with the URL an agent reads it from, with its key.
-  return { ...json, attachments: idea.attachments.map((file) => ({ ...file, url: agentAttachmentUrl(file.id) })), votes };
+  return {
+    ...json,
+    attachments: idea.attachments.map((file) => ({ ...file, url: agentAttachmentUrl(file.id) })),
+    votes,
+    // #security-findings: null for an ordinary idea.
+    security: securityJson(await findingForIdea(idea.id), viewer),
+  };
 }
 
 async function normalizeOrganisationMentions(db: Prisma.TransactionClient, organisationId: string, body: string) {
@@ -243,18 +257,19 @@ async function normalizeOrganisationMentions(db: Prisma.TransactionClient, organ
 async function linkAgentIdeaAttachments(
   tx: Prisma.TransactionClient,
   agent: AgentContext,
-  input: { requested?: string[]; text: string; ideaId: string },
+  input: { requested?: string[]; text: string } & ({ ideaId: string } | { securityFindingId: string }),
 ): Promise<void> {
+  const target = "securityFindingId" in input ? { securityFindingId: input.securityFindingId } : { ideaId: input.ideaId };
   const requested = [...new Set(input.requested ?? [])];
   if (requested.length > 0) {
-    const linked = await linkAttachments(tx, { ids: requested, uploaderId: agent.ownerId, ideaId: input.ideaId });
+    const linked = await linkAttachments(tx, { ids: requested, uploaderId: agent.ownerId, ...target });
     if (linked !== requested.length) {
       throw new IssueApiError(422, "One or more attachmentIds weren't found, belong to someone else, or are already attached.");
     }
   }
   const referenced = attachmentIdsInMarkdown(input.text).filter((id) => !requested.includes(id));
   if (referenced.length > 0) {
-    await linkAttachments(tx, { ids: referenced, uploaderId: agent.ownerId, ideaId: input.ideaId });
+    await linkAttachments(tx, { ids: referenced, uploaderId: agent.ownerId, ...target });
   }
 }
 
@@ -336,7 +351,7 @@ async function createIdeaFromBody(agent: AgentContext, request: NextRequest, bod
   assertVettedFields(input);
   const scope = await issueProject(agent, request.nextUrl.searchParams, input.projectId);
   const beneficiaryUserId = agent.ownerId;
-  let converted: { issueId: string; issueNumber: number } | null = null;
+  let converted: { issueId: string; issueNumber: number; claimId: string; claimStatus: "active" | "planning"; deliverBy: string | null } | null = null;
   const requestHash = hashCreateRequest({
     projectId: scope.projectId,
     beneficiaryUserId,
@@ -355,7 +370,9 @@ async function createIdeaFromBody(agent: AgentContext, request: NextRequest, bod
       : {}),
     ...(digests.length ? { files: [...digests].sort() } : {}),
     ...(input.areaId ? { areaId: input.areaId } : {}),
+    ...(input.security ? { security: input.security.severity } : {}),
   });
+  const severity = input.security?.severity ?? null;
   const result = await createIdeaWithPolicy({
     agent,
     projectId: scope.projectId,
@@ -364,7 +381,8 @@ async function createIdeaFromBody(agent: AgentContext, request: NextRequest, bod
     title: input.title,
     typeId: input.typeId,
     track,
-    acknowledgeSimilar: input.acknowledgeSimilar,
+    // Every private finding shows the same placeholder title, so the title check would only match other findings.
+    acknowledgeSimilar: severity ? true : input.acknowledgeSimilar,
     insert: async (tx, policy) => {
       const member = await tx.membership.findUnique({
         where: { organisationId_userId: { organisationId: scope.organisationId, userId: beneficiaryUserId } },
@@ -382,25 +400,43 @@ async function createIdeaFromBody(agent: AgentContext, request: NextRequest, bod
         data: {
           ...scope,
           typeId: policy.typeId,
-          title: input.title,
-          summary: input.summary,
-          description,
+          title: severity ? placeholderTitle(severity) : input.title,
+          summary: severity ? PLACEHOLDER_SUMMARY : input.summary,
+          description: severity ? PLACEHOLDER_DESCRIPTION : description,
           track,
           rationale,
           areaId,
-          proofLinks: input.proofLinks,
+          // Proof links can point at the exploit, so a private finding keeps them in its description.
+          proofLinks: severity ? [] : input.proofLinks,
           reporterId: beneficiaryUserId,
           beneficiaryUserId,
           createdByAgentId: agent.agentId,
         },
         select: { id: true, number: true },
       });
-      await linkAgentIdeaAttachments(tx, agent, { requested: input.attachmentIds, text: description, ideaId: idea.id });
+      const finding = severity
+        ? await createFinding(tx, {
+            ...scope,
+            ideaId: idea.id,
+            reporterId: beneficiaryUserId,
+            severity,
+            title: input.title,
+            summary: input.summary,
+            description: input.proofLinks.length
+              ? `${description}\n\n**Proof links**\n${input.proofLinks.map((link) => `- ${link}`).join("\n")}`
+              : description,
+          })
+        : null;
+      await linkAgentIdeaAttachments(tx, agent, {
+        requested: input.attachmentIds,
+        text: description,
+        ...(finding ? { securityFindingId: finding.id } : { ideaId: idea.id }),
+      });
       await audit(agent, "idea.created", `idea:${idea.id}`, { beneficiaryUserId, number: idea.number }, { db: tx });
       await publish(tx, {
         organisationId: scope.organisationId,
         type: "idea.created",
-        payload: { ideaId: idea.id, ideaNumber: idea.number, projectId: scope.projectId, beneficiaryUserId },
+        payload: { ideaId: idea.id, ideaNumber: idea.number, projectId: scope.projectId, beneficiaryUserId, ...(severity ? { security: { severity } } : {}) },
         actorAgentId: agent.agentId,
         projectId: scope.projectId,
       });
@@ -408,14 +444,14 @@ async function createIdeaFromBody(agent: AgentContext, request: NextRequest, bod
       if (input.alreadyVetted && input.vettedNote) {
         await audit(agent, "idea.vetted", `idea:${idea.id}`, { vettedNote: input.vettedNote, number: idea.number }, { db: tx });
         const made = await convertVettedIdea(tx, agent, scope.projectId, idea.id, input.vettedNote, input.difficulty ?? "medium");
-        converted = { issueId: made.issueId, issueNumber: made.issueNumber };
+        converted = { issueId: made.issueId, issueNumber: made.issueNumber, claimId: made.claimId, claimStatus: made.claimStatus, deliverBy: made.deliverBy };
       }
       return idea;
     },
   });
   if (result.status !== 200 && result.status !== 201) return NextResponse.json(result, { status: result.status });
   // A reused key can refer to another project; never return an out-of-scope idea.
-  const idea = await readAgentIdea(scope, result.ideaId);
+  const idea = await readAgentIdea(scope, result.ideaId, await agentFindingViewer(agent));
   return NextResponse.json({ idea, replayed: result.replayed, ...(input.alreadyVetted ? { converted: converted ?? (idea.issueId && idea.issueNumber ? { issueId: idea.issueId, issueNumber: idea.issueNumber } : null) } : {}) }, { status: result.status });
 }
 

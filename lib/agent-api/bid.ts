@@ -17,6 +17,7 @@ import { OPEN_BID_WHERE } from "@/lib/open-bids";
 import { weightedTally, type ThresholdDecision } from "@/lib/governance";
 import { assertUnderCapacity } from "@/lib/agent-api/capacity";
 import { hasLiveStake, settleLocked } from "@/lib/agent-api/stakes";
+import { actionReason } from "@/lib/agent-api/action-reason";
 import { needsPlanReview } from "@/lib/difficulty";
 import { moveTo } from "@/lib/issue-substatus";
 import { statusChangedSummary } from "@/lib/activity-log";
@@ -40,9 +41,10 @@ export const bidSchema = z.object({
   projectId: id.optional(),
   summary: entrySummary,
   description: entryDescription,
+  reason: actionReason,
 }).strict();
 
-export type BidInput = { summary: string; description: string };
+export type BidInput = { summary: string; description: string; reason?: string };
 
 /** Parses a raw bid body, throwing a 400 `IssueApiError` that names the field. */
 export function parseBid(raw: unknown): z.infer<typeof bidSchema> {
@@ -90,6 +92,8 @@ async function competingClaim(tx: Tx, bugId: string) {
 export async function placeBid(caller: AgentContext, projectId: string, issueRef: string, input: BidInput) {
   const ref = parseIssueRef(issueRef);
   return prisma.$transaction(async (tx) => {
+    const currentAgent = await tx.agent.findUnique({ where: { id: caller.agentId }, select: { pausedAt: true } });
+    if (currentAgent?.pausedAt) throw new IssueApiError(409, "This agent is paused by its owner and cannot bid.");
     let bugId: string;
     if (ref.kind === "number") {
       const resolved = await tx.bug.findFirst({
@@ -119,7 +123,7 @@ export async function placeBid(caller: AgentContext, projectId: string, issueRef
     await competingClaim(tx, bugId);
 
     const existing = await tx.issueBid.findUnique({ where: { bugId_agentId: { bugId, agentId: caller.agentId } } });
-    const written = { summary: input.summary, description: input.description };
+    const written = { summary: input.summary, description: input.description, reason: input.reason ?? null };
     // #745: an awarded bid holds the issue only while its offer or claim is
     // live, and `competingClaim` above already refused that. Here the hold has
     // ended (expired, declined, released, judged not good) and the issue is
@@ -179,6 +183,7 @@ export type BidEntry = {
   by: string;
   summary: string;
   description: string;
+  reason: string | null;
   areaMatch: boolean;
   /**
    * Its weighted votes (#bid-votes, lib/governance.ts weightedTally): one per
@@ -233,6 +238,7 @@ async function bidEntries(bug: { id: string; areaId: string | null }, where: Pri
       beneficiaryUserId: true,
       summary: true,
       description: true,
+      reason: true,
       createdAt: true,
       updatedAt: true,
       beneficiary: { select: { name: true } },

@@ -147,7 +147,9 @@ export const pointRoleLabels: Record<PointRole, string> = {
   idea: "Idea Contribution",
   signup: "Signup Bonus",
   comment: "Comment Upvote",
+  plan: "Plan Approved",
   vote: "Importance / Bid Vote",
+  security_check: "Security Check Job",
 };
 
 /** Explanation for how points were calculated for each role */

@@ -10,6 +10,9 @@ import { IdeaVerdictsPanel, type IdeaVerdictBlock } from "@/components/idea-verd
 import { MarketingAreaMarker } from "@/components/marketing/marketing-area";
 import { AttachmentList } from "@/components/attachment-list";
 import { RichText } from "@/components/rich-text";
+import { SecurityFindingPanel } from "@/components/security-finding-panel";
+import { findingForIdea, findingView } from "@/lib/security-findings";
+import { organisationAccessFor } from "@/lib/organisation-access";
 import { LocalTime } from "@/components/local-time";
 import { ReportSummary } from "@/components/report-summary";
 import { NextStepBar } from "@/components/next-step-bar";
@@ -21,6 +24,7 @@ import { archiveReasonLabel, IDEA_WITHDRAWN_REASON } from "@/lib/idea-archive";
 import { workflowFor } from "@/lib/workflow";
 import { isThresholdOnly } from "@/lib/governance";
 import { ConfirmSubmitButton } from "@/components/confirm-submit-button";
+import { RejectIdeaButton } from "@/components/reject-idea-button";
 import { approveIdeaAction, rejectIdeaAction, withdrawIdeaAction } from "@/app/actions/idea-verdicts";
 import { awardingAgentOf } from "@/lib/bid-award-permission";
 
@@ -80,6 +84,7 @@ export default async function IdeaPage({ params, searchParams }: {
       createdAt: true,
       convertedAt: true,
       rejectedAt: true,
+      rejectReason: true,
       archivedAt: true,
       archiveReason: true,
       archiveEvidence: true,
@@ -104,10 +109,16 @@ export default async function IdeaPage({ params, searchParams }: {
     : new Map<string, { id: string; name: string | null; image: string | null }>();
   if (!idea) notFound();
 
-  const [verdicts, workflow] = await Promise.all([
+  const [verdicts, workflow, securityFinding] = await Promise.all([
     listIdeaVerdicts({ organisationId, projectId: idea.projectId }, idea.id),
     workflowFor(idea.projectId),
+    findingForIdea(idea.id),
   ]);
+  // #security-findings: the private details, shown only to who may see them.
+  const securityAdmin = securityFinding ? (await organisationAccessFor(user.id, organisationId, user.role)).admin : false;
+  const securityView = securityFinding
+    ? findingView(securityFinding, { kind: "person", userId: user.id, organisationId, organisationAdmin: securityAdmin })
+    : null;
   const own = idea.reporterId === user.id || idea.beneficiaryUserId === user.id || idea.createdByAgent?.ownerUserId === user.id;
   // Anyone may give a verdict on their own idea.
   const block: IdeaVerdictBlock = idea.status !== "open" ? "closed" : null;
@@ -128,6 +139,7 @@ export default async function IdeaPage({ params, searchParams }: {
     archiveLabel: idea.status === "archived" ? archiveReasonLabel(idea.archiveReason, idea.archiveDuplicateOf) : null,
     withdrawn: idea.status === "archived" && idea.archiveReason === IDEA_WITHDRAWN_REASON,
     governance: { thresholdOnly: isThresholdOnly(workflow), managerVoteWeight: workflow.managerVoteWeight },
+    rejectReason: idea.rejectReason,
   });
   // What this person can do from the Actions box, through their highest-level agent.
   const actingAgent = idea.status === "open" && (rejectable || verdicts.convertible) ? await awardingAgentOf(user.id, organisationId) : null;
@@ -167,6 +179,7 @@ export default async function IdeaPage({ params, searchParams }: {
         {/* MAIN COLUMN */}
         <div className="flex min-w-0 flex-[999_1_600px] flex-col gap-5">
           <NextStepBar step={nextStep} />
+          {securityView ? <SecurityFindingPanel view={securityView} canDisclose={securityAdmin} kind="idea" /> : null}
           <ReportSummary summary={idea.summary} />
           {marketingIdea && idea.rationale ? (
             <section className="rounded-[20px] border border-zk-border bg-zk-surface p-5 sm:p-6">
@@ -278,18 +291,7 @@ export default async function IdeaPage({ params, searchParams }: {
                   </form>
                 ) : null}
                 {canReject ? (
-                  <form action={rejectIdeaAction}>
-                    <input type="hidden" name="ideaId" value={idea.id} />
-                    <ConfirmSubmitButton
-                      confirm={{
-                        title: `Reject idea #${idea.number}?`,
-                        body: "It moves to Rejected ideas and takes no more verdicts. Your manager agent rejects it.",
-                        confirmLabel: "Reject idea",
-                      }}
-                    >
-                      Reject idea
-                    </ConfirmSubmitButton>
-                  </form>
+                  <RejectIdeaButton ideaId={idea.id} ideaNumber={idea.number} />
                 ) : null}
                 {canWithdraw ? (
                   <form action={withdrawIdeaAction} data-testid="idea-withdraw">

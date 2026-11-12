@@ -3,15 +3,27 @@ import type { Prisma } from "@prisma/client";
 import Link from "next/link";
 import { prisma } from "@/lib/prisma";
 import { optionalUser } from "@/lib/auth-helpers";
+import { pageMetadata } from "@/lib/seo/site";
 import { DiscoverProjectCard, type DiscoverableProject } from "@/components/discover-project-card";
 import { DiscoverFilters } from "@/components/discover-filters";
 
-export const metadata: Metadata = { title: "Discover Projects" };
+/** The list itself is the page; a search or filter of it is kept out of search results (#seo-pages). */
+export async function generateMetadata(props: DiscoverPageProps): Promise<Metadata> {
+  const searchParams = await props.searchParams;
+  return pageMetadata({
+    title: "Discover open-source projects for AI agents",
+    description: "Find public projects on Ziki where people and AI agents build software together. Join one, bring your agents and earn for work that ships.",
+    path: "/discover",
+    noindex: Boolean(searchParams.q?.trim() || searchParams.open || searchParams.from),
+  });
+}
 
 type DiscoverPageProps = {
   searchParams: Promise<{
     q?: string;
     open?: string;
+    /** `earn` when the person came from the Earn page (#earnings): the way back is there, not the organisations page. */
+    from?: string;
   }>;
 };
 
@@ -20,6 +32,7 @@ export default async function DiscoverPage(props: DiscoverPageProps) {
   const searchParams = await props.searchParams;
   const query = (searchParams.q ?? "").trim();
   const openOnly = searchParams.open === "true";
+  const fromEarn = searchParams.from === "earn";
 
   // 1. Fetch user's existing memberships and requests in parallel if logged in
   let memberOrgIds = new Set<string>();
@@ -76,6 +89,7 @@ export default async function DiscoverPage(props: DiscoverPageProps) {
       siteUrl: true,
       repoUrl: true,
       isOpenForContributors: true,
+      acceptsGuestIdeas: true,
       contributorGuidelines: true,
       organisationId: true,
       organisation: {
@@ -114,6 +128,7 @@ export default async function DiscoverPage(props: DiscoverPageProps) {
       siteUrl: p.siteUrl,
       repoUrl: p.repoUrl,
       isOpenForContributors: p.isOpenForContributors,
+      acceptsGuestIdeas: p.acceptsGuestIdeas,
       contributorGuidelines: p.contributorGuidelines,
       organisation: p.organisation,
       _count: p._count,
@@ -134,10 +149,10 @@ export default async function DiscoverPage(props: DiscoverPageProps) {
         </div>
         {user ? (
           <Link
-            href="/organisations"
+            href={fromEarn ? "/earn" : "/organisations"}
             className="inline-flex cursor-pointer items-center gap-1.5 text-xs font-semibold text-zk-accent hover:underline"
           >
-            ← Back to Organisations
+            {fromEarn ? "← Back to Earn" : "← Back to Organisations"}
           </Link>
         ) : (
           <Link
@@ -150,7 +165,7 @@ export default async function DiscoverPage(props: DiscoverPageProps) {
       </div>
 
       {/* Search and Filters */}
-      <DiscoverFilters initialQuery={query} initialOpenOnly={openOnly} />
+      <DiscoverFilters initialQuery={query} initialOpenOnly={openOnly} fromEarn={fromEarn} />
 
       {/* Project Grid */}
       {cardsData.length === 0 ? (
