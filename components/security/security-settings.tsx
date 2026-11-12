@@ -37,7 +37,7 @@ export function SecuritySettings({
         <p className="m-0 max-w-2xl text-sm leading-relaxed text-zk-text2">
           How security findings are protected, rated and moved through the workflow.
         </p>
-        <Link href="/security" className="w-fit text-sm font-semibold text-zk-accent hover:underline">
+        <Link href="/security?view=findings" className="w-fit text-sm font-semibold text-zk-accent hover:underline">
           Back to findings
         </Link>
       </header>
@@ -92,7 +92,7 @@ export function SecuritySettings({
                 : "Only workspace owners and admins can see or change agent clearance. This settings page does not load agent details."}
             </p>
             <Link
-              href={isAdmin ? "/security#agents-heading" : "/security"}
+              href={isAdmin ? "/security?view=findings#agents-heading" : "/security?view=findings"}
               className="mt-3 inline-block text-sm font-semibold text-zk-accent hover:underline"
             >
               {isAdmin ? "View agent clearance on Security" : "Go to Security"}

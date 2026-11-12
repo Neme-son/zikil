@@ -35,7 +35,7 @@ import { convertVettedIdea } from "@/lib/agent-api/idea-verdicts";
 import { agentFindingViewer, createFinding, findingForIdea, placeholderTitle, type FindingViewer, PLACEHOLDER_DESCRIPTION, PLACEHOLDER_SUMMARY, SECURITY_SEVERITIES } from "@/lib/security-findings";
 import { difficultySchema } from "@/lib/difficulty";
 
-/** How many ideas one person's agents may file as already vetted in 24 hours. */
+/** How many ideas one person's agents may file as already vetted (and start at once, #vetted-start-now) in 24 hours. */
 export const VETTED_IDEAS_PER_DAY = 5;
 
 /**
@@ -61,7 +61,7 @@ export const createIdeaSchema = createBugSchema
     track: z.unknown().optional(),
     rationale: z.unknown().optional(),
     acknowledgeSimilar: z.unknown().optional(),
-    /** The owner says this idea was already vetted elsewhere: it becomes an issue at once (needs `vettedNote`). */
+    /** The owner says this idea was already vetted elsewhere: it becomes an issue at once, held by this agent, In progress (needs `vettedNote`). */
     alreadyVetted: z.boolean().optional(),
     /** Where and by whom it was approved, for example "Approved by Mark, sheet row 42". Shown on the issue. */
     vettedNote: z.string().trim().min(5).max(300).optional(),
@@ -351,7 +351,7 @@ async function createIdeaFromBody(agent: AgentContext, request: NextRequest, bod
   assertVettedFields(input);
   const scope = await issueProject(agent, request.nextUrl.searchParams, input.projectId);
   const beneficiaryUserId = agent.ownerId;
-  let converted: { issueId: string; issueNumber: number } | null = null;
+  let converted: { issueId: string; issueNumber: number; claimId: string; claimStatus: "active" | "planning"; deliverBy: string | null } | null = null;
   const requestHash = hashCreateRequest({
     projectId: scope.projectId,
     beneficiaryUserId,
@@ -444,7 +444,7 @@ async function createIdeaFromBody(agent: AgentContext, request: NextRequest, bod
       if (input.alreadyVetted && input.vettedNote) {
         await audit(agent, "idea.vetted", `idea:${idea.id}`, { vettedNote: input.vettedNote, number: idea.number }, { db: tx });
         const made = await convertVettedIdea(tx, agent, scope.projectId, idea.id, input.vettedNote, input.difficulty ?? "medium");
-        converted = { issueId: made.issueId, issueNumber: made.issueNumber };
+        converted = { issueId: made.issueId, issueNumber: made.issueNumber, claimId: made.claimId, claimStatus: made.claimStatus, deliverBy: made.deliverBy };
       }
       return idea;
     },

@@ -204,6 +204,12 @@ describe("giveConfirmation (#issue-confirmations)", () => {
     expect(await isConfirmed("bug1")).toBe(true);
   });
 
+  it("counts an issue made from an already-vetted idea as confirmed with no entries, and others only by their entries (#vetted-start-now)", async () => {
+    expect(await isConfirmed("bug1")).toBe(false);
+    state.bug = bugRow({ vettedAt: new Date(Date.UTC(2026, 10, 11)), status: "in_progress", substatus: "in_progress" });
+    expect(await isConfirmed("bug1")).toBe(true);
+  });
+
   it("refuses a bare verdict with 400 naming the field", async () => {
     const bare = await rejection(giveConfirmation(person("bob"), scope, "bug1", { verdict: "confirm" }));
     expect(bare.status).toBe(400);

@@ -11,7 +11,10 @@ const db = vi.hoisted(() => ({
   $queryRaw: vi.fn(),
   ideaVerdict: { findUnique: vi.fn(), upsert: vi.fn(), findMany: vi.fn() },
   idea: { update: vi.fn(), findUniqueOrThrow: vi.fn() },
-  bug: { create: vi.fn() },
+  bug: { create: vi.fn(), update: vi.fn() },
+  issueClaim: { count: vi.fn(async () => 0), create: vi.fn(async () => ({ id: "c1" })) },
+  user: { findUnique: vi.fn(async () => ({ name: "Ada" })) },
+  bugActivity: { createMany: vi.fn() },
   attachment: { updateMany: vi.fn() },
   securityFinding: { updateMany: vi.fn() },
   issueStake: { updateMany: vi.fn(), findMany: vi.fn(async () => []), update: vi.fn() },
@@ -359,24 +362,57 @@ describe("convertIdea", () => {
   });
 });
 
-/** Already vetted: an idea its owner says was approved elsewhere becomes an issue at once, with no verdicts. */
+/**
+ * Already vetted (#vetted-start-now): an idea its owner says was vetted becomes an issue at once that counts as
+ * confirmed, and the agent that filed it holds it In progress, with no verdicts, confirmations, bids or offer.
+ */
 describe("convertVettedIdea", () => {
   const owner: AgentContext = { agentId: "agent-ada", name: "ada", ownerId: "ada", organisationId: "t1", level: "working", burst: false, keyId: "k1" };
 
-  it("converts an idea with no verdicts, says it was vetted on the issue's activity and on the event, and nothing else is skipped", async () => {
+  it("makes a confirmed issue the filing agent holds at once, In progress, and pays the reporter now", async () => {
     db.$queryRaw.mockResolvedValue([idea({ score: 0 })]);
     const result = await convertVettedIdea(db as never, owner, "p1", "i1", "Approved by Mark, sheet row 42", "medium");
-    expect(result).toMatchObject({ ideaId: "i1", issueId: "b9", issueNumber: 42, ideaScore: 0 });
+    expect(result).toMatchObject({ ideaId: "i1", issueId: "b9", issueNumber: 42, ideaScore: 0, claimId: "c1", claimStatus: "active" });
+    expect(result.deliverBy).toEqual(expect.any(String));
     expect(db.bug.create).toHaveBeenCalledWith(expect.objectContaining({
       data: expect.objectContaining({
-        status: "open", substatus: "requires_confirmation",
+        vettedAt: expect.any(Date),
         activities: { create: expect.objectContaining({ summary: expect.stringContaining("marked already vetted: Approved by Mark, sheet row 42"), metadata: { fromIdea: 7, vettedNote: "Approved by Mark, sheet row 42" } }) },
       }),
+    }));
+    // The filer's agent holds it: an active claim with a delivery deadline, no offer to accept.
+    expect(db.issueClaim.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ bugId: "b9", beneficiaryUserId: "ada", agentId: "agent-ada", status: "active", deliverBy: expect.any(Date) }),
+    }));
+    expect(db.bug.update).toHaveBeenCalledWith({ where: { id: "b9" }, data: expect.objectContaining({ assigneeId: "ada", status: "in_progress", substatus: "in_progress" }) });
+    // A product issue's reporter is normally paid on confirmation; a vetted one is confirmed from the start.
+    expect(db.pointEntry.createMany).toHaveBeenCalledWith(expect.objectContaining({
+      data: [expect.objectContaining({ userId: "ada", role: "reporter", bugId: "b9" })],
     }));
     expect(publish).toHaveBeenCalledWith(db, expect.objectContaining({
       type: "issue.converted",
       payload: expect.objectContaining({ via: "already_vetted", decidedByUserId: "ada", vettedNote: "Approved by Mark, sheet row 42" }),
     }));
+    expect(publish).toHaveBeenCalledWith(db, expect.objectContaining({
+      type: "claim.accepted",
+      payload: expect.objectContaining({ claimId: "c1", issueId: "b9", beneficiaryUserId: "ada", via: "already_vetted" }),
+    }));
+  });
+
+  it("opens plan review instead on a complex issue", async () => {
+    db.$queryRaw.mockResolvedValue([idea({ score: 0 })]);
+    const result = await convertVettedIdea(db as never, owner, "p1", "i1", "Approved by Mark", "complex");
+    expect(result).toMatchObject({ claimStatus: "planning", deliverBy: null });
+    expect(db.issueClaim.create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ status: "planning", agentId: "agent-ada" }) }));
+    expect(db.bug.update).toHaveBeenCalledWith({ where: { id: "b9" }, data: expect.objectContaining({ assigneeId: "ada", substatus: "plan_review" }) });
+  });
+
+  it("refuses at the owner's capacity, so nothing is held", async () => {
+    db.$queryRaw.mockResolvedValue([idea({ score: 0 })]);
+    db.issueClaim.count.mockResolvedValue(DEFAULT_PROJECT_WORKFLOW.maxActiveClaims);
+    await expect(convertVettedIdea(db as never, owner, "p1", "i1", "Approved by Mark", "medium")).rejects.toMatchObject({ status: 409, body: { error: "at_capacity" } });
+    expect(db.issueClaim.create).not.toHaveBeenCalled();
+    expect(db.bug.update).not.toHaveBeenCalled();
   });
 
   it("does not convert an idea that is not open", async () => {

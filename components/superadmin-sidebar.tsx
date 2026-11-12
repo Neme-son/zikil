@@ -9,6 +9,7 @@ const links = [
   { href: "/superadmin/rewards", label: "Platform rewards" },
   { href: "/superadmin/compare", label: "Compare directory" },
   { href: "/superadmin/skill-approvals", label: "Skill Approvals" },
+  { href: "/superadmin/always-on", label: "Always-on agents" },
 ];
 
 /** The super admin sidebar. An organisation's own page counts as Organisations. */
