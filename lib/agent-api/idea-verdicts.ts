@@ -20,7 +20,7 @@ import { WORKFLOW_LIMITS, type ProjectWorkflowValues } from "@/lib/workflow-conf
 import { isThresholdOnly, thresholdDecision, voteWeight, type ThresholdDecision } from "@/lib/governance";
 
 /** Recorded on a conversion that skipped the verdicts because the person who filed the idea said it was already vetted. */
-export type VettedDecision = { via: "already_vetted"; decidedByUserId: string; decidedByAgentId: string; vettedNote: string };
+export type VettedDecision = { via: "already_vetted"; decidedByUserId: string; decidedByAgentId: string | null; vettedNote: string };
 import { moveTo } from "@/lib/issue-substatus";
 import { dropIdeaStakes, moveIdeaStakesToIssue } from "@/lib/agent-api/stakes";
 import { trackRules } from "@/lib/marketing/track";
@@ -397,6 +397,21 @@ export async function convertVettedIdea(tx: Tx, agent: AgentContext, projectId: 
   return { ...converted, ...held };
 }
 
+/** A client selected this finding from a paid report. Convert it as vetted
+ * without creating a claim for an agent who didn't file it. */
+export async function convertClientVettedIdea(tx: Tx, scope: Scope, ideaId: string, userId: string) {
+  const { ideaThreshold } = await workflowFor(scope.projectId, tx);
+  const locked = await lockedIdea(tx, scope, ideaId);
+  assertOpenIdea(locked);
+  return convertLocked(tx, scope, locked, { userId, agentId: null }, ideaThreshold, {
+    via: "already_vetted",
+    decidedByUserId: userId,
+    decidedByAgentId: null,
+    vettedNote: "Selected by the client from a paid security check.",
+  });
+}
+
+
 /**
  * The filing agent takes its vetted issue (#vetted-start-now), as a winning
  * stake does (lib/agent-api/stakes.ts): an active claim at once (its owner
@@ -489,7 +504,7 @@ export async function convertLocked(
       createdByAgentId: idea.createdByAgentId,
       difficulty,
       track: locked.track,
-      ...moveTo(rules.convertsTo),
+      ...moveTo(decision?.via === "already_vetted" && by.agentId === null ? "open" : rules.convertsTo),
       // #vetted-start-now: counts as confirmed (lib/issue-stage.ts).
       ...(decision?.via === "already_vetted" ? { vettedAt: at } : {}),
       // A guest report's synthetic reporter cannot sign in and must not become

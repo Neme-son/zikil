@@ -7,7 +7,7 @@ This page is the shared contract for the five parts being built in parallel. The
 ## The flow
 
 1. **Say what to check.** One box. Ziki works out whether it is a website, server or repo (`SecurityTargetKind`) and stores it once per workspace as a `SecurityTarget`.
-2. **Show it's yours.** The client proves ownership once per target: a DNS TXT record or homepage tag with `SecurityTarget.ownershipToken`, GitHub access for a repo, or a server method. `verifiedAt` is set when proven, and `ownershipMethod` records how. Any extra questions (such as access to a private repo) are asked here too.
+2. **Show it's yours.** The client proves ownership once per target: a DNS TXT record or homepage tag with `SecurityTarget.ownershipToken`, the workspace's Ziki GitHub App (or a `.ziki-verification` file) for a repo, and for a server a file at `/.well-known/ziki-verification.txt` (only the file: a domain pointed at a server proves nothing, since anyone can point a domain anywhere). `verifiedAt` is set when proven, and `ownershipMethod` records how. Any extra questions (such as access to a private repo) are asked here too.
 3. **Pay or skip.** A check (`SecurityCheck`) costs `SECURITY_CHECK_PRICE_COINS` (50, a placeholder). Payment is simulated for now: paying just sets `paidAt`. The client may skip and pay after seeing the teaser.
 4. **Agents check it.** The check's first job is a `split` item. Ziki gives it to an available agent, which looks at the target and adds 15 to 20 `check` items. Ziki gives each one to an agent. The agent does it and reports back zero or more `SecurityCheckResult`s: severity, title, description, how to fix. There are no votes or bids. The client sees only a progress bar and per-part status (`ITEM_STATUS_LABEL`).
 5. **See the report.** Worst first. Before `paidAt`, the client sees a teaser: one critical result and the counts of the rest. Once paid, they see everything, including how to fix it. They can download it as a PDF, or pick results and **Fix on Ziki**: each picked result becomes a private `SecurityFinding` and an issue in a project of theirs (`SecurityCheckResult.findingId`, `SecurityCheck.projectId`).
@@ -55,3 +55,13 @@ The routes are not workspace-scoped: a job is served to the agent holding it, wh
 | `POST /api/v1/security-checks/jobs/{id}/release` | Give the job back for another agent. |
 
 A report or split for a job the agent no longer holds (reported, given back or timed out) is refused with `409 not_held`, and nothing is stored. Look only: never exploit what you find, and never put result text anywhere but the report.
+
+## Fix on Ziki
+
+Once the report is posted and the check is paid, choose the findings to remediate, select a project in your workspace, and click **Send selected findings**. Open the issue links to follow the work. The first successful submission sets the check's destination project. Later submissions can send more findings to that same project and reuse any issues already created.
+
+The report page renders the named `FixOnZiki` export with the check ID and each paid result's ID, severity and title. The server action authenticates the requester, checks that the report is posted, the check is paid, and the requester belongs to the current workspace, and accepts only active projects in that workspace and results from that check. A single transaction locks the check and creates or reuses each link. Repeating the request won't create another finding or issue.
+
+The shared idea and issue contain a placeholder. The private finding contains the original title, description and remediation guidance. Its linked issue starts as vetted and open for work. It follows the existing private finding access rules.
+
+To verify, use the focused tests in `lib/security-checks/fix.test.ts`. Once the report page includes the picker, check a paid report in a development workspace: select two findings, send them, follow the issue links, then send the same selection again and confirm the issue numbers are reused. Verify that an unpaid check or an unposted report cannot send findings and that another workspace's project cannot be selected. Do not reseed a shared database.
