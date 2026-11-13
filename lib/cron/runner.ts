@@ -190,7 +190,7 @@ export async function runPlatformSweeps(): Promise<PlatformSweepsResult | { skip
     }
 
     // 2a. Security checks (#security-checks): start queued checks, take back stale jobs,
-    // give waiting jobs to always-on agents, and pay agents of paid checks.
+    // give waiting jobs to on-call agents, and pay agents of paid checks.
     try {
       const res = await sweepSecurityChecks(prisma);
       recordSweepSuccess("securityChecks");

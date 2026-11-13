@@ -59,7 +59,7 @@ describe("who gets a job (#security-checks)", () => {
     expect(pickAgentFor("client", agents, 2)?.id).toBe("home");
   });
 
-  it("falls back to any always-on agent", () => {
+  it("falls back to any on-call agent", () => {
     expect(pickAgentFor("nobody-here", agents, 2)?.id).toBe("far");
   });
 
@@ -95,7 +95,7 @@ describe("taking jobs back", () => {
 });
 
 describe("giving out jobs", () => {
-  it("gives waiting jobs to online always-on agents, only when the job is still free", async () => {
+  it("gives waiting jobs to online on-call agents, only when the job is still free", async () => {
     const db = fakeDb();
     db.agent.findMany.mockResolvedValue([{ id: "agentA", activations: [{ organisationId: "client" }], _count: { securityCheckItems: 0 } }]);
     db.securityCheckItem.findMany.mockResolvedValue([
@@ -104,14 +104,14 @@ describe("giving out jobs", () => {
     ]);
     db.securityCheckItem.updateMany.mockResolvedValueOnce({ count: 1 }).mockResolvedValueOnce({ count: 0 });
     expect(await assignWaitingJobs(asDb(db), now)).toBe(1);
-    expect(db.agent.findMany.mock.calls[0][0].where).toMatchObject({ alwaysOnAt: { not: null }, revokedAt: null, pausedAt: null });
+    expect(db.agent.findMany.mock.calls[0][0].where).toMatchObject({ onCallAt: { not: null }, revokedAt: null, pausedAt: null });
     expect(db.securityCheckItem.updateMany.mock.calls[0][0]).toMatchObject({
       where: { id: "j1", status: "waiting", agentId: null },
       data: { status: "checking", agentId: "agentA", assignedAt: now },
     });
   });
 
-  it("does nothing when no always-on agent is online", async () => {
+  it("does nothing when no on-call agent is online", async () => {
     const db = fakeDb();
     db.agent.findMany.mockResolvedValue([]);
     expect(await assignWaitingJobs(asDb(db), now)).toBe(0);
@@ -243,12 +243,12 @@ describe("paying agents (#security-checks)", () => {
     expect(award).not.toHaveBeenCalled();
   });
 
-  it("pays always-on agents nothing, but still marks their pay released so it is never retried", async () => {
+  it("pays on-call agents nothing, but still marks their pay released so it is never retried", async () => {
     const db = fakeDb();
     db.securityCheck.findUnique.mockResolvedValue({ organisationId: "client", paidAt: now });
     db.securityCheckItem.findMany.mockResolvedValue([
-      { id: "split1", kind: "split", agentId: "agala", agent: { ownerUserId: "ziki", alwaysOnAt: now } },
-      { id: "collate1", kind: "collate", agentId: "agala", agent: { ownerUserId: "ziki", alwaysOnAt: now } },
+      { id: "split1", kind: "split", agentId: "agala", agent: { ownerUserId: "ziki", onCallAt: now } },
+      { id: "collate1", kind: "collate", agentId: "agala", agent: { ownerUserId: "ziki", onCallAt: now } },
     ]);
     db.securityCheckItem.updateMany.mockResolvedValue({ count: 1 });
     expect(await releasePaidJobs(asDb(db), "check1", now)).toBe(0);
@@ -256,13 +256,13 @@ describe("paying agents (#security-checks)", () => {
     expect(db.securityCheckItem.updateMany).toHaveBeenCalledTimes(2);
   });
 
-  it("pays agents that aren't always-on once the client pays: 5 for the split, 3 per part", async () => {
+  it("pays agents that aren't on-call once the client pays: 5 for the split, 3 per part", async () => {
     const db = fakeDb();
     db.securityCheck.findUnique.mockResolvedValue({ organisationId: "client", paidAt: now });
     db.securityCheckItem.findMany.mockResolvedValue([
-      { id: "split1", kind: "split", agentId: "agentA", agent: { ownerUserId: "ownerA", alwaysOnAt: null } },
-      { id: "part1", kind: "check", agentId: "agentB", agent: { ownerUserId: "ownerB", alwaysOnAt: null } },
-      { id: "part2", kind: "check", agentId: "agentB", agent: { ownerUserId: "ownerB", alwaysOnAt: null } },
+      { id: "split1", kind: "split", agentId: "agentA", agent: { ownerUserId: "ownerA", onCallAt: null } },
+      { id: "part1", kind: "check", agentId: "agentB", agent: { ownerUserId: "ownerB", onCallAt: null } },
+      { id: "part2", kind: "check", agentId: "agentB", agent: { ownerUserId: "ownerB", onCallAt: null } },
     ]);
     // part2 was paid by a concurrent run: its conditional update matches nothing.
     db.securityCheckItem.updateMany.mockResolvedValueOnce({ count: 1 }).mockResolvedValueOnce({ count: 1 }).mockResolvedValueOnce({ count: 0 });

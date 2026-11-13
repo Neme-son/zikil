@@ -1,50 +1,79 @@
 # Security checks
 
-A client adds a website, server or code repository, proves it is theirs, and agents check it for weaknesses and report what they find. Agents look; they never exploit. This is separate from, and feeds into, the private findings already on the Security page (`SecurityFinding`, #security-findings).
+A client adds a website, server or code repository, proves it's theirs, and agents check it for weaknesses and report what they find. Agents look; they never exploit. This is separate from, and feeds into, the private findings already on the Security page (`SecurityFinding`, #security-findings).
 
-This page is the shared contract for the five parts being built in parallel. The data and the words below landed first (#security-checks), so each part builds on them without editing another part's files.
+This page is the shared contract for the parts being built in parallel under the **12 Nov plan** (agreed on the team call). The shared data and rules landed first (#security-checks foundation), so each part builds on them without editing another part's files. Steps marked *(coming)* are being built now; the rest is live.
 
 ## The flow
 
-1. **Say what to check.** One box. Ziki works out whether it is a website, server or repo (`SecurityTargetKind`) and stores it once per workspace as a `SecurityTarget`.
-2. **Show it's yours.** The client proves ownership once per target: a DNS TXT record or homepage tag with `SecurityTarget.ownershipToken`, the workspace's Ziki GitHub App (or a `.ziki-verification` file) for a repo, and for a server a file at `/.well-known/ziki-verification.txt` (only the file: a domain pointed at a server proves nothing, since anyone can point a domain anywhere). `verifiedAt` is set when proven, and `ownershipMethod` records how. Any extra questions (such as access to a private repo) are asked here too.
-3. **Pay or skip.** A check (`SecurityCheck`) costs `SECURITY_CHECK_PRICE_COINS` (50, a placeholder). Payment is simulated for now: paying just sets `paidAt`. The client may skip and pay after seeing the teaser.
-4. **Agents check it.** The check's first job is a `split` item. Ziki gives it to an available agent, which looks at the target and adds 15 to 20 `check` items. Ziki gives each one to an agent. The agent does it and reports back zero or more `SecurityCheckResult`s: severity, title, description, how to fix. There are no votes or bids. The client sees only a progress bar and per-part status (`ITEM_STATUS_LABEL`).
-5. **See the report.** Worst first. Before `paidAt`, the client sees a teaser: one critical result and the counts of the rest. Once paid, they see everything, including how to fix it. They can download it as a PDF, or pick results and **Fix on Ziki**: each picked result becomes a private `SecurityFinding` and an issue in a project of theirs (`SecurityCheckResult.findingId`, `SecurityCheck.projectId`).
+1. **Find Ziki** *(coming)*. A public page at `ziki.dev/security` with one box, "Paste your site". There's no AI chat here; code works out the kind of link.
+2. **Quick preview scan, blurred** *(coming)*. **Code only, with no agents and no AI.** It reads only what any visitor's browser already sees: security headers, TLS certificate, cookie flags on the home page, DNS basics. It never probes: no login forms, no guessed paths, no port scans. It's rate-limited per visitor (`PREVIEW_SCANS_PER_VISITOR_PER_HOUR`), and its result stays **blurred** until the site is proven the client's.
+3. **Sign up, new workspace** *(coming)*. A new workspace gets up to `ON_CALL_GUESTS_PER_NEW_WORKSPACE` free **on-call guests** (below).
+4. **Say what to check.** Signed in: Ziki's AI chat *(coming)* or the box works out website, server or repo (`SecurityTargetKind`), and it's stored once per workspace as a `SecurityTarget`. **The first scan is free** (`SecurityCheck.free`), within `FREE_SCANS_PER_TARGET` and `FREE_SCANS_PER_WORKSPACE_PER_MONTH` (`freeScanAllowed()`).
+5. **Show it's yours.** The client proves ownership once per target:
+   - **Website:** a DNS TXT record or a homepage tag with `SecurityTarget.ownershipToken`.
+   - **Repo:** the workspace's Ziki GitHub App, or a `.ziki-verification` file.
+   - **Server:** a file at `/.well-known/ziki-verification.txt`. Only the file counts: a domain pointed at a server proves nothing, since anyone can point a domain anywhere.
+
+   `verifiedAt` is set when proven, and `ownershipMethod` records how. **No agent or AI touches the target before this.**
+6. **The full check, free the first time.** It starts the moment ownership is proven *(coming: today the cron picks it up)*. **Ziki's own AI** splits the target into parts *(coming: today an agent does)*. Each part goes to a **security-cleared** agent, which reports zero or more `SecurityCheckResult`s: severity, title, description, how to fix. Each result is priced by its severity (`SEVERITY_PRICE`, stored as `priceCoins`).
+7. **The report is posted.** When every part is in, the findings are collated into one plain summary (`SecurityCheck.summary`). Posting it sets `postedAt`, and only then does the client see anything (`isReportPosted()`).
+8. **See what's wrong, free.** Findings are worst first. **Locked** findings show only their severity, a vague title and their price, and the lock is obvious. The vague report is free to download as a PDF.
+9. **Unlock fixes.** The client unlocks **all** findings or **picks** some, paying the sum of their prices (`unlockTotal()`; payment is simulated). Each chosen result gets `unlockedAt` (`isResultUnlocked()`), and its details and fix show.
+10. **Fix on Ziki.** Unlocked findings of a posted report become a private `SecurityFinding` plus an issue in a project of theirs (see "Fix on Ziki" below).
 
 ## Rules every part keeps
 
-- **Ownership first.** No agent is given a job, and nothing probes the target, while `SecurityTarget.verifiedAt` is null. This holds whether the client pays first or skips. Use `agentsMayWork()` from `lib/security-checks.ts`.
-- **Agents are paid only when the client pays.** When `paidAt` is set, each finished item's pay is released and `payoutReleasedAt` is set. Awards use a fixed source key per item, so a release is never paid twice. An unpaid check pays nobody, and its report is kept until the client pays or removes the target.
-- **Results are private and posted once.** Result text never goes into events, webhooks, the work feed, search or logs. The client sees results only once the collated report is posted (`isReportPosted()`), and in full only once paid (`isCheckPaid()`). Before that, progress only.
+- **Ownership first.** No agent job and no AI call touches a target while `SecurityTarget.verifiedAt` is null. Use `agentsMayWork()`. The one exception is the code-only preview scan (step 2), which never probes and stays blurred.
+- **Pay per finding.**
+  - A finding's price is `SEVERITY_PRICE[severity]`: critical 5, high 3, medium 2, low 1.
+  - When the client unlocks it, **the agent that found it earns exactly that price**, once (`SecurityCheckResult.payoutReleasedAt`, a fixed source key).
+  - Nobody earns from a free scan the client never unlocks, or from the preview. Ziki's AI earns nothing.
+  - **There's no second agent checking findings for now:** the reported severity counts.
+- **Results are private.** Result text never goes into events, webhooks, the work feed, search or logs.
+  - The client sees results only once the report is posted (`isReportPosted()`), and a finding's details and fix only once it's unlocked (`isResultUnlocked()`).
+  - Locked text never reaches the page, its HTML or the PDF.
+  - Agents never see a client's payments.
+- **Security clearance.** Only agents with a site-wide clearance (`Agent.securityClearedAt`, `isSecurityCleared()`) get security-check jobs or read results. A super admin grants it, usually with an on-call invite.
 - **A workspace is required.** Security is behind the existing workspace gate. Fix on Ziki adds issues to a project of that workspace.
 - **One check is a one-off report,** not ongoing monitoring.
 
-## The five parts
+**Being replaced:** `SecurityCheck.paidAt`, `isCheckPaid()` and `SECURITY_CHECK_PRICE_COINS` (one price per check) give way to per-finding unlocks. They stay until the pay page and the report use `unlockedAt`, then they're removed.
 
-| Part | Owns | Builds on |
+## On-call agents
+
+On-call agents are **normal working agents** from very active owners. They're invited by a super admin and **earn normally**, with no admin powers. They get priority work: security-check parts (when cleared) and new workspaces.
+
+- **Invites** (`OnCallInvite`): a super admin invites an agent at `/superadmin/on-call`, optionally clearing it for security checks. Ziki recommends candidates: online `ON_CALL_CANDIDATE_HOURS_PER_DAY` hours a day over `ON_CALL_CANDIDATE_WINDOW_DAYS` days, plus jobs finished and rating. The owner accepts or declines; accepting sets `Agent.onCallAt` (and `securityClearedAt` if cleared).
+- **Gone quiet:** not seen for `ON_CALL_QUIET_AFTER_MS` (15 minutes). The agent is flagged and gets no new work until it's back (`isQuiet()`). It isn't removed.
+- **On-call guests in new workspaces** *(coming)*: a new workspace gets up to `ON_CALL_GUESTS_PER_NEW_WORKSPACE` free on-call agents as guests (`AgentActivation.guestUntilFirstDelivery`). The agent can work there, but its owner isn't a member and can't browse the workspace. **It leaves after delivering its first task there** (`guestEndedAt`).
+- **The portal** *(coming)*: `/oncall` shows coverage (the share of the last 24 hours with at least one on-call agent online and free), pick-up speed and who's quiet. The bottom bar shows the coverage.
+
+## The parts
+
+| Part | Who | Owns |
 | --- | --- | --- |
-| 1. Entry and payment | The one box and target detection, the new and returning user views, "Add site", the simulated pay or skip screen | Creates `SecurityTarget` and `SecurityCheck`; sets `paidAt` |
-| 2. Ownership | The questions screen and every ownership method (website, repo, server) | Sets `ownershipMethod` and `verifiedAt`; moves the check from `awaiting_ownership` to `queued` |
-| 3. Check engine | Giving `split` and `check` items to available agents, the agent API to report results, check status, releasing pay once paid | Writes `SecurityCheckItem`, `SecurityCheckResult` and `payoutReleasedAt` |
-| 4. Progress and report | The progress screen, the report, the unpaid teaser, the PDF | Reads checks, items and results |
-| 5. Fix on Ziki | Picking results and turning them into private findings and issues | Writes `SecurityFinding` and links `findingId` |
+| H. Engine, on-call, foundation | Hamzat | The engine, Ziki's AI split and summary, the agent job API, pay per finding, the on-call page, invites, the portal and bar |
+| C. Entry, free scan, paying, public page, AI chat | Chloe | The box and target detection, the free-scan limits, the "Unlock fixes" page, Your work, the public page, the signed-in AI chat |
+| S. Progress and report | Seyi | Live progress, the report with locked and unlocked findings, the PDF |
+| N. Fix on Ziki | Sanmi | Turning unlocked findings into private findings and issues |
+| D. Ownership, preview scan, on-call guests | Dave | Proof of ownership (with server proof expiry), the code-only preview scan, on-call guest access in new workspaces |
 
-Each part owns its own routes, pages and `lib/` files. If a part needs a schema change, add a new migration and say so in the team thread first, so two migrations don't collide.
+Each part owns its own routes, pages and `lib/` files. The shared columns all landed in the foundation. If a part still needs a schema change, say so in the team thread first, so two migrations don't collide.
 
-## Always-on agents and the job API (part 3)
+## The agent job API (today)
 
-Security-check jobs go only to **always-on agents**: Ziki-managed agents a super admin adds at `/superadmin/always-on` (`Agent.alwaysOnAt`). Agents already active in the client's workspace (its default agents) are preferred; otherwise any online always-on agent takes the job. "Online" means one of its keys was used in the last 15 minutes. Each agent holds at most 2 jobs at a time, so a check's parts spread across agents.
+Today security-check jobs go only to agents that are **on call** (`Agent.onCallAt`). Agents already active in the client's workspace are preferred; otherwise any online on-call agent takes the job. "Online" means one of its keys was used in the last 15 minutes. Each agent holds at most 2 jobs at a time, so a check's parts spread across agents. *(Coming: any security-cleared agent, on-call first; the split and summary done by Ziki's AI; pay per finding.)*
 
 The platform cron (`lib/security-checks/engine.ts`, `sweepSecurityChecks`) runs every cycle:
 
 1. A `queued` check (ownership proven) moves to `splitting` with one `split` job.
 2. A job held for more than 60 minutes without a report goes back to waiting, for another agent. Open jobs of a cancelled check are skipped.
-3. Waiting jobs, oldest first, go to available always-on agents.
-4. When every part is in, the check gets one **collate** job. An always-on agent reads every result and posts one plain-language summary; the check becomes `done` (`postedAt`) and only then does the client see the results (`isReportPosted()`). A part that fails or times out goes to another agent first, so the collate job waits for all of them.
-5. Always-on agents are run by Ziki and **earn nothing** (Mark, 12 Nov): when a check is paid, their jobs' pay is marked released with no points. Only an agent that isn't always-on would be paid, once the client pays: 5 points for a split, 3 per part (role `security_check`, source key `security-check:<jobId>`).
+3. Waiting jobs, oldest first, go to available on-call agents.
+4. When every part is in, the check gets one **collate** job. An on-call agent reads every result and posts one plain-language summary; the check becomes `done` (`postedAt`) and only then does the client see the results (`isReportPosted()`). A part that fails or times out goes to another agent first, so the collate job waits for all of them.
+5. For now, on-call agents' jobs release no points. *(Coming: the finder of each unlocked finding earns its price; see "Pay per finding".)*
 
-The routes are not workspace-scoped: a job is served to the agent holding it, whichever workspace its key is for. Any other agent gets `403 not_always_on`.
+The routes are not workspace-scoped: a job is served to the agent holding it, whichever workspace its key is for. Any other agent gets `403 not_on_call`.
 
 | Route | What it does |
 | --- | --- |

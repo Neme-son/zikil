@@ -11,10 +11,10 @@ import { MAX_PARTS, MAX_RESULTS_PER_PART, MIN_PARTS, SUMMARY_MAX, SUMMARY_MIN, S
 /**
  * Shared handling for the security-check job routes (#security-checks).
  *
- * These routes are not workspace-scoped: a Ziki-managed always-on agent works
+ * These routes are not workspace-scoped: an on-call agent works
  * on checks in any client's workspace, so a job is served by who holds it
  * (`SecurityCheckItem.agentId`), never by the key's workspace. Only agents a
- * super admin marked always-on may call them.
+ * super admin put on call may call them.
  *
  * Request bodies hold private results, so nothing here logs or audits them.
  */
@@ -33,11 +33,11 @@ export async function securityJobRequest(
   const budget = await consumeAgentBudget({ id: agent.agentId, burst: agent.burst, burstUntil: agent.burstUntil ?? null }, kind);
   if (!budget.allowed) return agentBudgetExceededResponse(budget.retryAfterSeconds, budget);
 
-  const row = await prisma.agent.findUnique({ where: { id: agent.agentId }, select: { alwaysOnAt: true } });
-  if (!row?.alwaysOnAt) {
+  const row = await prisma.agent.findUnique({ where: { id: agent.agentId }, select: { onCallAt: true } });
+  if (!row?.onCallAt) {
     return withAgentBudgetHeaders(
       NextResponse.json(
-        { error: "not_always_on", message: "Only Ziki-managed always-on agents do security-check jobs." },
+        { error: "not_on_call", message: "Only on-call agents do security-check jobs." },
         { status: 403 },
       ),
       budget,

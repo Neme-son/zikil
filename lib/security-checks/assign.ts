@@ -2,7 +2,7 @@
  * Who gets a security-check job (#security-checks). Plain logic with no
  * database, so it is easy to test.
  *
- * Only Ziki-managed always-on agents are candidates. Agents already active in
+ * Only on-call agents are candidates. Agents already active in
  * the client's workspace (its default agents) go first; then the agent with
  * the fewest open jobs; then the earliest in the list, so the choice is stable.
  */

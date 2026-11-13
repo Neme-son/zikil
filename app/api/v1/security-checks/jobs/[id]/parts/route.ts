@@ -10,7 +10,7 @@ export const runtime = "nodejs";
  * POST /api/v1/security-checks/jobs/{id}/parts — the split job's answer
  * (#security-checks): `{ "parts": [{ "title", "instructions" }] }`, the parts
  * of the target to check. The check moves to Checking and each part becomes a
- * job for an always-on agent.
+ * job for an on-call agent.
  */
 export async function POST(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   return securityJobRequest(request, "write", async (agent) => {

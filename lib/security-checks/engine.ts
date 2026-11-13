@@ -5,20 +5,20 @@ import { pickAgentFor, type CandidateAgent } from "./assign";
 
 /**
  * The security check engine (#security-checks, part 3). Ziki-managed
- * always-on agents (`Agent.alwaysOnAt`) do the work:
+ * on-call agents (`Agent.onCallAt`) do the work:
  *
  * 1. A `queued` check (ownership proven) moves to `splitting` with one `split` job.
- * 2. Waiting jobs are given to online always-on agents, a few at a time each,
+ * 2. Waiting jobs are given to online on-call agents, a few at a time each,
  *    preferring agents active in the client's workspace (its default agents).
  * 3. The split job's agent adds the parts to check; the check moves to `checking`.
  * 4. Each part's agent reports what it found.
- * 5. When every part is in, the check gets one `collate` job: an always-on
+ * 5. When every part is in, the check gets one `collate` job: an on-call
  *    agent reads every result and writes the summary. Posting it makes the
  *    check `done`, and only then does the client see the results (isReportPosted).
  * 6. A job not reported within JOB_TIMEOUT_MINUTES goes back to waiting, so a
  *    failed part goes to another agent and the collate job waits for it.
  * 7. Once the client has paid, each reported job's pay is released once.
- *    Always-on agents are run by Ziki and earn nothing (Mark, 12 Nov): their
+ *    On-call agents are run by Ziki and earn nothing (Mark, 12 Nov): their
  *    pay is marked released with no points.
  *
  * Every state change is a conditional update checked by its count, because
@@ -59,7 +59,7 @@ export function securityJobSourceKey(itemId: string): string {
   return `security-check:${itemId}`;
 }
 
-/** What a job would pay an agent that isn't always-on. The collate job is always-on work and pays nothing. */
+/** What a job would pay an agent that isn't on-call. The collate job is on-call work and pays nothing. */
 export function jobPoints(kind: "split" | "check" | "collate"): number {
   if (kind === "collate") return 0;
   return kind === "split" ? SPLIT_JOB_POINTS : PART_JOB_POINTS;
@@ -116,15 +116,15 @@ export async function reclaimStaleJobs(db: Db, now = new Date()): Promise<{ recl
 }
 
 // ---------------------------------------------------------------------------
-// 3. Waiting jobs go to online always-on agents.
+// 3. Waiting jobs go to online on-call agents.
 
-/** Online always-on agents with room for another job, and the workspaces each is active in. */
+/** Online on-call agents with room for another job, and the workspaces each is active in. */
 export async function availableAgents(db: Db, now = new Date(), onlyAgentId?: string): Promise<CandidateAgent[]> {
   const since = new Date(now.getTime() - ONLINE_WINDOW_MS);
   const agents = await db.agent.findMany({
     where: {
       ...(onlyAgentId ? { id: onlyAgentId } : {}),
-      alwaysOnAt: { not: null },
+      onCallAt: { not: null },
       revokedAt: null,
       pausedAt: null,
       apiKeys: { some: { revokedAt: null, lastUsedAt: { gte: since } } },
@@ -371,7 +371,7 @@ export async function submitSummary(db: Transactional, agentId: string, itemId: 
 /**
  * Releases each reported job's pay on a paid check, once per job (the source
  * key and the conditional `payoutReleasedAt` both guard it): `jobPoints` to
- * the agent's owner, into the client's workspace ledger, except for always-on
+ * the agent's owner, into the client's workspace ledger, except for on-call
  * agents, which earn nothing. An unpaid check pays nobody.
  */
 export async function releasePaidJobs(tx: Tx, checkId: string, now = new Date()): Promise<number> {
@@ -379,7 +379,7 @@ export async function releasePaidJobs(tx: Tx, checkId: string, now = new Date())
   if (!check?.paidAt) return 0;
   const due = await tx.securityCheckItem.findMany({
     where: { checkId, status: "done", payoutReleasedAt: null, agentId: { not: null } },
-    select: { id: true, kind: true, agentId: true, agent: { select: { ownerUserId: true, alwaysOnAt: true } } },
+    select: { id: true, kind: true, agentId: true, agent: { select: { ownerUserId: true, onCallAt: true } } },
   });
   let paid = 0;
   for (const item of due) {
@@ -389,8 +389,8 @@ export async function releasePaidJobs(tx: Tx, checkId: string, now = new Date())
       data: { payoutReleasedAt: now },
     });
     if (count !== 1) continue;
-    // Always-on agents are run by Ziki and earn nothing: released, no points.
-    if (item.agent.alwaysOnAt) continue;
+    // On-call agents are run by Ziki and earn nothing: released, no points.
+    if (item.agent.onCallAt) continue;
     const points = jobPoints(item.kind);
     if (points <= 0) continue;
     await award(tx, {
