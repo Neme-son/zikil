@@ -3,6 +3,7 @@ import { isIP } from "node:net";
 import http from "node:http";
 import https from "node:https";
 import tls from "node:tls";
+import { getDomain } from "tldts";
 import type { SecuritySeverity, SecurityTargetKind } from "@prisma/client";
 import { consumeRateLimit } from "@/lib/rate-limit";
 import { PREVIEW_SCANS_PER_VISITOR_PER_HOUR } from "@/lib/security-checks";
@@ -28,7 +29,8 @@ import { parseSecurityTarget } from "@/lib/security-checks/target";
 export const PREVIEW_CACHE_MS = 10 * 60 * 1000;
 
 const TIMEOUT_MS = 5_000;
-const MAX_REDIRECTS = 3;
+/** Same-site HTTPS redirects followed before the homepage is called unreadable (browsers allow about 20). */
+export const MAX_REDIRECTS = 10;
 const EXPIRING_DAYS = 14;
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -136,22 +138,29 @@ async function scan(
   now: number,
 ): Promise<PreviewResult> {
   const host = isIP(value) === 6 ? `[${value}]` : value;
-  const [secure, plain, certificate, spf, dmarc] = await Promise.all([
+  // Mail records live on the registrable domain (app.example.co.uk -> example.co.uk), not on each subdomain.
+  const mailDomain = kind === "website" ? emailDomainFor(value) : null;
+  const [home, plain, certificate, spf, dmarc] = await Promise.all([
     homepage(network, `https://${host}/`, value).catch(rethrowPrivate),
     network.page(`http://${host}/`).catch(rethrowPrivate),
     network.certificate(value).catch(rethrowPrivate),
-    kind === "website" ? readTxt(network, value) : Promise.resolve(null),
-    kind === "website" ? readTxt(network, `_dmarc.${value}`) : Promise.resolve(null),
+    mailDomain ? readTxt(network, mailDomain) : Promise.resolve(null),
+    mailDomain ? readDmarc(network, value, mailDomain) : Promise.resolve(null),
   ]);
+  // Too many redirects says nothing about HTTPS either way: don't call it missing.
+  const tooManyRedirects = home === TOO_MANY_REDIRECTS;
+  const secure = tooManyRedirects ? null : home;
 
-  if (!secure && !plain) {
+  if (!secure && !plain && !tooManyRedirects) {
     return { ok: false, reason: `${value} didn't answer on the web (ports 80 and 443). Check it opens in a browser, then try again.` };
   }
 
   const findings: PreviewFinding[] = [];
-  const checked: PreviewArea[] = ["https"];
+  const checked: PreviewArea[] = tooManyRedirects ? [] : ["https"];
 
-  if (!secure) {
+  if (tooManyRedirects) {
+    // Couldn't check: the homepage kept redirecting on its own site, so HTTPS isn't judged.
+  } else if (!secure) {
     findings.push({
       id: "no-https",
       severity: "high",
@@ -183,9 +192,9 @@ async function scan(
   }
 
   // A record is only called missing when the lookup really answered: a lookup that failed says nothing.
-  if (kind === "website" && (spf !== null || dmarc !== null)) {
+  if (mailDomain && (spf !== null || dmarc !== null)) {
     checked.push("email");
-    findings.push(...emailFindings(spf, dmarc, value));
+    findings.push(...emailFindings(spf, dmarc, mailDomain));
   }
 
   findings.sort((a, b) => SEVERITY_ORDER[a.severity] - SEVERITY_ORDER[b.severity]);
@@ -216,8 +225,29 @@ async function readTxt(network: PreviewNetwork, host: string): Promise<string[][
   return null;
 }
 
-/** The homepage's headers, following up to a few redirects on the same site. Null when it doesn't answer. */
-async function homepage(network: PreviewNetwork, start: string, site: string): Promise<PageAnswer | null> {
+/** The registrable domain whose SPF and DMARC records cover `host`; the host itself when it has none (an IP, localhost). */
+export function emailDomainFor(host: string): string {
+  return getDomain(host, { allowPrivateDomains: false }) ?? host;
+}
+
+/**
+ * The DMARC records that apply to `host`: its own `_dmarc` record, else the
+ * registrable domain's (RFC 7489 section 6.6.3). Null when a lookup didn't answer.
+ */
+async function readDmarc(network: PreviewNetwork, host: string, mailDomain: string): Promise<string[][] | null> {
+  const own = await readTxt(network, `_dmarc.${host}`);
+  if (host === mailDomain || own === null) return own;
+  const hasPolicy = own.some((parts) => parts.join("").trim().toLowerCase().startsWith("v=dmarc1"));
+  return hasPolicy ? own : readTxt(network, `_dmarc.${mailDomain}`);
+}
+
+const TOO_MANY_REDIRECTS = "too_many_redirects" as const;
+
+/**
+ * The homepage's headers, following same-site HTTPS redirects. Null when it
+ * doesn't answer; TOO_MANY_REDIRECTS when it still redirects after MAX_REDIRECTS.
+ */
+async function homepage(network: PreviewNetwork, start: string, site: string): Promise<PageAnswer | typeof TOO_MANY_REDIRECTS | null> {
   let url = new URL(start);
   for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
     const answer = await network.page(url.toString());
@@ -230,7 +260,7 @@ async function homepage(network: PreviewNetwork, start: string, site: string): P
     }
     return answer;
   }
-  return null;
+  return TOO_MANY_REDIRECTS;
 }
 
 function sameSite(host: string, site: string): boolean {
