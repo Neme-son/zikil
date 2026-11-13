@@ -85,7 +85,9 @@ export async function addSecurityAsset(link: string): Promise<ChatAnswer> {
 
 /** Every asset (a website, a server or a public repo) gets the quick scan first; nothing is saved until "Show it's yours". */
 async function scanOrGo(userId: string, target: ParsedTarget, reply: string): Promise<ChatAnswer> {
-  const result = await previewScan(target.value, { visitor: `user:${userId}` });
+  // A repo's value is just "owner/name"; the scan reads it back as a link, so give it the GitHub address.
+  const link = target.kind === "repo" ? `github.com/${target.value}` : target.value;
+  const result = await previewScan(link, { visitor: `user:${userId}` });
   if (!result.ok) return { kind: "scan", reply, target: target.value, summary: null, note: result.reason };
   return { kind: "scan", reply, target: target.value, summary: summarisePreview(result), note: null };
 }

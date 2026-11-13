@@ -80,7 +80,8 @@ describe("talkToSecurityAssistant (#security-checks, plan C3)", () => {
       { id: "p", severity: "low", area: "policy", title: "No security policy SECRET", detail: "No SECURITY.md SECRET" },
     ] });
     const answer = await talkToSecurityAssistant(say("github.com/settle/app"));
-    expect(mocks.preview).toHaveBeenCalledWith("settle/app", { visitor: "user:u1" });
+    // The scan reads its link back through the same parser, so a repo must go in as a GitHub address, not "owner/name".
+    expect(mocks.preview).toHaveBeenCalledWith("github.com/settle/app", { visitor: "user:u1" });
     expect(mocks.addTargetAndCheck).not.toHaveBeenCalled();
     expect(answer).toMatchObject({ kind: "scan", target: "settle/app", summary: { kind: "repo", total: 2, risk: "high" } });
     expect(JSON.stringify(answer)).not.toContain("SECRET");
