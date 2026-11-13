@@ -10,6 +10,7 @@ import { currentOrganisationIdFor, NO_ORGANISATION_MESSAGE } from "@/lib/organis
 import { prisma } from "@/lib/prisma";
 import { BUILT_IN_CHECKS } from "@/lib/proof";
 import { decideTestCardRow } from "@/lib/agent-api/test-card";
+import { refreshJudgedStatus } from "@/lib/agent-api/tested-status";
 
 /**
  * Settings for deeper testing (#deeper-testing, lib/proof.ts). The
@@ -152,3 +153,36 @@ export async function decideTestCardRowAction(bugId: string, rowId: string, deci
   revalidatePath("/[org]/[project]", "layout");
   return { ok: true };
 }
+
+const overruleSchema = z.object({
+  squareKey: z.string().trim().min(1).max(260),
+  reason: z.string().trim().min(5, "Say why the fail no longer stands.").max(300),
+});
+
+/**
+ * A project's owner or admin overrules a failed test-card square (#deeper-testing):
+ * for example its tester is gone, or the fail was about something out of scope.
+ * It stops holding the issue, the reason is kept, and the issue's status is
+ * worked out again.
+ */
+export async function overruleTestCardSquareAction(bugId: string, input: { squareKey: string; reason: string }): Promise<ProofActionResult> {
+  const bug = await prisma.bug.findUnique({ where: { id: id.parse(bugId) }, select: { id: true, projectId: true, organisationId: true } });
+  if (!bug) return { ok: false, error: "Issue not found." };
+  const a = await access(bug.projectId);
+  if (!a.ok) return a;
+  if (a.organisationId !== bug.organisationId) return { ok: false, error: "Issue not found." };
+  const parsed = overruleSchema.safeParse(input);
+  if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Check the details." };
+  await prisma.testCardOverride.upsert({
+    where: { bugId_squareKey: { bugId: bug.id, squareKey: parsed.data.squareKey } },
+    create: { bugId: bug.id, squareKey: parsed.data.squareKey, reason: parsed.data.reason, userId: a.userId },
+    update: { reason: parsed.data.reason, userId: a.userId },
+  });
+  await prisma.projectAuditEvent.create({
+    data: { organisationId: a.organisationId, projectId: bug.projectId, actorUserId: a.userId, action: "test_card.square_overruled", changes: { bugId: bug.id, ...parsed.data } },
+  });
+  await refreshJudgedStatus(prisma, bug.id, a.userId);
+  revalidatePath("/[org]/[project]", "layout");
+  return { ok: true };
+}
+

@@ -131,6 +131,7 @@ export function ProofRulesEditor({
                 </button>
               ) : null}
             </div>
+            {!rule.issueTypeId && !rule.projectAreaId ? <MayNotFit checks={rule.checks} /> : null}
             {pickingFor === rule.id ? (
               <div className="flex flex-wrap gap-2 rounded-xl bg-zk-chip/60 p-3">
                 {checks.filter((c) => !rule.checks.includes(c.id)).map((c) => (
@@ -313,5 +314,27 @@ function WrittenChecks({ checks, pending, run }: { checks: ProofCheckView[]; pen
         </button>
       )}
     </section>
+  );
+}
+
+/**
+ * Checks in a rule for every issue that won't fit every issue (#deeper-testing):
+ * testers then have to show them not applicable, with a reason, on the rest.
+ */
+function MayNotFit({ checks }: { checks: string[] }) {
+  const fixOnly = [checks.includes("repro") ? "Saw the bug" : null, checks.includes("regression") ? "Regression test" : null].filter(Boolean);
+  const notes = [
+    fixOnly.length
+      ? `${fixOnly.join(" and ")} only ${fixOnly.length > 1 ? "fit" : "fits"} fixes: put ${fixOnly.length > 1 ? "them" : "it"} in a rule for your fix type, or testers will have to mark ${fixOnly.length > 1 ? "them" : "it"} N/A on every other issue.`
+      : null,
+    checks.includes("staging") ? "On staging only fits projects with a staging site: on the others testers will have to mark it N/A." : null,
+  ].filter(Boolean);
+  if (!notes.length) return null;
+  return (
+    <ul className="m-0 flex list-none flex-col gap-1 rounded-xl border border-dashed border-zk-warn-bd bg-zk-warn-bg/50 p-0 px-3 py-2 text-xs text-zk-warn-fg">
+      {notes.map((note) => (
+        <li key={note}>{note}</li>
+      ))}
+    </ul>
   );
 }

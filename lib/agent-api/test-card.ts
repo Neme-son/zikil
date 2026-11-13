@@ -67,8 +67,9 @@ async function writableCard(bug: Prisma.BugGetPayload<{ select: typeof bugSelect
 }
 
 /** The agent that drew up the card: whoever wrote its first row. */
-async function cardAuthor(db: Db, bugId: string) {
-  return (await db.testCardRow.findFirst({ where: { bugId, agentId: { not: null } }, orderBy: [{ createdAt: "asc" }, { id: "asc" }], select: { agentId: true } }))?.agentId ?? null;
+/** The person whose agent drew up the card (wrote its first row): independence is by owner, so their other agents are the author too. */
+export async function cardAuthor(db: Db, bugId: string) {
+  return (await db.testCardRow.findFirst({ where: { bugId, agentId: { not: null } }, orderBy: [{ createdAt: "asc" }, { id: "asc" }], select: { agent: { select: { ownerUserId: true } } } }))?.agent?.ownerUserId ?? null;
 }
 
 /** Rows one agent may write on a card: the author draws it up, every other tester adds a few wild rows. */
@@ -85,17 +86,17 @@ export async function addTestCardRows(agent: AgentContext, issueRef: string, raw
   const parsed = addRowsSchema.safeParse(raw ?? {});
   if (!parsed.success) throw fail(400, "invalid_request", parsed.error.issues[0]?.message ?? "Invalid rows.");
   const bug = await issueFor(agent, issueRef);
-  if (deliveredClaim(bug)?.agentId === agent.agentId) {
-    throw fail(403, "fixer_cannot_test", "The agent that delivered the work doesn't draw up its test card.");
+  if (deliveredClaim(bug)?.agent.ownerUserId === agent.ownerId) {
+    throw fail(403, "fixer_cannot_test", "The agents of the person who delivered the work don't draw up its test card.");
   }
   const card = await writableCard(bug);
   const author = await cardAuthor(prisma, bug.id);
-  const isAuthor = !author || author === agent.agentId;
+  const isAuthor = !author || author === agent.ownerId;
   if (!isAuthor && parsed.data.rows.some((r) => r.source !== "beyond")) {
     throw fail(403, "not_card_author", "The card's author writes its criteria rows; you can add rows beyond the normal use case (source beyond).");
   }
   const limit = isAuthor ? ROWS_PER_AUTHOR : ROWS_PER_TESTER;
-  const mine = await prisma.testCardRow.count({ where: { bugId: bug.id, agentId: agent.agentId } });
+  const mine = await prisma.testCardRow.count({ where: { bugId: bug.id, agent: { ownerUserId: agent.ownerId } } });
   if (mine + parsed.data.rows.length > limit) {
     throw fail(409, "too_many_rows", `An agent adds at most ${limit} rows to this card; you have ${mine}.`);
   }
@@ -128,9 +129,10 @@ export async function actOnTestCardRow(agent: AgentContext, issueRef: string, ro
   if (!parsed.success) throw fail(400, "invalid_request", parsed.error.issues[0]?.message ?? "Invalid action.");
   const bug = await issueFor(agent, issueRef);
   await writableCard(bug);
-  const row = await prisma.testCardRow.findFirst({ where: { id: rowId, bugId: bug.id }, select: { id: true, text: true, route: true, agentId: true } });
+  const row = await prisma.testCardRow.findFirst({ where: { id: rowId, bugId: bug.id }, select: { id: true, text: true, route: true, agent: { select: { ownerUserId: true } } } });
   if (!row) throw fail(404, "not_found", "No such row on this issue's test card.");
   const deliverer = deliveredClaim(bug)?.agentId === agent.agentId;
+  const deliverersOwner = deliveredClaim(bug)?.agent.ownerUserId === agent.ownerId;
   const { action, attachmentId } = parsed.data;
 
   if (action === "test") {
@@ -144,11 +146,11 @@ export async function actOnTestCardRow(agent: AgentContext, issueRef: string, ro
     if (attachmentKind(linked.contentType) !== "text") throw fail(400, "invalid_request", "Attach the test run's output as a text file, not a picture.");
     await prisma.testCardRow.update({ where: { id: row.id }, data: { proofAttachmentId: attachmentId } });
   } else {
-    if (deliverer) throw fail(403, "fixer_cannot_test", "The agent that delivered the work doesn't route its own test card.");
+    if (deliverersOwner) throw fail(403, "fixer_cannot_test", "The agents of the person who delivered the work don't route its test card.");
     if (row.route) throw fail(409, "already_routed", "This row is already waiting on someone.");
     // Only whoever wrote a row says it can't be proven (the card's author for Ziki's suggestions), so no tester routes away a square it would rather not prove.
-    const writer = row.agentId ?? (await cardAuthor(prisma, bug.id));
-    if (writer !== agent.agentId) throw fail(403, "not_row_author", "Only the agent that added this row can route it.");
+    const writer = row.agent?.ownerUserId ?? (await cardAuthor(prisma, bug.id));
+    if (writer !== agent.ownerId) throw fail(403, "not_row_author", "Only the agents of the person who added this row can route it.");
     const route = action === "needs_test" ? "ci" : "env";
     await prisma.testCardRow.update({ where: { id: row.id }, data: { route, routedAt: new Date() } });
     if (route === "env") await askOwnersToDecide(prisma, bug, row.text);
