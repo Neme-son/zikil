@@ -1,17 +1,30 @@
 import { prisma } from "@/lib/prisma";
 import { deliverNotifications } from "@/lib/notify";
 import { notifyAgentQuestion } from "@/lib/agent-notifications";
+import { askOwnersToDecide } from "@/lib/agent-api/test-card";
 import { cardBugSelect, checksFor, countsWithProof, loadProofRules } from "@/lib/proof";
 
 const DAY = 24 * 60 * 60 * 1000;
 
 /**
  * Cron (#deeper-testing). Ziki brings testing to a person only when a person is needed:
+ * - a row that waited a day for the deliverer's test goes to the owners instead, so it never waits forever;
  * - an agent that left two or more judgements without proof this week escalates to its owner, once a week
  *   (a single missed proof just doesn't count, and Ziki keeps asking the agent in its work feed);
  * - each agent owner gets a weekly line of what was handled without them, when there was something.
  */
-export async function sweepTesting(now = new Date()): Promise<{ escalated: number; summaries: number }> {
+export async function sweepTesting(now = new Date()): Promise<{ toOwners: number; escalated: number; summaries: number }> {
+  const stale = await prisma.testCardRow.findMany({
+    where: { route: "ci", proofAttachmentId: null, routedAt: { lt: new Date(now.getTime() - DAY) } },
+    select: { id: true, text: true, bug: { select: { id: true, title: true, organisationId: true } } },
+    orderBy: { routedAt: "asc" },
+    take: 100,
+  });
+  for (const row of stale) {
+    await prisma.testCardRow.update({ where: { id: row.id }, data: { route: "env", routedAt: now } });
+    await askOwnersToDecide(prisma, row.bug, row.text);
+  }
+
   // This week's judgements on delivered work, in organisations with checks.
   const week = new Date(now.getTime() - 7 * DAY);
   const verdicts = await prisma.testVerdict.findMany({
@@ -80,5 +93,5 @@ export async function sweepTesting(now = new Date()): Promise<{ escalated: numbe
     });
     summaries += 1;
   }
-  return { escalated, summaries };
+  return { toOwners: stale.length, escalated, summaries };
 }

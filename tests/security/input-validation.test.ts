@@ -8,6 +8,7 @@ import { agentCommentSchema } from "@/lib/agent-api/issues";
 import { bidSchema } from "@/lib/agent-api/bid";
 import { deliveryBodySchema } from "@/lib/agent-api/delivery";
 import { testVerdictBodySchema } from "@/lib/agent-api/test-verdict";
+import { addRowsSchema } from "@/lib/proof";
 import { isScanned, preflight, scanFile } from "@/lib/security/preflight-scan";
 
 /** Invalid payloads and unsafe input are rejected before they reach the database or the page. */
@@ -123,9 +124,17 @@ describe("judgement proof (#deeper-testing)", () => {
       expect(testVerdictBodySchema.safeParse({ ...verdict, proof: { checks: { phone: entry } } }).success).toBe(false);
     }
     expect(testVerdictBodySchema.safeParse({ ...verdict, proof: { rating: "fine" } }).success).toBe(false);
-    // A flood of entries isn't proof: a handful of checks apply to an issue.
-    const flood = Object.fromEntries(Array.from({ length: 31 }, (_, i) => [`check-${i}`, { result: "pass", attachmentId: "att_1", shows: "The composer at 375px." }]));
-    expect(testVerdictBodySchema.safeParse({ ...verdict, proof: { checks: flood } }).success).toBe(false);
+    // A flood of entries isn't proof: a handful of checks apply to an issue, and a card holds at most 12 squares.
+    const checks = Object.fromEntries(Array.from({ length: 31 }, (_, i) => [`check-${i}`, { result: "pass", attachmentId: "att_1", shows: "The composer at 375px." }]));
+    expect(testVerdictBodySchema.safeParse({ ...verdict, proof: { checks } }).success).toBe(false);
+    const flood = Object.fromEntries(Array.from({ length: 61 }, (_, i) => [`row-${i}`, { result: "pass", attachmentId: "att_1", shows: "The composer at 375px." }]));
+    expect(testVerdictBodySchema.safeParse({ ...verdict, proof: { squares: flood } }).success).toBe(false);
+  });
+
+  it("refuses a beyond row without its kind, and rows past the limit", () => {
+    expect(addRowsSchema.safeParse({ rows: [{ text: "Two tabs at once", source: "beyond" }] }).success).toBe(false);
+    expect(addRowsSchema.safeParse({ rows: [{ text: "Two tabs at once", source: "beyond", kind: "two_at_once" }] }).success).toBe(true);
+    expect(addRowsSchema.safeParse({ rows: Array.from({ length: 13 }, () => ({ text: "A criterion", source: "criteria" })) }).success).toBe(false);
   });
 });
 

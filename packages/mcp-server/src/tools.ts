@@ -985,11 +985,74 @@ export const TOOLS: readonly ToolDef[] = [
         ),
       proof: z
         .object({
-          checks: z.record(z.string(), proofEntry).optional().describe("By check id, from ziki_list_test_verdicts (checks)."),
+          checks: z.record(z.string(), proofEntry).optional().describe("By check id, from ziki_list_test_verdicts (checks) or ziki_get_test_card."),
+          squares: z.record(z.string(), proofEntry).optional().describe("By test-card square key, from ziki_get_test_card."),
+          rating: z.enum(["thorough", "too_easy"]).optional().describe("Not the card's author: is it thorough enough? The first rating holds."),
         })
         .strict()
         .optional()
         .describe("What you proved. Where the organisation has checks, a good-to-merge counts only with proof for every required check."),
+    },
+  },
+  {
+    name: "ziki_get_test_card",
+    summary:
+      "Read an issue's test card: the checks it needs and what each asks you to attach, the rows from the receipt and from testers, and every square's key and who proved it. Prove squares in your judgement (proof.squares on ziki_submit_test_result).",
+    level: "working",
+    method: "GET",
+    route: "/issues/{id}/test-card",
+    projectScoped: true,
+    input: { id: issueId, projectId },
+  },
+  {
+    name: "ziki_add_test_card_rows",
+    summary:
+      "Add rows to an issue's test card before you read the code: from the acceptance criteria (source criteria), or a case they don't cover (source beyond, with its kind: limits, bad_input, failure, mid_change, reload, two_at_once, permissions, still_works, devices). The card needs at least one beyond row, or noWildReason. The first agent to write rows is the card's author (up to 12); others add only beyond rows, up to 3. The agent that delivered the work can't.",
+    level: "working",
+    method: "POST",
+    route: "/issues/{id}/test-card",
+    projectScoped: true,
+    body: ["rows", "noWildReason"],
+    input: {
+      id: issueId,
+      projectId,
+      rows: z
+        .array(
+          z
+            .object({
+              text: z.string().trim().min(3).max(200),
+              why: z.string().trim().min(3).max(300).optional(),
+              source: z.enum(["criteria", "beyond"]),
+              kind: z.enum(["limits", "bad_input", "failure", "mid_change", "reload", "two_at_once", "permissions", "still_works", "devices"]).optional(),
+              proof: z.enum(["screen", "test", "log"]).optional(),
+              envs: z.array(z.string().trim().min(1).max(40)).max(4).optional(),
+              needsTwo: z.boolean().optional(),
+            })
+            .strict(),
+        )
+        .min(1)
+        .max(12)
+        .describe("The rows to add."),
+      noWildReason: z.string().trim().min(10).max(300).optional().describe("Why the card has no row beyond the normal use case."),
+    },
+  },
+  {
+    name: "ziki_test_card_row",
+    summary:
+      "Route a test-card row nobody can prove with a screenshot: needs_test (the deliverer adds an automated test; after a day without one the owners decide) or cant_prove (the owners decide). Only the agent that added the row routes it. The deliverer attaches its test with action test and attachmentId. Routed rows never hold the issue.",
+    level: "working",
+    method: "POST",
+    route: "/issues/{id}/test-card/{row}",
+    projectScoped: true,
+    body: ["action", "attachmentId"],
+    input: {
+      id: issueId,
+      projectId,
+      row: z.string().trim().min(1).max(191).describe("The row's id, from ziki_get_test_card."),
+      action: z
+        .enum(["needs_test", "cant_prove", "test"])
+        .describe("needs_test: the deliverer adds an automated test; cant_prove: the owners decide; test: the deliverer attaches its test run."),
+      attachmentId: z.string().trim().min(1).max(191).optional().describe("With test: the test run, uploaded with ziki_upload_attachment."),
     },
   },
   {

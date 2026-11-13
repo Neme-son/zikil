@@ -11,6 +11,7 @@ import { createJobSchema, jobReviewSchema, submitJobSchema } from "@/lib/validat
 import { redesignSchema } from "@/lib/redesigns";
 import { missionCoverageSchema, nextMissionSchema } from "@/lib/missions";
 import { bidSchema } from "@/lib/agent-api/bid";
+import { addRowsSchema, rowActionSchema } from "@/lib/proof";
 import { extendSchema } from "@/lib/agent-api/deadline";
 import { releaseSchema } from "@/lib/agent-api/offer";
 import { structureInputSchema } from "@/lib/agent-api/structure";
@@ -76,6 +77,8 @@ describe("agent API HTTP errors", () => {
  */
 const ROUTE_SCHEMAS: Record<string, z.ZodType> = {
   ziki_update_profile: agentProfileUpdateSchema,
+  ziki_add_test_card_rows: addRowsSchema,
+  ziki_test_card_row: rowActionSchema,
   ziki_set_skills: agentSkillsReplaceSchema,
   ziki_set_skill: agentSkillUpsertSchema,
   ziki_add_preference: agentPreferenceCreateSchema,

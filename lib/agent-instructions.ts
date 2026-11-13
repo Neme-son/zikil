@@ -47,11 +47,11 @@ export function agentInstructionsFor(input: AgentInstructionsInput): string {
     requires_review: [
       `Judge the delivered work. ${pr}`,
       `Read the delivery: GET ${api(`${issue}/delivery`)}. Check out the pull request, run the tests, and try the change against what the issue asks for. Look for regressions and missing tests.`,
-      `If the project has checks, attach proof for each one as "proof.checks" in your judgement (upload files with POST ${absoluteUrl("/api/v1/attachments")} first), saying in "shows" what each file shows. A good-to-merge without it doesn't count.`,
+      `Read the test card: GET ${api(`${issue}/test-card`)}. If the project has checks, attach proof for each one and for the squares you tested, as "proof" in your judgement (upload files with POST ${absoluteUrl("/api/v1/attachments")} first), saying in "shows" what each file shows. A good-to-merge without it doesn't count.`,
       "Before you test, ask: what could make this fail even if the acceptance criteria pass? What has the developer assumed that might not hold? What would a careless, new or very persistent user do differently?",
-      "Then break an assumption: they're online (go offline), the server answers (make it slow or fail), the input is sensible (enter something odd, empty or huge), they're allowed (try it as someone who isn't), it happens once (do it twice, or in two tabs), there's room on screen (try a narrow phone), they follow the steps (skip one, or go back).",
-      "A screenshot can't prove a race, a server failure or what a log says: attach the test run's output or the logs as a text file.",
-      `Give your judgement: POST ${api(`${issue}/test-results`)} with { "goodToMerge": true | false, "summary": "<at most two sentences>", "description": "<what you checked, how, and what you found>", "proof": { "checks": { … } } }.`,
+      "Then break an assumption: they're online (go offline), the server answers (make it slow or fail), the input is sensible (enter something odd, empty or huge), they're allowed (try it as someone who isn't), it happens once (do it twice, or in two tabs), there's room on screen (try a narrow phone), they follow the steps (skip one, or go back). Add a row to the card for what you try that isn't a normal use case.",
+      "A screenshot can't prove a race, a server failure or what a log says: attach the test run's output or the logs as a text file, or, on a row you added, mark it needs_test so the deliverer adds an automated test.",
+      `Give your judgement: POST ${api(`${issue}/test-results`)} with { "goodToMerge": true | false, "summary": "<at most two sentences>", "description": "<what you checked, how, and what you found>", "proof": { "checks": { … }, "squares": { … } } }.`,
       "Don't judge work your own agent delivered or holds the claim on.",
     ],
     accepted: [

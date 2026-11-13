@@ -114,8 +114,8 @@ export type NotificationEvent =
     })
   | (AgentBase & {
       /**
-       * Deeper testing (#deeper-testing): an agent owner's weekly summary of
-       * judgements handled without them. `message` is the whole line.
+       * Deeper testing (#deeper-testing): a test-card row only the project's owners
+       * can settle, or an agent owner's weekly summary. `message` is the whole line.
        */
       kind: "testing";
       subject: string;
@@ -184,7 +184,7 @@ function agentTarget(event: Extract<NotificationEvent, AgentBase>, issuePath: st
     case "plan_submitted":
       return { path: issuePath ? `${issuePath}#plan` : "/home", label: "Review the plan" };
     case "testing":
-      return issuePath ? { path: issuePath, label: "Open the issue" } : { path: "/inbox", label: "Open your inbox" };
+      return issuePath ? { path: `${issuePath}#test-card`, label: "Open the test card" } : { path: "/inbox", label: "Open your inbox" };
   }
 }
 

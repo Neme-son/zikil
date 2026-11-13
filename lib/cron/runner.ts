@@ -67,7 +67,7 @@ export type PlatformSweepsResult = {
       error?: string;
     };
     orphanedIssues: { status: "ok" | "error"; reopened?: number; error?: string };
-    testing: { status: "ok" | "error"; escalated?: number; summaries?: number; error?: string };
+    testing: { status: "ok" | "error"; toOwners?: number; escalated?: number; summaries?: number; error?: string };
     draftStructuring: {
       status: "ok" | "error";
       structured?: number;
@@ -208,7 +208,7 @@ export async function runPlatformSweeps(): Promise<PlatformSweepsResult | { skip
       result.sweeps.securityChecks = { status: "error", error: err instanceof Error ? err.message : String(err) };
     }
 
-    // 2a. Deeper testing (#deeper-testing): proof escalations and the weekly line.
+    // 2a. Deeper testing (#deeper-testing): rows past their day, proof escalations, the weekly line.
     try {
       const res = await sweepTesting();
       recordSweepSuccess("testing");

@@ -3,14 +3,18 @@
 import { Fragment } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { orgHomePath, projectPath, projectRef, type ProjectRef } from "@/lib/project-paths";
+import { ideasPath, issuesPath, marketingPath, orgHomePath, projectPath, projectRef, type ProjectRef } from "@/lib/project-paths";
 
 /** The organisation's slug, and the project (none on the organisation's own page). */
 export type BreadcrumbProject = { orgSlug: string; slug?: string; name?: string };
 
+/** One step of the trail after the project: a page's name, linked when it is a page above the current one. */
+type Crumb = { label: string; href?: string };
+
 /** Each issue list's stage (the tabs across the top) and, when the stage has several, its step. */
-const ISSUE_LISTS: Record<string, [string, string?]> = {
-  "your-work": ["Your Work"],
+const ISSUE_LISTS: Record<string, string[]> = {
+  // Project Overview is the project's own page: the trail ends at the project's name.
+  "your-work": [],
   open: ["In Progress", "Open"],
   "in-progress": ["In Progress", "In progress"],
   closed: ["In Progress", "Closed"],
@@ -24,23 +28,40 @@ const ISSUE_LISTS: Record<string, [string, string?]> = {
   rejected: ["All issues", "Rejected"],
   duplicates: ["All issues", "Duplicates"],
   finished: ["All issues", "Closed"],
+  history: ["Merge history"],
   new: ["Report an issue"],
 };
 const IDEA_LISTS: Record<string, string> = { rejected: "Rejected", drafts: "Drafts" };
+const MARKETING_PAGES: Record<string, string> = { "output-box": "Output box", settings: "Settings", ideas: "Rejected ideas", tasks: "New task" };
 
-/** What the page under the project is, from its path: [Ideas], [In Progress, Closed], [Issue #12], … */
-function sectionOf(pathname: string, ref: ProjectRef): string[] {
+/**
+ * What the page under the project is, from its path: [Ideas], [In Progress, Closed], [Issue #12], …
+ * Every project page names itself here (#breadcrumbs), so none draws a trail of its own.
+ */
+function sectionOf(pathname: string, ref: ProjectRef): Crumb[] {
   const rest = pathname.slice(projectPath(ref).length).replace(/^\/+|\/+$/g, "");
   const [first, second] = rest.split("/");
+  const named = (...labels: string[]) => labels.map((label) => ({ label }));
   if (!first) return [];
-  if (/^[0-9]+$/.test(first)) return [`Issue #${first}`];
+  if (/^[0-9]+$/.test(first)) return named(`Issue #${first}`);
   if (first === "ideas") {
-    if (second && /^[0-9]+$/.test(second)) return ["Ideas", `Idea #${second}`];
-    return second && IDEA_LISTS[second] ? ["Ideas", IDEA_LISTS[second]] : ["Ideas"];
+    if (second && /^[0-9]+$/.test(second)) return [{ label: "Ideas", href: ideasPath(ref) }, { label: `Idea #${second}` }];
+    return second && IDEA_LISTS[second] ? named("Ideas", IDEA_LISTS[second]) : named("Ideas");
   }
-  if (first === "issues") return (ISSUE_LISTS[second ?? "all"] ?? ["Issues"]).filter((part): part is string => Boolean(part));
-  const named: Record<string, string> = { notes: "Notes", org: "Organisation", workstream: "Workstream", features: "Feature plans" };
-  return named[first] ? [named[first]] : [];
+  if (first === "issues") return named(...(ISSUE_LISTS[second ?? "all"] ?? ["Issues"]).filter((part): part is string => Boolean(part)));
+  // A goal's own page sits under Project Overview, where the goals are listed.
+  if (first === "goals") return [{ label: "Project Overview", href: issuesPath(ref, "your-work") }, { label: "Goal" }];
+  if (first === "marketing") {
+    if (!second) return named("Marketing");
+    return [{ label: "Marketing", href: marketingPath(ref) }, { label: MARKETING_PAGES[second] ?? "Marketing" }];
+  }
+  if (first === "tasks") return [{ label: "Marketing", href: marketingPath(ref) }, { label: second ? `Task #${second}` : "Task" }];
+  if (first === "features") {
+    if (!second) return named("Feature plans");
+    return [{ label: "Feature plans", href: projectPath(ref, "/features") }, { label: second === "new" ? "New plan" : "Plan" }];
+  }
+  const pages: Record<string, string> = { notes: "Notes", org: "Organisation", workstream: "Workstream", report: "Report an issue" };
+  return pages[first] ? named(pages[first]) : [];
 }
 
 /**
@@ -84,9 +105,15 @@ export function ProjectBreadcrumb({ project }: { project: BreadcrumbProject }) {
               <Link href={projectPath(ref)} className={`${crumb} block truncate font-bold text-zk-text`}>{project.name}</Link>
             </li>
             {section.map((part, index) => (
-              <Fragment key={part}>
+              <Fragment key={part.label}>
                 <li aria-hidden="true" className="text-zk-muted">/</li>
-                <li aria-current={index === section.length - 1 ? "page" : undefined} className={`truncate px-1.5 ${index === section.length - 1 ? "" : "font-medium"}`}>{part}</li>
+                {part.href && index < section.length - 1 ? (
+                  <li className="min-w-0">
+                    <Link href={part.href} className={`${crumb} block truncate font-medium text-zk-text2`}>{part.label}</Link>
+                  </li>
+                ) : (
+                  <li aria-current={index === section.length - 1 ? "page" : undefined} className={`truncate px-1.5 ${index === section.length - 1 ? "" : "font-medium"}`}>{part.label}</li>
+                )}
               </Fragment>
             ))}
           </>

@@ -589,6 +589,18 @@ export function AgentsDock({
               <span className="flex-1">See all agents</span>
               <span aria-hidden="true">→</span>
             </Link>
+            {/* The forum, where agents talk (moved here from the top bar). */}
+            <Link
+              href="/forum"
+              onClick={() => setPanel(false)}
+              className="flex items-center gap-2 rounded-lg px-1.5 py-1.5 text-xs font-bold text-zk-accent transition hover:bg-zk-chip focus-visible:outline-2 focus-visible:outline-electric-blue"
+            >
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+              </svg>
+              <span className="flex-1">Agents Forum</span>
+              <span aria-hidden="true">→</span>
+            </Link>
           </section>
         ) : null}
         <button
