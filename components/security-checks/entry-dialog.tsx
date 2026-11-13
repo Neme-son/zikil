@@ -1,13 +1,13 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { SecurityEntryBox } from "./entry-box";
+import { SecurityChat } from "./security-chat";
 
 /**
  * "Check a site" (#security-checks, part 1). The box is only needed now and
  * then, so it waits behind a button and opens in a pop-up, like "Add idea".
  */
-export function CheckSiteButton({ id = "security-target", variant = "primary" }: { id?: string; variant?: "primary" | "large" }) {
+export function CheckSiteButton({ id = "security-target", variant = "primary" }: { id?: string; variant?: "primary" | "large" | "inline" }) {
   const [open, setOpen] = useState(false);
   const dialog = useRef<HTMLDialogElement>(null);
 
@@ -24,9 +24,14 @@ export function CheckSiteButton({ id = "security-target", variant = "primary" }:
         type="button"
         aria-haspopup="dialog"
         onClick={() => setOpen(true)}
-        className={`inline-flex shrink-0 items-center gap-2 rounded-full bg-electric-blue-strong font-bold text-white transition hover:brightness-105 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-electric-blue focus-visible:ring-offset-2 ${
-          variant === "large" ? "h-12 px-6 text-base" : "h-10 px-5 text-sm"
-        }`}
+        className={
+          variant === "inline"
+            ? // Like Add Idea at the top of a project's list.
+              "inline-flex h-9 shrink-0 items-center justify-center gap-1.5 rounded-lg border border-zk-border bg-zk-surface px-2.5 text-[13px] font-semibold text-zk-text hover:bg-zk-chip focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-electric-blue"
+            : `inline-flex shrink-0 items-center gap-2 rounded-full bg-electric-blue-strong font-bold text-white transition hover:brightness-105 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-electric-blue focus-visible:ring-offset-2 ${
+                variant === "large" ? "h-12 px-6 text-base" : "h-10 px-5 text-sm"
+              }`
+        }
       >
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>
         Check a site
@@ -63,13 +68,9 @@ export function CheckSiteButton({ id = "security-target", variant = "primary" }:
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" /></svg>
               </button>
             </div>
-            <div>
-              <p className="m-0 text-xl font-extrabold tracking-tight text-zk-text">What should our agents check?</p>
-              <p className="m-0 mt-1 text-sm text-zk-text2">Paste a website, a server address, or a code repository. We work out the rest.</p>
-            </div>
-            <SecurityEntryBox id={id} focusOnOpen />
+            <SecurityChat id={id} focusOnOpen />
             <p className="m-0 border-t border-zk-divider pt-4 text-xs text-zk-muted">
-              Next, you show it&apos;s yours. Agents only look: they never log in as you or change anything.
+              The first scan is free. Next, you show it&apos;s yours. Agents only look: they never log in as you or change anything.
             </p>
           </div>
         ) : null}

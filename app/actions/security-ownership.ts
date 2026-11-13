@@ -51,5 +51,6 @@ export async function verifySecurityTarget(targetId: string): Promise<VerifyStat
 
   const { checkId } = await recordOwnership(target.id, target.organisationId, user.id, proven);
   revalidatePath("/security");
-  redirect(checkId ? `/security/checks/${encodeURIComponent(checkId)}/pay` : "/security");
+  // The scan is free: back to Sites, with this site picked out, while it runs.
+  redirect(checkId ? `/security?check=${encodeURIComponent(checkId)}` : "/security");
 }

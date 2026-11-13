@@ -7,7 +7,7 @@ import { listAgentJobs } from "@/lib/security-checks/engine";
 export const runtime = "nodejs";
 
 /**
- * GET /api/v1/security-checks/jobs — the security-check jobs this always-on
+ * GET /api/v1/security-checks/jobs — the security-check jobs this on-call
  * agent holds (#security-checks). Asking also hands it waiting work, if it has
  * room. Each job says what to check and when it must be reported by.
  */

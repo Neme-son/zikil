@@ -5,6 +5,11 @@ import { currentOrganisationAccess } from "@/lib/organisation-access";
 import SecurityPage from "./page";
 import SecuritySettingsPage from "./settings/page";
 
+vi.mock("@/app/actions/security-assistant", () => ({ talkToSecurityAssistant: vi.fn() }));
+vi.mock("next/navigation", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("next/navigation")>()),
+  useRouter: () => ({ push: vi.fn(), refresh: vi.fn() }),
+}));
 vi.mock("@/lib/auth-helpers", () => ({
   requireUser: vi.fn().mockResolvedValue({ id: "user_test_admin", role: "admin" }),
 }));
@@ -19,6 +24,7 @@ vi.mock("@/lib/organisation-access", () => ({
 vi.mock("@/lib/prisma", () => ({
   prisma: {
     securityCheck: { findMany: vi.fn().mockResolvedValue([]) },
+    securityCheckItem: { count: vi.fn().mockResolvedValue(0) },
     agentActivation: {
       findMany: vi.fn().mockResolvedValue([
         {
@@ -121,14 +127,15 @@ describe("SecurityPage (/security)", () => {
     expect(html).not.toContain('href="/issues/2829"');
   });
 
-  it("opens on Check a site, with the box closed and the findings one link away (#security-checks)", async () => {
+  it("opens on Your sites with the box, beside Your work, and Findings one icon away (#security-checks)", async () => {
     const markup = renderToStaticMarkup(await SecurityPage({}));
 
-    expect(markup).toContain("Check a site");
-    expect(markup).not.toContain('name="target"');
+    expect(markup).toContain("What do you want to secure?");
+    expect(markup).toContain('name="target"');
     expect(markup).toContain('href="/security?view=findings"');
     expect(markup).toContain('href="/security/work"');
     expect(markup).not.toContain('href="/security/activity"');
+    expect(markup).toContain(">Sites<");
     expect(markup).not.toContain("Open findings");
     expect(markup).not.toContain("Apply filters");
   });

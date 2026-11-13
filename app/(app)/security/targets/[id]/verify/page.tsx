@@ -3,7 +3,7 @@ import { notFound } from "next/navigation";
 import { requireUser } from "@/lib/auth-helpers";
 import { currentOrganisationAccess } from "@/lib/organisation-access";
 import { prisma } from "@/lib/prisma";
-import { FINISHED_CHECK_STATUSES, SECURITY_CHECK_PRICE_COINS, TARGET_KIND_LABEL } from "@/lib/security-checks";
+import { FINISHED_CHECK_STATUSES, TARGET_KIND_LABEL } from "@/lib/security-checks";
 import { OrgPageHeader, orgListCard } from "../../../../[org]/[project]/org/org-ui";
 import { OwnershipSteps } from "./ownership-steps";
 
@@ -14,7 +14,7 @@ const KIND_NOUN = { website: "site", server: "server", repo: "repo" } as const;
 /**
  * Step 2, show it's yours (#security-checks, part 2). Before any agent looks
  * at a target, the client proves it is theirs with its secret code, once. Then
- * its checks are let go to the agents and the client goes on to pay or skip.
+ * its checks are let go to the agents and the client goes back to Sites, where the free scan runs.
  */
 export default async function VerifySecurityTargetPage({ params }: { params: Promise<{ id: string }> }) {
   const [{ id }, user] = await Promise.all([params, requireUser()]);
@@ -34,14 +34,14 @@ export default async function VerifySecurityTargetPage({ params }: { params: Pro
         where: { requestedById: user.id, status: { notIn: [...FINISHED_CHECK_STATUSES] } },
         orderBy: { createdAt: "desc" },
         take: 1,
-        select: { id: true, priceCoins: true },
+        select: { id: true },
       },
     },
   });
   if (!target) notFound();
 
   const openCheck = target.checks[0] ?? null;
-  const next = openCheck ? `/security/checks/${encodeURIComponent(openCheck.id)}/pay` : "/security";
+  const next = openCheck ? `/security?check=${encodeURIComponent(openCheck.id)}` : "/security";
   const noun = KIND_NOUN[target.kind];
 
   // For a repo: whether the workspace's GitHub App is connected yet, and where to connect it.
@@ -57,7 +57,7 @@ export default async function VerifySecurityTargetPage({ params }: { params: Pro
   const settingsProject = projects.find((project) => project.githubInstallationId) ?? projects[0] ?? null;
 
   return (
-    <div className="flex w-full max-w-3xl flex-col gap-4 pb-10 sm:gap-6">
+    <div className="mx-auto flex w-full max-w-3xl flex-col gap-4 pb-10 sm:gap-6">
       <nav aria-label="Breadcrumb" className="text-sm text-zk-muted">
         <Link href="/security" className="font-semibold text-zk-accent hover:underline">Security</Link>
         <span aria-hidden="true"> / </span>
@@ -72,10 +72,10 @@ export default async function VerifySecurityTargetPage({ params }: { params: Pro
           <Step state={target.verifiedAt ? "done" : "now"}>Show it&apos;s yours</Step>
           <StepLine />
           <Step state={target.verifiedAt ? "now" : "later"}>
-            Pay <span className="tabular-nums">{openCheck?.priceCoins ?? SECURITY_CHECK_PRICE_COINS}</span> coins
+            Check <span className="font-normal text-zk-muted">· free</span>
           </Step>
           <StepLine />
-          <Step state="later">Check</Step>
+          <Step state="later">Fix</Step>
         </ol>
       </div>
 

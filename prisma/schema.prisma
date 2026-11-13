@@ -274,6 +274,7 @@ model User {
   securityVerifications SecurityVerification[]
   securityFindingsReported  SecurityFinding[]       @relation("SecurityFindingReporter")
   securityTargetsAdded      SecurityTarget[]        @relation("SecurityTargetAddedBy")
+  onCallInvitesSent         OnCallInvite[]          @relation("OnCallInviteSender")
   securityChecksRequested   SecurityCheck[]         @relation("SecurityCheckRequester")
   name                      String
   email                     String                  @unique
@@ -1245,9 +1246,15 @@ model ProjectJoinRequest {
 model Agent {
   /// Parts of security checks this agent holds or did (#security-checks).
   securityCheckItems   SecurityCheckItem[]
-  /// A Ziki-managed always-on agent (#security-checks): a super admin sets it. Always-on
-  /// agents are given security-check jobs, wherever the client's workspace is.
-  alwaysOnAt           DateTime?
+  /// An on-call agent (#on-call): a normal working agent from a very active owner,
+  /// invited by a super admin and accepted by its owner. On-call agents get
+  /// priority work, such as security-check parts and new workspaces. Null when not on call.
+  onCallAt             DateTime?
+  /// Site-wide security clearance (#security-checks): set by a super admin, usually
+  /// with an on-call invite. Only cleared agents get security-check jobs or read results.
+  securityClearedAt    DateTime?
+  /// Invitations to go on call, newest last (#on-call).
+  onCallInvites        OnCallInvite[]
   requests             AgentRequest[]
   agentNotes           AgentNote[]
   id                   String                @id @default(cuid())
@@ -1350,6 +1357,12 @@ model AgentActivation {
   burst          Boolean      @default(false)
   /// An organisation owner or admin cleared it to read this organisation's private security findings (#security-findings).
   securityCleared Boolean     @default(false)
+  /// An on-call guest (#on-call): added automatically to a new workspace to give
+  /// quick wins. The agent works here, but its owner isn't a member and can't
+  /// browse the workspace. It leaves after delivering its first task here.
+  guestUntilFirstDelivery Boolean @default(false)
+  /// When the guest stay ended (first delivery, or removed by the workspace owner).
+  guestEndedAt   DateTime?
   /// When the higher budget stops (#596). Null on an enabled grant means it has no expiry.
   burstUntil     DateTime?
   activatedAt    DateTime     @default(now())
@@ -3150,8 +3163,12 @@ model SecurityCheck {
   requestedById  String
   requestedBy    User                  @relation("SecurityCheckRequester", fields: [requestedById], references: [id], onDelete: Cascade)
   status         SecurityCheckStatus   @default(awaiting_ownership)
-  /// The price in coins when the check was asked for.
+  /// The price in coins when the check was asked for. Replaced by per-finding
+  /// prices (SecurityCheckResult.priceCoins) and removed once the pay page uses them.
   priceCoins     Int
+  /// A free scan (#security-checks): the first scan of a target is free, within
+  /// FREE_SCANS_PER_TARGET and FREE_SCANS_PER_WORKSPACE_PER_MONTH.
+  free           Boolean               @default(false)
   /// When the client paid; null while unpaid. Unlocks the full report and releases agent pay.
   paidAt         DateTime?
   /// When the collate job was queued, after every part was in; null before. Guards against queuing it twice.
@@ -3218,9 +3235,17 @@ model SecurityCheckResult {
   /// The private finding it became on "Fix on Ziki"; null until then.
   findingId   String?           @unique
   finding     SecurityFinding?  @relation(fields: [findingId], references: [id], onDelete: SetNull)
+  /// What unlocking it costs the client in coins, and what its finder earns:
+  /// SEVERITY_PRICE for its severity when it was reported. Null on results reported before this rule.
+  priceCoins  Int?
+  /// When the client unlocked it (#security-checks); its details and fix show only after this.
+  unlockedAt  DateTime?
+  /// When its finder was paid for it, once, after the unlock.
+  payoutReleasedAt DateTime?
   createdAt   DateTime          @default(now())
 
   @@index([checkId, severity])
+  @@index([checkId, unlockedAt])
   @@index([itemId])
 }
 
@@ -3447,4 +3472,32 @@ model LoginHistory {
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId, createdAt])
+}
+
+/// Where an on-call invitation is (#on-call).
+enum OnCallInviteStatus {
+  pending
+  accepted
+  declined
+  cancelled
+}
+
+/// A super admin's invitation for an agent to go on call (#on-call). The agent's
+/// owner accepts or declines; accepting sets Agent.onCallAt, and
+/// Agent.securityClearedAt when the invite clears it for security checks.
+model OnCallInvite {
+  id               String             @id @default(cuid())
+  agentId          String
+  agent            Agent              @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  invitedById      String
+  invitedBy        User               @relation("OnCallInviteSender", fields: [invitedById], references: [id], onDelete: Cascade)
+  /// Whether accepting also clears the agent for security checks.
+  clearForSecurity Boolean            @default(false)
+  status           OnCallInviteStatus @default(pending)
+  respondedAt      DateTime?
+  createdAt        DateTime           @default(now())
+  updatedAt        DateTime           @updatedAt
+
+  @@index([agentId, status])
+  @@index([status, createdAt])
 }

@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { requireUser } from "@/lib/auth-helpers";
 import { currentOrganisationAccess } from "@/lib/organisation-access";
-import { SecurityEntryBox } from "@/components/security-checks/entry-box";
+import { SecurityChat } from "@/components/security-checks/security-chat";
 import { OrgPageHeader, ReadOnlyNote, orgCard } from "../../[org]/[project]/org/org-ui";
 
 export const metadata = { title: "Check a site" };
@@ -22,7 +22,7 @@ export default async function NewSecurityCheckPage() {
       </OrgPageHeader>
       {access.organisationId ? (
         <section className={orgCard} aria-label="What to check">
-          <SecurityEntryBox />
+          <SecurityChat id="security-chat-page" focusOnOpen />
         </section>
       ) : (
         <ReadOnlyNote>Join or create a workspace to check a site.</ReadOnlyNote>
