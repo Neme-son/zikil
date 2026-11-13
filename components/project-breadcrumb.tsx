@@ -3,7 +3,7 @@
 import { Fragment } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { ideasPath, issuesPath, marketingPath, orgHomePath, projectPath, projectRef, type ProjectRef } from "@/lib/project-paths";
+import { ideasPath, marketingPath, orgHomePath, projectPath, projectRef, type ProjectRef } from "@/lib/project-paths";
 
 /** The organisation's slug, and the project (none on the organisation's own page). */
 export type BreadcrumbProject = { orgSlug: string; slug?: string; name?: string };
@@ -34,6 +34,12 @@ const ISSUE_LISTS: Record<string, string[]> = {
 const IDEA_LISTS: Record<string, string> = { rejected: "Rejected", drafts: "Drafts" };
 const MARKETING_PAGES: Record<string, string> = { "output-box": "Output box", settings: "Settings", ideas: "Rejected ideas", tasks: "New task" };
 
+/** The project's settings, at its Goals section. */
+function projectGoalsSettingsHref(ref: ProjectRef): string {
+  const slug = decodeURIComponent(String(ref).split("/")[1] ?? "");
+  return `/projects/${encodeURIComponent(slug)}/settings?section=goals`;
+}
+
 /**
  * What the page under the project is, from its path: [Ideas], [In Progress, Closed], [Issue #12], …
  * Every project page names itself here (#breadcrumbs), so none draws a trail of its own.
@@ -45,12 +51,13 @@ function sectionOf(pathname: string, ref: ProjectRef): Crumb[] {
   if (!first) return [];
   if (/^[0-9]+$/.test(first)) return named(`Issue #${first}`);
   if (first === "ideas") {
-    if (second && /^[0-9]+$/.test(second)) return [{ label: "Ideas", href: ideasPath(ref) }, { label: `Idea #${second}` }];
-    return second && IDEA_LISTS[second] ? named("Ideas", IDEA_LISTS[second]) : named("Ideas");
+    // The ideas lists are the New tab.
+    if (second && /^[0-9]+$/.test(second)) return [{ label: "New", href: ideasPath(ref) }, { label: `Idea #${second}` }];
+    return second && IDEA_LISTS[second] ? named("New", IDEA_LISTS[second]) : named("New");
   }
   if (first === "issues") return named(...(ISSUE_LISTS[second ?? "all"] ?? ["Issues"]).filter((part): part is string => Boolean(part)));
-  // A goal's own page sits under Project Overview, where the goals are listed.
-  if (first === "goals") return [{ label: "Project Overview", href: issuesPath(ref, "your-work") }, { label: "Goal" }];
+  // A goal's own page sits under the project's settings, where the goals are listed.
+  if (first === "goals") return [{ label: "Goals", href: projectGoalsSettingsHref(ref) }, { label: "Goal" }];
   if (first === "marketing") {
     if (!second) return named("Marketing");
     return [{ label: "Marketing", href: marketingPath(ref) }, { label: MARKETING_PAGES[second] ?? "Marketing" }];

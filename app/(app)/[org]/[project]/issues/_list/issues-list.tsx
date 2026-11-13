@@ -27,7 +27,7 @@ import { IdeasMoreFilters } from "@/components/ideas-more-filters";
 import { IDEA_AUTHOR_PARAM, parseIdeaAuthorFilter } from "@/lib/idea-filters";
 import { MY_WORK_PARAM, TRACK_PARAM, myWorkWhere, parseMyWorkFilter, parseTrackFilter, trackWhere, yourOpenBidsWhere, yourWorkWhere } from "@/lib/my-work-filter";
 import { ProjectWeekPanel } from "@/components/project-week-panel";
-import { weeklyDeliveries, type WeekPerson } from "@/lib/project-week";
+import { startOfWeek, weeklyDeliveries, type WeekPerson } from "@/lib/project-week";
 import { WORK_TAG_TONE, whatsNext } from "@/lib/whats-next";
 import { IDEA_SORT_COOKIE, ISSUE_SORT_COOKIE, getIdeaOrderBy, parseIdeaSort } from "@/lib/list-sort";
 import { SortHeader } from "@/components/sort-header";
@@ -35,8 +35,6 @@ import { PROJECT_LINKS_SLOT_ID, ProjectIconLinks, ProjectLinks } from "@/compone
 import { OrganisationNextStepCard } from "@/components/organisation-next-step-card";
 import { NEXT_STEP_COOKIE, organisationNextStep, type OrganisationNextStep } from "@/lib/organisation-next-step";
 import { missingProfileFields, type ProfileField } from "@/lib/agents/work-gate";
-import { ProjectGoals } from "@/app/(app)/[org]/[project]/goals/project-goals";
-import { GoalsButton } from "@/app/(app)/[org]/[project]/goals/goals-button";
 import { isAdminOfOrganisation } from "@/lib/agents/membership";
 import type { AppRole } from "@/lib/roles";
 import { IssueFilters } from "@/components/issue-filters";
@@ -144,6 +142,8 @@ const ERROR_STATUS = "error";
 const YOUR_CALL_STATUS = "your_call";
 /** Your Work: the issues assigned to you (a claim held or offered for you), a stage of its own shown only while there are any. */
 const YOUR_WORK_STATUS = "your_work";
+/** Project Overview's list tab: Delivered Work (the default) or `mine`, My Work. */
+const OVERVIEW_TAB_PARAM = "view";
 /** Open issues that may already be done (#possibly-delivered): a manager's list to check and close. */
 const POSSIBLY_DELIVERED = POSSIBLY_DELIVERED_STATUS;
 const REJECTED_WHERE = { some: { verdict: "reject", undoneAt: null } } satisfies Prisma.IssueConfirmationListRelationFilter;
@@ -159,12 +159,12 @@ const ALL_FILTERS = [ALL_STATUS, REJECTED_STATUS, DUPLICATE_STATUS].map((value) 
  * left of the panel when it is picked. Ideas (the Idea table) comes first.
  */
 const STAGE_GROUPS = [
-  // Project Overview comes first (your work in the project, with its goals behind a button) and Live last, which shows only once something went live.
-  { label: "Project Overview", statuses: [YOUR_WORK_STATUS] },
+  // Project Overview comes first (who delivered this week, then your work in the project) and Live last, which shows only once something went live.
+  { label: "Overview", statuses: [YOUR_WORK_STATUS] },
   // Ideas holds only ideas. The rest are main statuses (#substatus): each tab
   // lists every substatus of its status together (Open: Requires confirmation
   // and Open), and each row says which one it is at.
-  { label: "Ideas", statuses: [IDEAS_STATUS, REJECTED_IDEAS_STATUS] },
+  { label: "New", statuses: [IDEAS_STATUS, REJECTED_IDEAS_STATUS] },
   { label: "In Progress", statuses: ["open", "in_progress", "closed", POSSIBLY_DELIVERED] },
   { label: "Delivered", statuses: ["done", "merge", ERROR_STATUS] },
   { label: "Live", statuses: ["resolved"] },
@@ -395,11 +395,19 @@ export async function IssuesList({
     const and = Array.isArray(where.AND) ? where.AND : where.AND ? [where.AND] : [];
     where.AND = [...and, myWorkWhere(userId)];
   }
-  // Your Work: the issues assigned to you, whatever their status.
+  // Project Overview (#project-overview): two lists under the contributors, as tabs. Delivered Work (the default):
+  // the project's tickets delivered this week, by anyone. My Work: what you hold.
   const isYourWorkView = statusParam === YOUR_WORK_STATUS && !isDeletedView;
+  const overviewTab: "delivered" | "mine" = toSingleQueryParam(params[OVERVIEW_TAB_PARAM]) === "mine" ? "mine" : "delivered";
+  const isMyWorkTab = isYourWorkView && overviewTab === "mine";
   if (isYourWorkView) {
     const and = Array.isArray(where.AND) ? where.AND : where.AND ? [where.AND] : [];
-    where.AND = [...and, userId ? yourWorkWhere(userId) : { id: { in: [] } }];
+    where.AND = [
+      ...and,
+      isMyWorkTab
+        ? userId ? yourWorkWhere(userId) : { id: { in: [] } }
+        : { deliveries: { some: { createdAt: { gte: startOfWeek() } } } },
+    ];
   }
   if (qParam?.trim()) {
     const q = escapeSearchQuery(boundSearchTerm(qParam));
@@ -654,7 +662,7 @@ export async function IssuesList({
   // #live-confirm: what each agent found, for the Live rows on this page, shown when a row is opened.
   const liveConfirmations = await loadOrEmpty("live confirmations", () => loadProdConfirmations(bugs.filter((bug) => liveChecks.has(bug.id)).map((bug) => bug.id)), new Map<string, ProdConfirmation[]>());
   // Your Work: which rows are there because of your bid, for each row's tag.
-  const myBidIds = isYourWorkView && userId && bugs.length
+  const myBidIds = isMyWorkTab && userId && bugs.length
     ? new Set(
         (await loadOrEmpty("your bids", () => prisma.issueBid.findMany({
           where: { beneficiaryUserId: userId, withdrawnAt: null, bugId: { in: bugs.map((b) => b.id) } },
@@ -1115,7 +1123,7 @@ export async function IssuesList({
           {isDeletedView || allProjects || !isFirstRun ? (
             <div className="flex flex-wrap items-center gap-2">
               {/* Desktop: Add Idea at the far left of the toolbar. */}
-              {!isDeletedView && !isFirstRun ? <IdeaChat projectId={project.id} types={tagTypes} className="max-md:hidden" /> : null}
+              {!isDeletedView && !isFirstRun ? <IdeaChat projectId={project.id} className="max-md:hidden" /> : null}
               {isDeletedView ? (
                 <span className="rounded-md bg-zk-bad-bg px-2 py-0.5 text-[11px] font-bold text-zk-bad-fg">Admin view</span>
               ) : null}
@@ -1125,20 +1133,21 @@ export async function IssuesList({
             </div>
           ) : null}
         </div>
-        <Suspense fallback={<div className="h-8 w-36 rounded-lg bg-zk-chip" />}>
+        {/* Project Overview has no filters. */}
+        {isYourWorkView ? null : <Suspense fallback={<div className="h-8 w-36 rounded-lg bg-zk-chip" />}>
           <IssueFilters compact tagTypes={tagTypes} milestones={milestones} areas={areas} shortcutsEnabled={shortcutsEnabled}
             stageCounts={isDeletedView ? undefined : { confirming: confirmingCount, ready: readyCount }} />
-        </Suspense>
+        </Suspense>}
         <div className="issues-actions flex flex-wrap items-center gap-2 print:hidden">
           {/* The issue tabs' filter, beside the search: a standard Filter button and menu. */}
-          {!isIdeasView && filterGroups.length > 0 ? <ToolbarFilterMenu groups={filterGroups} summary={filterSummary} /> : null}
+          {!isIdeasView && !isYourWorkView && filterGroups.length > 0 ? <ToolbarFilterMenu groups={filterGroups} summary={filterSummary} /> : null}
           {finishedWatched > 0 ? <UnwatchFinishedButton count={finishedWatched} /> : null}
           <IssuesToolsToggle
             active={Boolean(searchText || selectedTags.length > 0 || selectedMilestone)}
           />
           {/* Phones: the + beside the title, since the tools row is collapsed there.
               Desktop has it at the far left of the toolbar, except on a first run. */}
-          {!isDeletedView ? <IdeaChat projectId={project.id} types={tagTypes} className={isFirstRun ? "" : "md:hidden"} /> : null}
+          {!isDeletedView ? <IdeaChat projectId={project.id} className={isFirstRun ? "" : "md:hidden"} /> : null}
         </div>
       </div>
     </>
@@ -1167,20 +1176,26 @@ export async function IssuesList({
 
         {nextStep && organisationId ? <OrganisationNextStepCard step={nextStep} organisationId={organisationId} /> : null}
 
-        {/* Project Overview: who delivered what this week first (with the goals behind a small button), then the
-            work you hold, then your open bids, only counted, under the list. */}
-        {isYourWorkView && organisationId ? (
-          <>
-            <ProjectWeekPanel
-              people={weekPeople}
-              viewerId={userId ?? null}
-              action={canContribute ? (
-                <GoalsButton>
-                  <ProjectGoals org={project.orgSlug} organisationId={organisationId} project={{ id: project.id, slug: project.slug, ref }} />
-                </GoalsButton>
-              ) : undefined}
-            />
-          </>
+        {/* Project Overview: who delivered what this week first, then the work you hold, then your open bids,
+            only counted, under the list. Goals are in the project's settings. */}
+        {isYourWorkView && organisationId ? <ProjectWeekPanel people={weekPeople} viewerId={userId ?? null} /> : null}
+
+        {/* Project Overview's two lists, as tabs: the week's delivered work first, then yours. */}
+        {isYourWorkView ? (
+          <nav aria-label="Overview lists" className="flex gap-1 border-b border-zk-divider">
+            {([["delivered", "Delivered Work"], ["mine", "My Work"]] as const).map(([tab, label]) => (
+              <Link
+                key={tab}
+                href={listHref(new URLSearchParams({ status: YOUR_WORK_STATUS, ...(tab === "mine" ? { [OVERVIEW_TAB_PARAM]: "mine" } : {}) }))}
+                aria-current={overviewTab === tab ? "page" : undefined}
+                className={`-mb-px border-b-2 px-3 pb-2.5 pt-1 text-sm font-semibold transition ${
+                  overviewTab === tab ? "border-electric-blue-strong text-zk-text" : "border-transparent text-zk-muted hover:text-zk-text"
+                }`}
+              >
+                {label}
+              </Link>
+            ))}
+          </nav>
         ) : null}
 
         {milestoneSummary ? (
@@ -1293,11 +1308,11 @@ export async function IssuesList({
                     <SortHeader label="Reward" current={currentSort} first="reward" second="reward_low" cookie={ISSUE_SORT_COOKIE} />
                   </span>
                   {/* Your Work: who it's for, between the reward and the issue. */}
-                  {isYourWorkView ? <span className="hidden w-10 shrink-0 lg:block" aria-hidden="true" /> : null}
+                  {isMyWorkTab ? <span className="hidden w-10 shrink-0 lg:block" aria-hidden="true" /> : null}
                   <span className="min-w-0 flex-1">
                     <SortHeader label="Issue" current={currentSort} first="title" second="title_desc" firstDescending={false} cookie={ISSUE_SORT_COOKIE} />
                   </span>
-                  {isYourWorkView ? (
+                  {isMyWorkTab ? (
                     // Your Work: who it's for sits beside the issue, then what happens next. No bids or importance.
                     <>
                       <span className="hidden w-[260px] shrink-0 md:block">What&apos;s next?</span>
@@ -1324,7 +1339,7 @@ export async function IssuesList({
                     // Someone is on it: an active claim, or the issue was moved to in progress.
                     // On Your Work it is you, shown once in its own column, and What's next says the deadline:
                     // the row shows the plain status instead of who is on it.
-                    const work = !isYourWorkView && (claim || bug.status === "in_progress")
+                    const work = !isMyWorkTab && (claim || bug.status === "in_progress")
                       ? { person: claim?.beneficiary?.name ?? bug.assignee?.name ?? null, since: claim ? (claim.claimedAt ?? claim.createdAt) : null }
                       : null;
                     // Importance in a list is a number to read, not a button: it is marked on the issue's page.
@@ -1332,7 +1347,7 @@ export async function IssuesList({
                     const hasBids = bug.substatus === "open" && bug._count.bids > 0;
                     const importance = <ImportanceVoteBadge bugId={bug.id} count={bug.voteCount} highlighted={hasBids} votable={false} />;
                     // Your Work: which kind of your work this is, and the next step (lib/whats-next.ts).
-                    const next = isYourWorkView
+                    const next = isMyWorkTab
                       ? whatsNext(bug.substatus, (bug.claims ?? []).filter((c) => c.beneficiaryUserId === userId), myBidIds.has(bug.id))
                       : null;
                     // #live-check: a Live row says where its fix really is, as its issue page does.
@@ -1365,7 +1380,7 @@ export async function IssuesList({
                         <div className="issues-vote w-[76px] shrink-0">
                           <RewardBadge reward={Number(bug.reward)} estimates={bug.rewardEstimateCount} fixed={Boolean(bug.rewardFixedAt)} />
                         </div>
-                        {isYourWorkView ? (
+                        {isMyWorkTab ? (
                           <span className="hidden w-10 shrink-0 items-center lg:flex">
                             {bug.assignee ? <RowAssignee name={bug.assignee.name} image={bug.assignee.image} /> : null}
                           </span>
@@ -1432,7 +1447,7 @@ export async function IssuesList({
                         </Link>
                         {/* #live-confirm: opens who found it on prod, under the row (a button can't sit in the link). */}
                         {liveFix ? <RowToggle label="Show who found it on prod" /> : null}
-                        {isYourWorkView ? (
+                        {isMyWorkTab ? (
                           (() => {
                             if (!next) return null;
                             return (
@@ -1483,7 +1498,7 @@ export async function IssuesList({
             </div>
 
             <PaginationControls
-              basePath={listHref(new URLSearchParams(statusParam ? { status: statusParam } : {}))}
+              basePath={listHref(new URLSearchParams({ ...(statusParam ? { status: statusParam } : {}), ...(isMyWorkTab ? { [OVERVIEW_TAB_PARAM]: "mine" } : {}) }))}
               page={pagination.page}
               totalPages={pagination.totalPages}
               totalCount={totalCount}
@@ -1508,7 +1523,7 @@ export async function IssuesList({
         )}
 
         {/* Project Overview: your open bids are counted, not listed, under the work you hold. */}
-        {isYourWorkView && openBidCount > 0 ? (
+        {isMyWorkTab && openBidCount > 0 ? (
           <Link
             href={issuesPath(ref, "open", `${MY_WORK_PARAM}=1`)}
             className="group flex items-center gap-4 rounded-[20px] border border-zk-border bg-zk-surface px-5 py-4 transition hover:border-zk-accent/40 hover:bg-zk-tint/40 focus-visible:outline-2 focus-visible:outline-electric-blue"
@@ -1548,8 +1563,8 @@ export async function IssuesList({
               href: statusLink(group.statuses[0]),
               selected: index === stageIndex,
             };
-            // Project Overview always for people who can contribute (it holds the goals), else only while something is
-            // assigned to you; Live only once something went live.
+            // Project Overview always for people who can contribute, else only while something is assigned to you;
+            // Live only once something went live.
             const conditional = (index === YOUR_WORK_STAGE && !canContribute) || index === LIVE_STAGE;
             return !conditional || stage.count > 0 || stage.selected ? [stage] : [];
           })}

@@ -99,7 +99,7 @@ beforeEach(() => {
   goalFindFirst.mockResolvedValue(goalRow());
 });
 
-describe("goals on Project Overview (#616)", () => {
+describe("goals in the project settings (#616)", () => {
   it("renders the create form and each goal's pool figures", async () => {
     listGoals.mockResolvedValue([
       goalRow({}, { budgetPool: 1000, allocated: 600 }),

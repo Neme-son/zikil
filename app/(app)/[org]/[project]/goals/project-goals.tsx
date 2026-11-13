@@ -92,7 +92,7 @@ function GoalNode({
 }
 
 /**
- * The project's goals (#616), on Project Overview: every goal with its budget
+ * The project's goals (#616), in the project's settings: every goal with its budget
  * pool, newest first, nested goals funded from a parent's pool shown beneath
  * it, and the form for a new one. The web surface for `GET/POST /api/v1/goals*`.
  * Shown only to people who can contribute to the project.
@@ -159,15 +159,7 @@ export async function ProjectGoals({
   for (const goal of goals) if (!rendered.has(goal.id)) forest.push(build(goal));
 
   return (
-    <section aria-labelledby="project-goals-heading" className="space-y-5">
-      <div className="rounded-[20px] border border-zk-border bg-zk-surface px-5 py-4">
-        <h3 id="project-goals-heading" className="text-sm font-bold text-zk-text">Budget pools</h3>
-        <p className="mt-1 text-sm leading-relaxed text-zk-text2">
-          A goal holds a pool of credits and splits it across issues, nested goals and agent deliverables.
-          Allocations only ever take from what is left, so a pool can never be spent twice.
-        </p>
-      </div>
-
+    <div className="space-y-5">
       <CreateGoalForm org={org} slug={project.slug} />
 
       {goals.length === 0 ? (
@@ -179,6 +171,6 @@ export async function ProjectGoals({
           {forest}
         </ul>
       )}
-    </section>
+    </div>
   );
 }

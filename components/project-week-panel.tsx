@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, type ReactNode } from "react";
+import { useState } from "react";
 import { Avatar } from "@/components/avatar";
 import type { WeekPerson } from "@/lib/project-week";
 
@@ -28,17 +28,17 @@ function Medal({ place }: { place: 0 | 1 | 2 }) {
   );
 }
 
+/** Each place's bar colour, in rank order; the sixth place on starts again. */
+const BAR_COLOURS = ["#2563EB", "#7C3AED", "#0D9488", "#D97706", "#DB2777", "#0891B2", "#65A30D", "#DC2626"] as const;
+
 /**
- * One person's tickets as a fat bar, left to right on the panel's shared scale:
- * this week's part first (dark), then the ones delivered before (light). Their
- * name sits inside at the left (white where it crosses the dark part), and the
- * two counts sit in chips of the same colours at the end of the filled part,
- * never closer to the left than the name's room, so the two never meet.
+ * One person's tickets this week as a fat bar, left to right on the panel's
+ * shared scale, in their place's colour. Their name sits inside at the left
+ * (white over the bar, dark over the empty track) and the count sits in a chip
+ * at the end of the bar, never closer to the left than the name's room.
  */
-function SegmentedBar({ name, you, delivered, overall, most }: { name: string; you: boolean; delivered: number; overall: number; most: number }) {
-  const earlier = overall - delivered;
-  const filled = overall > 0 ? Math.max(8, (overall / most) * 100) : 0;
-  const dark = overall > 0 ? (filled * delivered) / overall : 0;
+function WeekBar({ name, you, delivered, most, colour }: { name: string; you: boolean; delivered: number; most: number; colour: string }) {
+  const filled = Math.max(10, (delivered / most) * 100);
   const label = (
     <>
       {name}
@@ -48,57 +48,50 @@ function SegmentedBar({ name, you, delivered, overall, most }: { name: string; y
   return (
     <div
       role="img"
-      aria-label={`${name}${you ? " (you)" : ""}: ${delivered} ${delivered === 1 ? "ticket" : "tickets"} this week, ${overall} in all`}
+      aria-label={`${name}${you ? " (you)" : ""}: ${delivered} ${delivered === 1 ? "ticket" : "tickets"} this week`}
       className="relative h-10 w-full min-w-0 overflow-hidden rounded-full bg-zk-chip"
     >
-      {overall > 0 ? (
-        <div className="absolute inset-y-0 left-0 flex motion-safe:transition-[width] motion-safe:duration-500" style={{ width: `${filled}%` }}>
-          {delivered > 0 ? <span className="h-full bg-electric-blue-strong" style={{ flexGrow: delivered, flexBasis: 0 }} /> : null}
-          {earlier > 0 ? <span className="h-full bg-electric-blue/30" style={{ flexGrow: earlier, flexBasis: 0 }} /> : null}
-        </div>
-      ) : null}
-      {/* The name: dark over the light part and the empty track, white over the dark part. */}
+      <div
+        className="absolute inset-y-0 left-0 rounded-full motion-safe:transition-[width] motion-safe:duration-500"
+        style={{ width: `${filled}%`, backgroundColor: colour }}
+      />
+      {/* The name: dark over the empty track, white over the bar. */}
       <span className="absolute inset-0 flex items-center pl-4 text-sm font-semibold text-zk-text">
         <span className="max-w-[13rem] truncate">{label}</span>
       </span>
-      {dark > 0 ? (
-        <span
-          aria-hidden="true"
-          className="absolute inset-0 flex items-center pl-4 text-sm font-semibold text-white"
-          style={{ clipPath: `inset(0 ${100 - dark}% 0 0)` }}
-        >
-          <span className="max-w-[13rem] truncate">{label}</span>
-        </span>
-      ) : null}
-      {/* The counts, at the end of the filled part, but always right of the name's room. */}
       <span
         aria-hidden="true"
-        className="absolute inset-y-0 flex items-center gap-1 pr-1.5"
-        style={{ right: `min(${100 - filled}%, calc(100% - 17rem))`, left: "auto" }}
+        className="absolute inset-0 flex items-center pl-4 text-sm font-semibold text-white"
+        style={{ clipPath: `inset(0 ${100 - filled}% 0 0)` }}
       >
-        {overall > 0 ? (
-          <>
-            <span className="rounded-full bg-electric-blue-strong px-2 py-0.5 font-mono text-[11px] font-bold tabular-nums text-white ring-2 ring-white/70">{delivered}</span>
-            <span className="rounded-full bg-zk-surface px-2 py-0.5 font-mono text-[11px] font-bold tabular-nums text-zk-accent ring-1 ring-electric-blue/30">{earlier}</span>
-          </>
-        ) : (
-          <span className="pr-2 text-[11px] font-medium text-zk-muted">None yet</span>
-        )}
+        <span className="max-w-[13rem] truncate">{label}</span>
+      </span>
+      {/* The count, at the end of the bar, but always right of the name's room. */}
+      <span
+        aria-hidden="true"
+        className="absolute inset-y-0 flex items-center pr-1.5"
+        style={{ right: `min(${100 - filled}%, calc(100% - 16rem))` }}
+      >
+        <span className="rounded-full bg-white px-2 py-0.5 font-mono text-[11px] font-bold tabular-nums shadow-sm" style={{ color: colour }}>
+          {delivered}
+        </span>
       </span>
     </div>
   );
 }
 
 /**
- * Project Overview's first panel (#project-overview): the top five people by
- * tickets delivered this week, each with a bar filling left to right, the top
- * three with a medal. See all opens everyone else. `action` sits at the top
- * right (the Goals button).
+ * Project Overview's first panel (#project-overview): the people who
+ * delivered tickets this week, the top five first, each with a bar filling left
+ * to right in their place's colour, the top three with a medal. See all opens
+ * the rest.
  */
-export function ProjectWeekPanel({ people, viewerId, action }: { people: WeekPerson[]; viewerId: string | null; action?: ReactNode }) {
+export function ProjectWeekPanel({ people: everyone, viewerId }: { people: WeekPerson[]; viewerId: string | null }) {
   const [all, setAll] = useState(false);
-  // Bars share one scale: the most anyone delivered overall fills the track.
-  const most = Math.max(1, ...people.map((person) => person.overall));
+  // Only this week's contributors, most first (weeklyDeliveries sorts them).
+  const people = everyone.filter((person) => person.delivered > 0);
+  // Bars share one scale: the most anyone delivered this week fills the track.
+  const most = Math.max(1, ...people.map((person) => person.delivered));
   const total = people.reduce((sum, person) => sum + person.delivered, 0);
   const shown = all ? people : people.slice(0, TOP);
   return (
@@ -109,21 +102,28 @@ export function ProjectWeekPanel({ people, viewerId, action }: { people: WeekPer
           <p className="mt-0.5 text-xs text-zk-muted">
             {total === 1 ? "1 ticket" : `${total} tickets`} delivered since Monday
           </p>
-          {/* What the two parts of each bar are. */}
-          <p className="mt-2 flex items-center gap-3 text-[11px] font-medium text-zk-text2">
-            <span className="inline-flex items-center gap-1.5"><span aria-hidden="true" className="h-2.5 w-2.5 rounded-sm bg-electric-blue-strong" />This week</span>
-            <span className="inline-flex items-center gap-1.5"><span aria-hidden="true" className="h-2.5 w-2.5 rounded-sm bg-electric-blue/30" />Before this week</span>
-          </p>
         </div>
-        {action}
       </div>
       {people.length === 0 ? (
-        <p className="px-5 pb-5 text-sm text-zk-muted">Nobody is in this organisation yet.</p>
+        // No contributions yet this week: say so, and name everyone who could.
+        <div className="px-5 pb-5">
+          <p className="m-0 text-sm text-zk-text2">No contributions yet this week.</p>
+          {everyone.length ? (
+            <ul className="m-0 mt-3 flex list-none flex-wrap gap-2 p-0">
+              {everyone.map((person) => (
+                <li key={person.id} className="inline-flex items-center gap-1.5 rounded-full bg-zk-chip py-1 pl-1 pr-3 text-xs font-medium text-zk-text2">
+                  <Avatar name={person.name} image={person.image} size="sm" />
+                  {person.id === viewerId ? `${person.name} (you)` : person.name}
+                </li>
+              ))}
+            </ul>
+          ) : null}
+        </div>
       ) : (
         <ol className="m-0 list-none divide-y divide-zk-divider px-5 py-1">
           {shown.map((person, index) => {
             const you = person.id === viewerId;
-            const medal = index < 3 && person.delivered > 0 ? (index as 0 | 1 | 2) : null;
+            const medal = index < 3 ? (index as 0 | 1 | 2) : null;
             return (
               <li key={person.id} className="flex items-center gap-3 py-2.5">
                 <span
@@ -133,7 +133,7 @@ export function ProjectWeekPanel({ people, viewerId, action }: { people: WeekPer
                   {index + 1}
                 </span>
                 <Avatar name={person.name} image={person.image} size="lg" />
-                <SegmentedBar name={person.name} you={you} delivered={person.delivered} overall={person.overall} most={most} />
+                <WeekBar name={person.name} you={you} delivered={person.delivered} most={most} colour={BAR_COLOURS[index % BAR_COLOURS.length]} />
                 {/* The medal at the end of the bar; an empty slot keeps every bar the same length. */}
                 <span className="flex w-5 shrink-0 justify-center">{medal !== null ? <Medal place={medal} /> : null}</span>
               </li>

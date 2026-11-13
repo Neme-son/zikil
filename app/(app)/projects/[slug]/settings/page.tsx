@@ -16,6 +16,11 @@ import { ProjectAreasManager } from "./areas-manager";
 import { WorkflowSettingsForm } from "./workflow-settings-form";
 import { ProjectRepositoriesManager } from "./repositories-manager";
 import { PreviewSettingsForm } from "./preview-settings-form";
+import { ProjectGoals } from "@/app/(app)/[org]/[project]/goals/project-goals";
+import { CopyProjectIdButton } from "@/app/(app)/projects/copy-project-id";
+import { ConfirmSubmitButton } from "@/components/confirm-submit-button";
+import { Button } from "@/components/ui/button";
+import { deleteProjectAction, setProjectArchivedAction } from "@/app/(app)/projects/actions";
 import { workflowValues } from "@/lib/workflow-config";
 import { previewSettingsValues } from "@/lib/validations/preview-settings";
 import {
@@ -56,6 +61,20 @@ const SECTIONS = [
     label: "Areas",
     hint: "Parts of the product",
     icon: "M3 3h7v7H3zM14 3h7v7h-7zM14 14h7v7h-7zM3 14h7v7H3z",
+  },
+  {
+    // #616: the project's goals and their budget pools.
+    id: "goals",
+    label: "Goals",
+    hint: "Budget pools for the work",
+    icon: "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM12 7a5 5 0 1 0 0 10 5 5 0 0 0 0-10zM12 11a1 1 0 1 0 0 2 1 1 0 0 0 0-2z",
+  },
+  {
+    // Owners only: archive, restore or delete the project.
+    id: "archive",
+    label: "Archive or delete",
+    hint: "Owners only",
+    icon: "M3 7h18M5 7v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7M9 7V4h6v3M10 11v6M14 11v6",
   },
   {
     // #deeper-testing: what a judgement on this project's issues must prove.
@@ -112,7 +131,8 @@ export default async function ProjectSettingsPage({
     select: {
       id: true, slug: true, name: true, goal: true, repoUrl: true, stagingUrl: true, siteUrl: true,
       visibility: true, isOpenForContributors: true, acceptsGuestIdeas: true, contributorGuidelines: true,
-      githubInstallationId: true, rewardConfig: true, workflow: true, organisation: { select: { slug: true } },
+      githubInstallationId: true, rewardConfig: true, workflow: true, archivedAt: true, organisation: { select: { slug: true } },
+      _count: { select: { bugs: true } },
       repositories: {
         select: { id: true, url: true, label: true, branch: true, githubInstallationId: true },
         orderBy: [{ createdAt: "asc" }, { id: "asc" }],
@@ -120,6 +140,7 @@ export default async function ProjectSettingsPage({
     },
   });
   if (!project) notFound();
+  const owner = (await organisationAccessFor(user.id, organisationId, user.role)).membershipRole === "owner";
   const { github, section: rawSection } = await searchParams;
   const section = parseSection(rawSection, github);
   const workflow = workflowValues(project.workflow);
@@ -140,27 +161,28 @@ export default async function ProjectSettingsPage({
   return (
     <div className="settings-page settings-design mx-auto flex w-full max-w-5xl flex-col gap-6 pb-10">
       <div className="flex flex-col gap-2.5">
+        {/* Back to the project itself: its Project Overview. */}
         <Link
-          href={orgPath(refOf(project), "projects")}
+          href={issuesPath(refOf(project), "your_work")}
           className="inline-flex min-h-8 items-center gap-1.5 self-start text-sm font-semibold text-zk-accent hover:underline"
         >
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
             <path d="M19 12H5M12 19l-7-7 7-7" />
           </svg>
-          Projects
+          {project.name}
         </Link>
         <h1 className="m-0 text-[28px] font-extrabold tracking-[-0.02em] text-zk-text">{project.name} settings</h1>
-        <p className="m-0 text-sm text-zk-muted">
-          Owners and admins manage the project&apos;s details, GitHub, previews, workflow, areas and checks.{" "}
-          <Link href={issuesPath(refOf(project))} className="font-semibold text-zk-accent hover:underline">
-            Open its issues
-          </Link>
-        </p>
+        <div className="flex flex-wrap items-center gap-2 text-sm text-zk-muted">
+          <span>Project ID</span>
+          <code className="rounded bg-zk-chip px-1.5 py-0.5 font-mono text-[12px] text-zk-text2">{project.id}</code>
+          <CopyProjectIdButton projectId={project.id} />
+          {project.archivedAt ? <span className="rounded-full bg-zk-warn-bg px-2 py-0.5 text-[11px] font-bold text-zk-warn-fg">Archived</span> : null}
+        </div>
       </div>
 
       <div className="settings-layout">
         <nav aria-label="Project settings sections" className="settings-navigation">
-          {SECTIONS.map((item) => {
+          {SECTIONS.filter((item) => owner || item.id !== "archive").map((item) => {
             const on = section === item.id;
             return (
               <Link
@@ -263,6 +285,76 @@ export default async function ProjectSettingsPage({
           ) : null}
 
           {section === "areas" ? <ProjectAreasManager projectSlug={project.slug} areas={areas} /> : null}
+
+          {section === "archive" && owner ? (
+            <section className={card} aria-labelledby="archive-heading">
+              <div className="flex flex-col gap-1">
+                <h2 id="archive-heading" className="m-0 text-lg font-bold text-zk-text">Archive or delete</h2>
+                <span className="text-[13px] text-zk-muted">Only the organisation&apos;s owners can archive, restore or delete a project.</span>
+              </div>
+              <div className="flex flex-col gap-2 rounded-xl border border-zk-border p-4">
+                <h3 className="m-0 text-sm font-bold text-zk-text">{project.archivedAt ? "Restore the project" : "Archive the project"}</h3>
+                <p className="m-0 text-[13px] text-zk-muted">
+                  {project.archivedAt
+                    ? "It comes back to the project switcher, with its issues."
+                    : "It leaves the project switcher and can\u2019t be selected. Its issues stay, and you can restore it later."}
+                </p>
+                <form action={setProjectArchivedAction} className="self-start">
+                  <input type="hidden" name="projectId" value={project.id} />
+                  <input type="hidden" name="archived" value={project.archivedAt ? "false" : "true"} />
+                  {project.archivedAt ? (
+                    <Button type="submit" variant="secondary">Restore project</Button>
+                  ) : (
+                    <ConfirmSubmitButton
+                      variant="secondary"
+                      confirm={{
+                        title: `Archive ${project.name}?`,
+                        body: "It leaves the project switcher and can\u2019t be selected. Its issues stay, and you can restore it later.",
+                        confirmLabel: "Archive project",
+                      }}
+                    >
+                      Archive project
+                    </ConfirmSubmitButton>
+                  )}
+                </form>
+              </div>
+              <form action={deleteProjectAction} className="flex flex-col gap-2 rounded-xl border border-zk-bad-bd bg-zk-bad-soft/40 p-4">
+                <input type="hidden" name="projectId" value={project.id} />
+                <h3 className="m-0 text-sm font-bold text-zk-bad-fg">Delete the project</h3>
+                <p className="m-0 text-[13px] text-zk-text2">
+                  {project._count.bugs > 0
+                    ? `It has ${project._count.bugs === 1 ? "1 issue" : `${project._count.bugs} issues`}, so it can\u2019t be deleted. Archive it instead.`
+                    : "It has no issues, so it can be deleted for good. This can\u2019t be undone."}
+                </p>
+                {project._count.bugs === 0 ? (
+                  <>
+                    <label htmlFor="confirm-delete" className="text-xs font-medium text-zk-text2">Type {project.name} to confirm</label>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <input
+                        id="confirm-delete"
+                        name="confirmName"
+                        placeholder={project.name}
+                        autoComplete="off"
+                        required
+                        className="min-w-0 flex-1 rounded-xl border border-zk-border bg-zk-surface px-3 py-2 text-sm text-zk-text"
+                      />
+                      <Button type="submit" variant="danger-secondary">Delete project</Button>
+                    </div>
+                  </>
+                ) : null}
+              </form>
+            </section>
+          ) : null}
+
+          {section === "goals" ? (
+            <section className={card} aria-labelledby="goals-heading">
+              <div className="flex flex-col gap-1">
+                <h2 id="goals-heading" className="m-0 text-lg font-bold text-zk-text">Goals</h2>
+                <span className="text-[13px] text-zk-muted">A goal holds a pool of credits and splits it across issues, nested goals and agent deliverables. Allocations only ever take from what is left, so a pool can never be spent twice.</span>
+              </div>
+              <ProjectGoals org={project.organisation.slug} organisationId={organisationId} project={{ id: project.id, slug: project.slug, ref: refOf(project) }} />
+            </section>
+          ) : null}
 
           {checks ? (
             <section className={card} aria-labelledby="checks-heading">
