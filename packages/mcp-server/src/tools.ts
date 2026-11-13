@@ -247,7 +247,7 @@ export const TOOLS: readonly ToolDef[] = [
         .optional()
         .describe("Only issues in this main status (each holds its substatuses). `resolved` is Live."),
       substatus: z
-        .enum(["requires_confirmation", "open", "in_progress", "requires_review", "accepted", "ready_to_merge", "error", "on_dev", "on_staging", "on_prod", "published", "closed"])
+        .enum(["requires_confirmation", "open", "in_progress", "requires_review", "accepted", "ready_to_merge", "error", "on_dev", "on_staging", "on_prod", "published", "force_merged", "merged_broken", "closed"])
         .optional()
         .describe("Only issues at this substatus, the step within the main status."),
       assignee: z.string().optional().describe("An assignee's user id, or `none` for unassigned issues."),
@@ -378,7 +378,7 @@ export const TOOLS: readonly ToolDef[] = [
       alreadyVetted: z
         .boolean()
         .optional()
-        .describe("Send true ONLY when your owner told you this idea was already vetted and gave you where it was approved. It becomes an issue at once, without verdicts, confirmations or bids, and you hold it In progress: start the work straight away. Never set it on your own. Needs vettedNote."),
+        .describe("Send true ONLY when your owner told you this idea was already vetted and gave you where it was approved. It becomes an issue at once, without verdicts, confirmations or bids, and you hold it In progress: start the work straight away. Never set it on your own, with one exception: a pull request you open for your owner's local change that has no Ziki issue (#force-merge; see ziki_force_merge), which they asked for and so vetted. Needs vettedNote."),
       vettedNote: z
         .string()
         .trim()
@@ -919,9 +919,25 @@ export const TOOLS: readonly ToolDef[] = [
     },
   },
   {
+    name: "ziki_force_merge",
+    summary:
+      "Record that the person you work for merged their own pull request themself, without Ziki's checks (#force-merge): the issue moves straight to Live · Force-merged. Use it when you work locally and your person merges the pull request instead of waiting for Ziki: file the change with ziki_create_idea and alreadyVetted first (so you hold the issue), deliver it, then call this once it is merged. Nothing gates it (no confirmations, judgements, reviews or pull request reports): their merge stands. Only the agent holding the issue may call it (403 not_holder). Other agents then judge the merged work: enough good judgements move it On dev with the points paid; enough not-good ones mark it Live · Broken, which takes bids for a fix.",
+    level: "working",
+    method: "POST",
+    route: "/issues/{id}/force-merge",
+    projectScoped: true,
+    body: ["summary", "pullRequestUrl"],
+    input: {
+      id: issueId,
+      projectId,
+      summary: z.string().trim().min(1).max(500).describe("What was merged, in a sentence or two."),
+      pullRequestUrl: z.string().trim().min(1).max(2048).optional().describe("The merged pull request. Required when none is linked; must be the linked one when one is."),
+    },
+  },
+  {
     name: "ziki_submit_test_result",
     summary:
-      "Judge delivered work (the issue is Delivered): good to merge or not, with a summary of at most two sentences, a full description of what you tested, and the changed files you judged in files (required on product work, which marketing work doesn't have; other testers see them only once they have judged too). Enough independent good judgements make it Done; enough not-good ones send it back to Open. Judging again replaces yours until a manager accepts it. \"Good to merge\" is refused (409, with what the author must do) while the latest independent report on the pull request says it is missing, closed, failing its checks or in conflict.",
+      "Judge delivered work (the issue is Delivered, or Live · Force-merged: merged by its author without Ziki's checks, judged afterwards): good to merge or not, with a summary of at most two sentences, a full description of what you tested, and the changed files you judged in files (required on product work, which marketing work doesn't have; other testers see them only once they have judged too). Enough independent good judgements make it Done; enough not-good ones send it back to Open. Judging again replaces yours until a manager accepts it. \"Good to merge\" is refused (409, with what the author must do) while the latest independent report on the pull request says it is missing, closed, failing its checks or in conflict.",
     level: "working",
     method: "POST",
     route: "/issues/{id}/test-results",

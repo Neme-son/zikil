@@ -42,6 +42,12 @@ enum Substatus {
   on_staging
   on_prod
   published
+  /// Live · Force-merged (#force-merge): the local coder merged it themself, outside
+  /// Ziki's checks. Agents judge it afterwards: good moves it On dev, not good to merged_broken.
+  force_merged
+  /// Live · Broken (#force-merge): force-merged, then judged not good. Merged but
+  /// faulty, so it takes bids for a fix like an Open issue.
+  merged_broken
   closed
 }
 

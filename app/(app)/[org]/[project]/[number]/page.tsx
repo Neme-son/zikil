@@ -17,6 +17,7 @@ import { agentMentionId } from "@/lib/mentions";
 import { requireUser } from "@/lib/auth-helpers";
 import { bugInOrganisation, currentOrganisationIdFor } from "@/lib/organisation-context";
 import { issueHref, issuePath, queryString } from "@/lib/issue-ref";
+import { takesBids } from "@/lib/issue-substatus";
 import { findProjectIssue, parseIssueNumber } from "@/lib/project-issue";
 import { resolveSessionUserId } from "@/lib/session-user";
 import { LocalTime } from "@/components/local-time";
@@ -796,13 +797,13 @@ export default async function BugDetailPage({ params, searchParams }: BugPagePro
     ]);
   // Anyone who owns an agent in the organisation can award, through it, an open bid whose votes reached the threshold (#award-bids).
   const canAwardBids =
-    (bug.substatus === "open" || bug.substatus === "requires_confirmation") && !bug.isDeleted
+    takesBids(bug.substatus) && !bug.isDeleted
       ? await loadOptional("award permission", false, async () => Boolean(await awardingAgentOf(user.id, bug.organisationId)))
       : false;
   // One-click bid: while the issue takes bids, nobody is working on it, and you have no open bid on it,
   // the Bids step shows a Bid button with your agents to choose from.
   const bidAgents =
-    (bug.substatus === "open" || bug.substatus === "requires_confirmation") && !bug.isDeleted
+    takesBids(bug.substatus) && !bug.isDeleted
       ? await loadOptional("bid agents", [] as { id: string; name: string }[], async () => {
           const [workedOn, myOpenBid] = await Promise.all([
             prisma.issueClaim.count({ where: { bugId: bug.id, releasedAt: null, status: "active" } }),
@@ -1128,7 +1129,7 @@ export default async function BugDetailPage({ params, searchParams }: BugPagePro
   // Threshold-only (#vote-governance): the bar says which vote decides the step, and how far it has got.
   const thresholdOnly = isThresholdOnly(workflow);
   // The open bids' weighted votes (bidHistoryEntries weighs them): the next step names the most voted.
-  const topBidVotes = !bug.isDeleted && bug.substatus === "open"
+  const topBidVotes = !bug.isDeleted && (bug.substatus === "open" || bug.substatus === "merged_broken")
     ? Math.max(0, ...bidList.filter(isOpenBid).map((bid) => bid.votes ?? 0))
     : 0;
   const mergeReviewVotesNow = thresholdOnly && !bug.isDeleted && bug.substatus === "accepted"
@@ -1543,7 +1544,7 @@ export default async function BugDetailPage({ params, searchParams }: BugPagePro
               bidAction={bidAgents.length > 0 ? <BidButton bugId={bug.id} agents={bidAgents} /> : undefined}
               bids={bidList}
               at={firstAt(bidList)}
-              collapsed={bug.status !== "open"}
+              collapsed={!takesBids(bug.substatus)}
               canAward={canAwardBids}
               awardThreshold={workflow.awardThreshold}
             />
@@ -2193,7 +2194,7 @@ export default async function BugDetailPage({ params, searchParams }: BugPagePro
                           bidAction={bidAgents.length > 0 ? <BidButton bugId={bug.id} agents={bidAgents} /> : undefined}
                           bids={bidList}
                           at={firstAt(bidList)}
-                          collapsed={bug.status !== "open"}
+                          collapsed={!takesBids(bug.substatus)}
                           canAward={canAwardBids}
                           awardThreshold={workflow.awardThreshold}
                         />

@@ -70,6 +70,14 @@ export function agentInstructionsFor(input: AgentInstructionsInput): string {
     ],
     on_prod: ["This fix is live on production. Nothing is needed unless you find it broken; then file an idea describing the problem."],
     published: ["This marketing work is accepted and published. Nothing is needed."],
+    force_merged: [
+      `Its author merged this pull request themself, without Ziki's checks (#force-merge). ${pr}`,
+      `Test the merged code and judge it: POST ${api(`${issue}/test-results`)} with { "goodToMerge": true | false, "summary", "description", "files": [{ "path" }] }. Enough good judgements move it On dev; enough not-good ones mark it Live · Broken so someone fixes it.`,
+    ],
+    merged_broken: [
+      "This was force-merged and agents judged it faulty: the code is merged but broken. Read the judgements for what is wrong (GET test-results).",
+      `If you can fix it, bid: POST ${api(`${issue}/bid`)} with { "summary", "description" }. If there are good bids, award one: POST ${api("/bids/<bidId>/award")}.`,
+    ],
     closed: ["This issue is closed. Nothing is needed."],
   };
 
