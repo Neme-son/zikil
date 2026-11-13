@@ -6,6 +6,7 @@ import { workflowFor } from "@/lib/workflow";
 import { moveTo } from "@/lib/issue-substatus";
 import { afterSendBack, judgementCounts } from "@/lib/marketing/track";
 import { activeLevels, levelIn } from "@/lib/agents/active-in";
+import { checksFor, countsWithProof, loadProofRules, NO_CHECKS, type IssueChecks } from "@/lib/proof";
 
 /**
  * The Delivered step's rule (#delivered-step). Once the agent holding the
@@ -20,7 +21,8 @@ import { activeLevels, levelIn } from "@/lib/agents/active-in";
  * - Otherwise it stays Delivered.
  *
  * Both counts use the merge gate's rule (`countedMergeVerdicts`), so Done and
- * the manager's accept always agree.
+ * the manager's accept always agree. Where the organisation has checks
+ * (lib/proof.ts), only judgements with proof count.
  */
 
 type Db = PrismaClient | Prisma.TransactionClient;
@@ -35,6 +37,9 @@ export const judgedBugSelect = {
   track: true,
   revisionCount: true,
   pullRequestUrl: true,
+  pullRequestHeadSha: true,
+  typeId: true,
+  areaId: true,
   assigneeId: true,
   beneficiaryUserId: true,
   reporterId: true,
@@ -60,6 +65,7 @@ export type JudgedBug = Prisma.BugGetPayload<{ select: typeof judgedBugSelect }>
 export const judgementSelect = {
   goodToMerge: true,
   headSha: true,
+  proof: true,
   onBehalfOfUserId: true,
   agent: { select: { id: true, ownerUserId: true, activations: activeLevels } },
 } satisfies Prisma.TestVerdictSelect;
@@ -71,17 +77,20 @@ export type Judgement = Prisma.TestVerdictGetPayload<{ select: typeof judgementS
  * behind it (a manager agent filed it on the holder's behalf,
  * lib/agent-api/stranded-delivery.ts) has no claim holder to leave out, so the
  * people the delivery credits stand in that place: nothing from their agents,
- * and nothing given on their behalf, counts.
+ * and nothing given on their behalf, counts. Where the organisation has checks,
+ * only judgements with proof count (lib/proof.ts).
  */
 export function countJudgements(
   verdicts: readonly Judgement[],
   bug: JudgedBug,
   creditedUserIds: readonly string[],
+  checks: IssueChecks,
 ): { good: number; notGood: number } {
   const claim = deliveredClaim(bug);
+  const proven = verdicts.filter((v) => countsWithProof(v, checks, bug.pullRequestHeadSha));
   const counted = claim
-    ? verdicts
-    : verdicts.filter((v) => !creditedUserIds.includes(v.agent.ownerUserId) && !creditedUserIds.includes(v.onBehalfOfUserId));
+    ? proven
+    : proven.filter((v) => !creditedUserIds.includes(v.agent.ownerUserId) && !creditedUserIds.includes(v.onBehalfOfUserId));
   const reviewed = bug as unknown as ReviewedBug;
   return {
     good: countedMergeVerdicts(counted.filter((v) => v.goodToMerge), claim, reviewed, bug.organisationId).weight,
@@ -100,6 +109,8 @@ export async function countedJudgements(
 
   let verdicts: Judgement[] = [];
   let credited: string[] = [];
+  // Marketing work has no pull request to prove anything on: its judgements count as before.
+  const checks = bug.track === "marketing" ? NO_CHECKS : checksFor(await loadProofRules(db, bug.organisationId), bug);
 
   if (bug.track === "marketing") {
     const delivery = await db.delivery.findFirst({
@@ -138,7 +149,7 @@ export async function countedJudgements(
         );
   }
 
-  const { good, notGood } = countJudgements(verdicts, bug, credited);
+  const { good, notGood } = countJudgements(verdicts, bug, credited, checks);
   const { verdictsNeeded } = await workflowFor(bug.projectId, db);
   return { good, notGood, needed: verdictsNeeded };
 }

@@ -7,7 +7,7 @@ const FADE_MS = 400;
 
 /**
  * A short confirmation after paying or adding a site (#security-checks): it
- * shows for a few seconds, fades out, and takes `paid`/`added`/`check` off the
+ * shows for a few seconds, fades out, and takes `unlocked`/`added`/`check` off the
  * address, so reloading the page doesn't bring it back.
  */
 export function FlashNote({ children }: { children: React.ReactNode }) {
@@ -15,8 +15,8 @@ export function FlashNote({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     const url = new URL(window.location.href);
-    if (["paid", "added", "check"].some((key) => url.searchParams.has(key))) {
-      for (const key of ["paid", "added", "check"]) url.searchParams.delete(key);
+    if (["unlocked", "added", "check"].some((key) => url.searchParams.has(key))) {
+      for (const key of ["unlocked", "added", "check"]) url.searchParams.delete(key);
       window.history.replaceState(window.history.state, "", url.pathname + url.search + url.hash);
     }
     const fade = window.setTimeout(() => setPhase("fading"), SHOW_MS);
@@ -31,7 +31,7 @@ export function FlashNote({ children }: { children: React.ReactNode }) {
   return (
     <p
       role="status"
-      className={`mx-4 mb-4 mt-0 rounded-[14px] border border-zk-border bg-zk-ok-bg px-3 py-2 text-sm text-zk-ok-fg transition-opacity duration-[400ms] motion-reduce:transition-none sm:mx-6 ${phase === "fading" ? "opacity-0" : "opacity-100"}`}
+      className={`mx-4 my-3 rounded-[14px] border border-zk-border bg-zk-ok-bg px-3 py-2 text-sm text-zk-ok-fg transition-opacity duration-[400ms] motion-reduce:transition-none sm:mx-6 ${phase === "fading" ? "opacity-0" : "opacity-100"}`}
     >
       {children}
     </p>

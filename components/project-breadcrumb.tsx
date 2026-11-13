@@ -43,6 +43,17 @@ function sectionOf(pathname: string, ref: ProjectRef): string[] {
   return named[first] ? [named[first]] : [];
 }
 
+/**
+ * The idea lists and the workstream sit in a narrower column (920 px) than the
+ * other project pages (max-w-6xl). The breadcrumb takes the same width, so it
+ * lines up with the page under it.
+ */
+function narrowPage(pathname: string, ref: ProjectRef): boolean {
+  const [first, second] = pathname.slice(projectPath(ref).length).replace(/^\/+|\/+$/g, "").split("/");
+  if (first === "workstream") return true;
+  return first === "ideas" && !(second && /^[0-9]+$/.test(second));
+}
+
 const crumb = "rounded-md px-1.5 py-0.5 hover:bg-zk-chip hover:text-zk-text focus-visible:outline-2 focus-visible:outline-zk-accent";
 
 /**
@@ -56,8 +67,9 @@ export function ProjectBreadcrumb({ project }: { project: BreadcrumbProject }) {
   const ref = project.slug ? projectRef(project.orgSlug, project.slug) : null;
   const onProjects = !ref;
   const section = ref ? sectionOf(pathname, ref) : [];
+  const width = ref && narrowPage(pathname, ref) ? "max-w-[920px]" : "max-w-6xl";
   return (
-    <nav aria-label="Breadcrumb" className="mx-auto mb-3 flex w-full max-w-6xl items-center px-0.5 text-[13px] text-zk-text2 max-sm:mb-1">
+    <nav aria-label="Breadcrumb" className={`mx-auto mb-3 flex w-full ${width} items-center px-0.5 text-[13px] text-zk-text2 max-sm:mb-1`}>
       <ol className="flex min-w-0 flex-wrap items-center gap-0.5">
         {/* Every project of the organisation, with its health. */}
         <li className="min-w-0">

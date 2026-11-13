@@ -29,7 +29,7 @@ vi.mock("@/lib/agent-api/events", () => ({ publish }));
 vi.mock("@/lib/agents/audit", () => ({ audit }));
 vi.mock("@/lib/points/platform-rewards", () => ({ getProjectRewardConfig }));
 
-import { convertIdea, convertVettedIdea, giveIdeaVerdict, maxVotesFor, rejectIdea, verdictScore } from "@/lib/agent-api/idea-verdicts";
+import { convertClientVettedIdea, convertIdea, convertVettedIdea, giveIdeaVerdict, maxVotesFor, rejectIdea, verdictScore } from "@/lib/agent-api/idea-verdicts";
 import { formatRejectDetail, ideaNextStep } from "@/lib/next-step";
 
 /** The locked idea row (#idea-table): ideas have their own table, numbers and status. */
@@ -419,6 +419,25 @@ describe("convertVettedIdea", () => {
     db.$queryRaw.mockResolvedValue([idea({ score: 0, status: "rejected" })]);
     await expect(convertVettedIdea(db as never, owner, "p1", "i1", "Approved by Mark", "medium")).rejects.toMatchObject({ status: 409, body: { error: "idea_rejected" } });
     expect(db.bug.create).not.toHaveBeenCalled();
+  });
+});
+
+describe("convertClientVettedIdea", () => {
+  it("opens a vetted issue and links the private finding without inventing an agent claim", async () => {
+    db.$queryRaw.mockResolvedValue([idea({ score: 0 })]);
+    await convertClientVettedIdea(db as never, { organisationId: "t1", projectId: "p1" }, "i1", "ada");
+
+    expect(db.bug.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ substatus: "open", vettedAt: expect.any(Date) }),
+    }));
+    expect(db.securityFinding.updateMany).toHaveBeenCalledWith({
+      where: { ideaId: "i1" }, data: { bugId: "b9" },
+    });
+    expect(db.issueClaim.create).not.toHaveBeenCalled();
+    expect(publish).toHaveBeenCalledWith(db, expect.objectContaining({
+      type: "issue.converted", actorAgentId: null,
+      payload: expect.objectContaining({ via: "already_vetted", decidedByAgentId: null }),
+    }));
   });
 });
 

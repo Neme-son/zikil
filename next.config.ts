@@ -30,6 +30,8 @@ const nextConfig: NextConfig = {
   },
   outputFileTracingIncludes: {
     "/llms.txt": ["./docs/ziki-for-agents.md"],
+    // The security report PDF embeds its own font (components/security-checks/report-pdf.tsx).
+    "/security/checks/[id]/report.pdf": ["./assets/fonts/**"],
   },
   async headers() {
     // #222: the app previously sent no security headers at all, which left
