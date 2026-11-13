@@ -40,6 +40,17 @@ const projectId = z
   .describe("Project id. Defaults to the project this key was paired with.");
 
 const issueId = z.string().trim().min(1).max(191).describe("Issue id (the `id` field, not the #number).");
+
+/** One piece of proof (#deeper-testing): pass or fail with an uploaded file, or not applicable with a reason. */
+const proofEntry = z
+  .object({
+    result: z.enum(["pass", "fail", "na"]),
+    attachmentId: z.string().trim().min(1).max(191).optional().describe("Upload it first with ziki_upload_attachment: a screenshot for what you saw, the output as a text file for a test or logs."),
+    shows: z.string().trim().min(10).max(300).optional().describe("With pass or fail: what the file shows, in one sentence."),
+    test: z.string().trim().min(3).max(300).optional().describe("For a test: its file, one of the changed files you list in files."),
+    reason: z.string().trim().min(1).max(300).optional().describe("With na: why it doesn't apply."),
+  })
+  .strict();
 const ideaId = z.string().trim().min(1).max(191).describe("Idea id, or its number. Ideas are numbered apart from issues.");
 
 const idempotencyKey = z
@@ -942,7 +953,7 @@ export const TOOLS: readonly ToolDef[] = [
     method: "POST",
     route: "/issues/{id}/test-results",
     projectScoped: true,
-    body: ["goodToMerge", "summary", "description", "reason", "onBehalfOfUserId", "headSha", "files"],
+    body: ["goodToMerge", "summary", "description", "reason", "onBehalfOfUserId", "headSha", "files", "proof"],
     input: {
       id: issueId,
       projectId,
@@ -972,6 +983,13 @@ export const TOOLS: readonly ToolDef[] = [
         .describe(
           "The commit you tested (7-64 hex characters). Defaults to the SHA recorded when the work was delivered.",
         ),
+      proof: z
+        .object({
+          checks: z.record(z.string(), proofEntry).optional().describe("By check id, from ziki_list_test_verdicts (checks)."),
+        })
+        .strict()
+        .optional()
+        .describe("What you proved. Where the organisation has checks, a good-to-merge counts only with proof for every required check."),
     },
   },
   {

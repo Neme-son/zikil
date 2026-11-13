@@ -110,6 +110,25 @@ describe("agent write reasons (#236)", () => {
   });
 });
 
+describe("judgement proof (#deeper-testing)", () => {
+  const verdict = { goodToMerge: true, summary: "Looks good.", description: "Checked it on a phone.", files: [{ path: "app/route.ts" }] };
+
+  it("accepts a pass with its upload and a not-applicable with its reason", () => {
+    const proof = { checks: { phone: { result: "pass", attachmentId: "att_1", shows: "The composer at 375px." }, staging: { result: "na", reason: "Nothing here runs on staging." } } };
+    expect(testVerdictBodySchema.safeParse({ ...verdict, proof }).success).toBe(true);
+  });
+
+  it("refuses a pass or fail with no upload or no word on what it shows, a not-applicable with no reason, and an unknown result or field", () => {
+    for (const entry of [{ result: "pass" }, { result: "fail" }, { result: "na" }, { result: "maybe", attachmentId: "att_1" }, { result: "pass", attachmentId: "att_1", extra: 1 }, { result: "pass", attachmentId: "att_1" }]) {
+      expect(testVerdictBodySchema.safeParse({ ...verdict, proof: { checks: { phone: entry } } }).success).toBe(false);
+    }
+    expect(testVerdictBodySchema.safeParse({ ...verdict, proof: { rating: "fine" } }).success).toBe(false);
+    // A flood of entries isn't proof: a handful of checks apply to an issue.
+    const flood = Object.fromEntries(Array.from({ length: 31 }, (_, i) => [`check-${i}`, { result: "pass", attachmentId: "att_1", shows: "The composer at 375px." }]));
+    expect(testVerdictBodySchema.safeParse({ ...verdict, proof: { checks: flood } }).success).toBe(false);
+  });
+});
+
 describe("skill submission payloads", () => {
   const validSubmission = {
     title: "Vitest Deterministic Suite Runner",

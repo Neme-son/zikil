@@ -128,6 +128,8 @@ import { prGate, reportWanted } from "@/lib/agent-api/pr-gate";
 import { parseGitHubRepoUrl } from "@/lib/github/pull-request-url";
 import { mergeChecklist } from "@/lib/merge-checklist";
 import { MergeChecklistCard } from "@/components/merge-checklist";
+import { Prisma } from "@prisma/client";
+import { checkInfo, checksFor, judgementProof, loadProofRules, proofAttachmentIds, storedProof, type JudgementProofState, type VerdictProof } from "@/lib/proof";
 import { PROJECT_REPOSITORIES_SELECT, repoForPullRequest } from "@/lib/github/project-repositories";
 import { DecisionCard } from "@/components/decision-card";
 import { decisionFor } from "@/lib/your-decision";
@@ -838,7 +840,10 @@ export default async function BugDetailPage({ params, searchParams }: BugPagePro
       agentOwner: agent.owner.name,
     })),
   ];
-  const issueAttachments: AttachmentView[] = attachments.filter((a) => !a.commentId);
+  // #deeper-testing: proof belongs to its judgement (and stays hidden from testers who haven't judged), not the issue's files.
+  const verdictProofs = await loadOptional("proof attachments", [], () => prisma.testVerdict.findMany({ where: { bugId: bug.id, proof: { not: Prisma.DbNull } }, select: { id: true, proof: true } }));
+  const proofIds = new Set(verdictProofs.flatMap((verdict) => proofAttachmentIds(storedProof(verdict.proof))));
+  const issueAttachments: AttachmentView[] = attachments.filter((a) => !a.commentId && !proofIds.has(a.id));
   const attachmentsByComment: Record<string, AttachmentView[]> = {};
   for (const a of attachments) {
     if (a.commentId) (attachmentsByComment[a.commentId] ??= []).push(a);
@@ -1195,6 +1200,11 @@ export default async function BugDetailPage({ params, searchParams }: BugPagePro
     : null;
   // The judgements as the Delivered rule counts them (independent, weighted, on
   // the delivered pull request), so the bar says what will actually move it.
+  // #deeper-testing: what this issue's judgements must prove, while delivered product work is judged.
+  const proofRules = !bug.isDeleted && bug.track !== "marketing" && bug.status === "done" && bug.pullRequestUrl
+    ? await loadOptional("proof rules", null, () => loadProofRules(prisma, bug.organisationId))
+    : null;
+  const checks = proofRules ? checksFor(proofRules, bug) : null;
   const judgementCount = bug.status === "done" && !bug.isDeleted
     ? await loadOptional("judgement count", null, () => countedJudgements(prisma, bug.id))
     : null;
@@ -1292,7 +1302,21 @@ export default async function BugDetailPage({ params, searchParams }: BugPagePro
     [...list].sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
   const firstAt = (list: { updatedAt: Date | string }[]) => newestFirst(list).at(-1)?.updatedAt ?? null;
   const timelineDeliveries = newestFirst(deliveryList);
-  const timelineVerdicts = newestFirst(testVerdictList);
+  // #deeper-testing: each judgement's proof, named by its check, with its file, and whether it counts.
+  const checkName = (id: string) => (proofRules ? checkInfo(id, proofRules)?.name : null) ?? id;
+  const proofItems = (proof: VerdictProof | null | undefined) =>
+    proof
+      ? Object.entries(proof.checks ?? {}).map(([id, { attachmentId, ...entry }]) => ({ ...entry, label: checkName(id), file: attachments.find((a) => a.id === attachmentId) ?? null }))
+      : null;
+  const standingOf = (verdict: { id: string; goodToMerge: boolean; headSha: string | null }) => {
+    if (!checks?.on) return null;
+    const { state, missing } = judgementProof({ ...verdict, proof: verdictProofs.find((v) => v.id === verdict.id)?.proof ?? null }, checks.required, bug.pullRequestHeadSha ?? null);
+    return { state, missing: missing.map(checkName) };
+  };
+  const timelineVerdicts = newestFirst(testVerdictList).map((verdict) => {
+    const standing = standingOf(verdict);
+    return { ...verdict, proofItems: proofItems(verdict.proof), proofNote: standing ? proofNote(standing.state, standing.missing) : null };
+  });
   const timelineReviews = newestFirst(mergeReviewList);
 
   // The Conversation card shows only when it has entries in it: no empty boxes.
@@ -2490,4 +2514,22 @@ export default async function BugDetailPage({ params, searchParams }: BugPagePro
       </div>
     </div>
   );
+}
+
+/** What a judgement's proof means for the count, as a chip beside it (#deeper-testing). */
+function proofNote(state: JudgementProofState, missing: string[]): { label: string; tone: "ok" | "warn" | "bad" | "neutral" } {
+  switch (state) {
+    case "counts":
+      return { label: "Counts", tone: "ok" };
+    case "no_proof":
+      return { label: `Doesn't count yet · no proof: ${missing.join(", ")}`, tone: "warn" };
+    case "earlier_code":
+      return { label: "Earlier code · doesn't count", tone: "neutral" };
+    case "contradicts":
+      return { label: "Proves a fail but says good to merge · doesn't count", tone: "warn" };
+    case "proved_fail":
+      return { label: "Proved it fails", tone: "bad" };
+    case "no_fail_proof":
+      return { label: "Doesn't count · no proof of what fails", tone: "warn" };
+  }
 }
