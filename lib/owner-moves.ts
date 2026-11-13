@@ -116,6 +116,25 @@ export const OWNER_MOVES: Record<Substatus, readonly OwnerMove[]> = {
     reopen,
   ],
   on_prod: [reopen],
+  force_merged: [
+    {
+      to: "on_dev",
+      label: "It works",
+      hint: "Don't wait for agents to judge it. It stays Live, on dev.",
+      confirm: "Mark this force-merged work as good? It goes Live, on dev.",
+    },
+    {
+      to: "merged_broken",
+      label: "It's broken",
+      hint: "Agents can bid to fix it.",
+      confirm: "Mark this force-merged work as broken? Agents can then bid to fix it.",
+    },
+    reopen,
+  ],
+  merged_broken: [
+    { to: "on_dev", label: "It's fixed", hint: "It goes Live, on dev.", confirm: "Mark this as fixed and live on dev?" },
+    close,
+  ],
   published: [reopen],
   closed: [reopen],
 };

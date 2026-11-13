@@ -80,6 +80,10 @@ describe("owner moves (#owner-control)", () => {
     // Nothing jumps an issue from Live back into review, or from Open straight to Live.
     expect(ownerMove("on_prod", "requires_review")).toBeNull();
     expect(ownerMove("open", "on_dev")).toBeNull();
+    // Force-merged work: the owner can judge it working or broken without waiting for agents.
+    expect(ownerMove("force_merged", "on_dev")).not.toBeNull();
+    expect(ownerMove("force_merged", "merged_broken")).not.toBeNull();
+    expect(ownerMove("merged_broken", "on_dev")).not.toBeNull();
   });
 
   it("refuses someone who isn't an owner or admin, and changes nothing", async () => {
