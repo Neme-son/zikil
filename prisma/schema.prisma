@@ -533,6 +533,7 @@ model Bug {
   /// The idea this issue was converted from (#idea-table). Every issue starts as one.
   idea                      Idea?
   testVerdicts              TestVerdict[]
+  testCardRows              TestCardRow[]
   mergeReviews              MergeReview[]
   pullRequestReports        PullRequestReport[]
   reviewOffers              ReviewOffer[]
@@ -1373,6 +1374,7 @@ model Agent {
   plans                Plan[]
   confirmations        IssueConfirmation[]
   testVerdicts         TestVerdict[]
+  testCardRows         TestCardRow[]
   mergeReviews         MergeReview[]
   pullRequestReports   PullRequestReport[]
   reviewOffers         ReviewOffer[]
@@ -2136,7 +2138,7 @@ model TestVerdict {
   /// The changed files the tester looked at (#confirmation-files): [{ path, lines? }].
   /// Hidden from other testers until they have judged too.
   files            Json?
-  /// What this judgement proved (#deeper-testing), lib/proof.ts: { checks }.
+  /// What this judgement proved (#deeper-testing), lib/proof.ts: { checks, squares, rating }.
   /// Each entry is { result: pass | fail | na, attachmentId?, shows?, test?, reason? }, on `headSha`.
   proof            Json?
   createdAt        DateTime  @default(now())
@@ -2187,6 +2189,70 @@ model ProofCheck {
   organisation   Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
 
   @@index([organisationId])
+}
+
+/// Where a test-card row came from. Rows from the checks and the delivery receipt aren't stored.
+enum TestRowSource {
+  criteria
+  beyond
+  suggested
+}
+
+/// How a row leaves the normal use case (#deeper-testing).
+enum TestRowKind {
+  limits
+  bad_input
+  failure
+  mid_change
+  reload
+  two_at_once
+  permissions
+  still_works
+  devices
+}
+
+/// What a row's proof has to be: a screenshot or recording, a test run, or logs.
+enum TestRowProof {
+  screen
+  test
+  log
+}
+
+/// Who a row waits on when no tester can prove it: the deliverer's automated
+/// test, read from CI (`ci`), or the project's owners (`env`).
+enum TestRowRoute {
+  ci
+  env
+}
+
+/// One row of an issue's test card that a tester wrote or Ziki suggested
+/// (#deeper-testing). Each environment in `envs` is one square; with none, the
+/// row is one square. Routed rows never hold the issue.
+model TestCardRow {
+  id                String         @id @default(cuid())
+  bugId             String
+  agentId           String?
+  text              String         @db.VarChar(200)
+  why               String?        @db.VarChar(300)
+  source            TestRowSource
+  kind              TestRowKind?
+  proof             TestRowProof   @default(screen)
+  envs              String[]       @default([])
+  /// Risky: two independent testers must prove each square.
+  needsTwo          Boolean        @default(false)
+  route             TestRowRoute?
+  routedAt          DateTime?
+  /// The deliverer's automated test for a `ci` row.
+  proofAttachmentId String?
+  /// The owners' decision on an `env` row: waived, or filed as an idea.
+  decision          String?        @db.VarChar(20)
+  decidedAt         DateTime?
+  createdAt         DateTime       @default(now())
+  bug               Bug            @relation(fields: [bugId], references: [id], onDelete: Cascade)
+  agent             Agent?         @relation(fields: [agentId], references: [id], onDelete: SetNull)
+
+  @@index([bugId])
+  @@index([route, routedAt])
 }
 
 /// What a pull request looks like on GitHub (#pr-reports, #github-status).

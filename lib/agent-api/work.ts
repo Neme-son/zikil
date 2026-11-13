@@ -110,7 +110,8 @@ export type WorkKind =
   | "reconcile_merged"
   | "await_release"
   | "repair_pull_request"
-  | "report_pr_status";
+  | "report_pr_status"
+  | "add_test";
 
 export type WorkAction = {
   name: string;
@@ -1018,14 +1019,20 @@ async function agentWork(agent: AgentContext, projectId: string, offerWindowSeco
     where: { agentId: agent.agentId, status: "planning", releasedAt: null, bug: { projectId } },
     select: { id: true, offeredAt: true, createdAt: true, bug: { select: { id: true, number: true, title: true } }, plan: { select: { id: true, round: true, decision: true, reviewBy: true, decisionNote: true } } },
   });
-  // #deeper-testing: this agent's good-to-merge judgements that don't count yet for want of proof.
-  const judged =
+  // #deeper-testing: this agent's good-to-merge judgements that don't count yet for want of proof,
+  // and the automated tests testers asked it for on work it delivered.
+  const [judged, testsToAdd] = await Promise.all([
     track === "marketing"
-      ? []
-      : await prisma.testVerdict.findMany({
+      ? Promise.resolve([])
+      : prisma.testVerdict.findMany({
           where: { agentId: agent.agentId, goodToMerge: true, bug: { projectId, status: "done", isDeleted: false } },
           select: { goodToMerge: true, headSha: true, proof: true, pullRequestUrl: true, bug: { select: cardBugSelect } },
-        });
+        }),
+    prisma.testCardRow.findMany({
+      where: { route: "ci", proofAttachmentId: null, bug: { projectId, isDeleted: false, deliveries: { some: { agentId: agent.agentId } } } },
+      select: { id: true, text: true, bug: { select: { id: true, number: true, title: true } } },
+    }),
+  ]);
   const rules = judged.length ? await loadProofRules(prisma, agent.organisationId) : null;
   const unproven = new Map<string, string[]>();
   for (const verdict of judged) {
@@ -1034,7 +1041,7 @@ async function agentWork(agent: AgentContext, projectId: string, offerWindowSeco
     const { state, missing } = judgementProof(verdict, checks.required, verdict.bug.pullRequestHeadSha);
     if (checks.on && state === "no_proof") unproven.set(verdict.bug.id, missing.map((id) => checkInfo(id, rules)?.name ?? id));
   }
-  return { offers, reviewOffers, jobReviewOffers, claims, unread, planning, unproven };
+  return { offers, reviewOffers, jobReviewOffers, claims, unread, planning, unproven, testsToAdd };
 }
 
 const apiPath = (id: string, tail: string, projectId: string) => `/api/v1/issues/${id}/${tail}?projectId=${projectId}`;
@@ -1322,11 +1329,23 @@ export function itemsFor(agent: AgentContext, work: ProjectWork, mine: AgentWork
       title: test.forceMerged ? `Judge the force-merged work in #${test.number}` : `Judge the delivered work for #${test.number}`,
       detail: test.forceMerged
         ? "Its author merged this pull request themself, without Ziki's checks (#force-merge). Test the merged code and judge whether it is good: a summary of at most two sentences, a full description of what you tested, and the changed files you judged (`files`). Enough good judgements move it On dev; enough not-good ones mark it Live · Broken so someone fixes it. Where the organisation has checks, attach proof for every required check (`proof.checks`): a file for each and what it shows."
-        : "Check out the delivered pull request, test it, and judge whether it is good to merge: a summary of at most two sentences and a full description of what you tested. Read the delivery receipt first (GET test-results carries it as `receipt`): test what the deliverer says it did not verify, and follow its reviewerShould steps. Enough good judgements make it Done; enough not-good ones send it back to Open. List the changed files you judged (`files`: a path and optional lines); a verdict without them is refused. Where the organisation has checks, attach proof for every required check (`proof.checks`): a file for each and what it shows.",
+        : "Check out the delivered pull request, test it, and judge whether it is good to merge: a summary of at most two sentences and a full description of what you tested. Read the delivery receipt first (GET test-results carries it as `receipt`): test what the deliverer says it did not verify, and follow its reviewerShould steps. Enough good judgements make it Done; enough not-good ones send it back to Open. List the changed files you judged (`files`: a path and optional lines); a verdict without them is refused. Where the organisation has checks, read the test card first (GET test-card): attach proof for every required check and the squares you tested (`proof`), each a file and what it shows, and add a row that isn't a normal use case if the card has none.",
       minimumRole: "working",
       ...(work.judgeBlocks.has(test.id) ? { canAct: false, blockedReason: work.judgeBlocks.get(test.id) } : { canAct: true }),
       issue: issueRef(test),
       actions: [{ name: "submit_test_result", minimumRole: "working", method: "POST", path: apiPath(test.id, "test-results", pid), cli: `submit-test-result --id ${test.id} --good-to-merge true|false --summary <your verdict> --description <what you tested and why>` }],
+    });
+  }
+  for (const row of mine.testsToAdd) {
+    items.push({
+      kind: "add_test",
+      key: `add_test:${row.id}`,
+      title: `Add a test for #${row.bug.number}`,
+      detail: `A tester can't prove “${row.text}” with a screenshot and asked for an automated test. Add one to the pull request, then attach its run. With no test in a day, the project's owners decide instead.`,
+      minimumRole: "working",
+      canAct: true,
+      issue: issueRef(row.bug),
+      actions: [{ name: "attach_test", minimumRole: "working", method: "POST", path: apiPath(row.bug.id, `test-card/${row.id}`, pid), cli: `test-card-row --id ${row.bug.id} --row ${row.id} --action test --attachment-id <id>` }],
     });
   }
   // Pull requests to check on GitHub and report (#pr-reports): Ziki never asks

@@ -29,6 +29,7 @@ import { canSeeEvidenceFiles, evidenceFilesSchema, evidenceFilesView, uniqueEvid
 import { actionReason } from "@/lib/agent-api/action-reason";
 import { linkAttachments } from "@/lib/attachment-link";
 import { BUILT_IN_CHECKS, checkInfo, checksFor, loadProofRules, proofAttachmentIds, proofProblem, proofSchema, storedProof, type VerdictProof } from "@/lib/proof";
+import { suggestRowAfterRating } from "@/lib/agent-api/test-card";
 
 /**
  * Reviewer agents reporting whether a fix is good to merge (#434). A verdict
@@ -87,10 +88,11 @@ export const testVerdictBodySchema = z.object({
     .regex(/^[0-9a-f]{7,64}$/i, "headSha must be a hexadecimal commit SHA.")
     .optional(),
   /**
-   * What you proved (#deeper-testing): `checks` by check id, each
-   * { result: pass | fail | na, attachmentId?, shows?, test?, reason? }. Where
-   * the organisation has checks, a good-to-merge counts only with proof for
-   * every required check.
+   * What you proved (#deeper-testing): `checks` by check id and `squares` by
+   * test-card square key, each { result: pass | fail | na, attachmentId?, shows?, test?, reason? },
+   * and `rating` (thorough or too_easy) when you're the card's second tester.
+   * Where the organisation has checks, a good-to-merge counts only with proof
+   * for every required check (GET /api/v1/issues/{id}/test-card lists them).
    */
   proof: proofSchema.optional(),
 });
@@ -335,6 +337,13 @@ export async function submitTestVerdict(
   // #deeper-testing: proof is an upload of the agent's owner, claimed for this issue.
   const proofIds = [...new Set(body.proof ? proofAttachmentIds(body.proof) : [])];
   const proof = body.proof ?? Prisma.DbNull;
+  // The card's author doesn't rate its own card; a second tester does.
+  if (body.proof?.rating) {
+    const author = await prisma.testCardRow.findFirst({ where: { bugId: bug.id, agentId: { not: null } }, orderBy: [{ createdAt: "asc" }, { id: "asc" }], select: { agentId: true } });
+    if (author?.agentId === agent.agentId) {
+      return { status: 400, error: "invalid_request", message: "proof.rating: the card's author doesn't rate its own card; leave rating out.", field: "proof" };
+    }
+  }
 
   try {
     const result = await prisma.$transaction(async (tx) => {
@@ -343,8 +352,10 @@ export async function submitTestVerdict(
         const linked = await tx.attachment.findMany({ where: { id: { in: proofIds }, bugId: bug.id, uploaderId: agent.ownerId }, select: { id: true, contentType: true, size: true } });
         if (linked.length !== proofIds.length) throw new ProofError(NOT_YOURS);
         // Each file must suit what it proves, and a test must be one of the files it lists.
+        const rows = await tx.testCardRow.findMany({ where: { bugId: bug.id }, select: { id: true, proof: true } });
         const problem = proofProblem(body.proof!, {
           file: (id) => linked.find((a) => a.id === id),
+          rowProof: (id) => rows.find((r) => r.id === id)?.proof,
           changed: (body.files ?? []).map((f) => f.path),
         });
         if (problem) throw new ProofError(problem);
@@ -441,6 +452,8 @@ export async function submitTestVerdict(
       await handleTestVerdictSubmitted(tx, { bugId: bug.id, agentId: agent.agentId, organisationId: bug.organisationId, pullRequestUrl }).catch(() => null);
       return { status: 201 as const, verdict };
     });
+    // #deeper-testing: a card rated too easy gets a row of a kind it doesn't have yet.
+    if (body.proof?.rating === "too_easy") await suggestRowAfterRating(prisma, bug.id);
     // #delivered-step: enough independent judgements move it to Done, or back to Open.
     await refreshJudgedStatus(prisma, bug.id, agent.ownerId);
     // #force-merge: enough judgements move force-merged work On dev, or mark it Live · Broken.

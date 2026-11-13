@@ -113,6 +113,7 @@ import { PROJECT_ALL_PARAM, showsAllProjects } from "@/lib/issue-list-filters";
 import { ideaVoteTotals, NO_VOTES } from "@/lib/idea-vote-totals";
 import { bugSearchSort, ideaSearchSort, searchWorkItems, typesenseFilter } from "@/lib/search-index";
 import { activeIn } from "@/lib/agents/active-in";
+import { judgementBars } from "@/lib/agent-api/tested-status";
 
 /* Distinct browser-tab title; the root layout appends the site name. */
 export const metadata = { title: "Issues" };
@@ -905,6 +906,8 @@ export async function IssuesList({
   const snippets = new Map<string, Snippet>();
   // Possibly delivered: why each issue is on the list, and why it is still Open.
   const signals = statusParam === POSSIBLY_DELIVERED ? await loadOrEmpty("delivery signals", () => deliverySignals(prisma, bugs.map((b) => b.id)), new Map()) : new Map<string, DeliverySignals>();
+  // #deeper-testing: each row being judged shows its tests at a glance, counted as the gate counts them.
+  const testBars = await loadOrEmpty("tests bars", () => judgementBars(prisma, bugs.filter((b) => b.status === "done").map((b) => b.id)), new Map<string, { good: number; needed: number }>());
   if (searchText) {
     const needDescription = bugs
       .filter((bug) => !hasMatch(bug.title, searchText))
@@ -1416,6 +1419,7 @@ export async function IssuesList({
                             </span>
                             {snippets.has(bug.id) ? <SearchSnippet snippet={snippets.get(bug.id)!} /> : null}
                             {signals.has(bug.id) ? <DeliverySignalsLine signals={signals.get(bug.id)!} /> : null}
+                            {testBars.has(bug.id) ? <TestsBar {...testBars.get(bug.id)!} /> : null}
                           </span>
                         </Link>
                         {/* #live-confirm: opens who found it on prod, under the row (a button can't sit in the link). */}
@@ -1657,6 +1661,32 @@ function DeliverySignalsLine({ signals }: { signals: DeliverySignals }) {
       {signals.lastActivityAt ? (
         <span className="text-zk-muted">Last activity <LocalTime date={signals.lastActivityAt} /></span>
       ) : null}
+    </span>
+  );
+}
+
+/**
+ * The tests at a glance (#deeper-testing): a checked clipboard, then one slot per
+ * judgement needed, green for each that counts and red for each still missing.
+ * An approved exception to "no per-stage tally under a row" (AGENTS.md).
+ */
+function TestsBar({ good, needed }: { good: number; needed: number }) {
+  const label = `Tests: ${Math.min(good, needed)} of ${needed} passed`;
+  return (
+    <span role="img" aria-label={label} title={label} className="mt-1 flex items-center gap-2">
+      <svg viewBox="0 0 24 24" className={`h-4 w-4 ${good >= needed ? "text-zk-ok-fg" : "text-zk-text2"}`} fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+        <rect x="8" y="2" width="8" height="4" rx="1" />
+        <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2" />
+        <path d="m9 14 2 2 4-4" />
+      </svg>
+      <span className="flex gap-1">
+        {Array.from({ length: needed }, (_, i) => (
+          <span key={i} aria-hidden="true" className={`h-2.5 w-7 rounded-full ${i < good ? "bg-zk-ok-fg" : "bg-zk-bad-fg"}`} />
+        ))}
+      </span>
+      <span className={`text-xs font-bold tabular-nums ${good >= needed ? "text-zk-ok-fg" : "text-zk-bad-fg"}`}>
+        {Math.min(good, needed)}/{needed}
+      </span>
     </span>
   );
 }

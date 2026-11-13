@@ -35,7 +35,7 @@ type ReviewEntryView = {
   proofItems?: ProofItem[] | null;
 };
 
-/** One proof entry as people read it: what it proves, its result, what it shows and its file. */
+/** One proof entry as people read it: the check or square, its result, what it shows and its file. */
 export type ProofItem = {
   label: string;
   result: "pass" | "fail" | "na";
@@ -107,9 +107,9 @@ function ReviewEntryList({
                 <span className="rounded-full bg-zk-chip px-2 py-0.5 text-[11px] font-bold text-zk-text2">Earlier code</span>
               )}
               {entry.proofNote ? (
-                <span className={`rounded-full px-2 py-0.5 text-[11px] font-bold ${NOTE_TONE[entry.proofNote.tone]}`}>
+                <a href="#test-card" className={`rounded-full px-2 py-0.5 text-[11px] font-bold ${NOTE_TONE[entry.proofNote.tone]}`}>
                   {entry.proofNote.label}
-                </span>
+                </a>
               ) : null}
               <PullRequestRef url={entry.pullRequestUrl} headSha={entry.headSha} />
               <span className="whitespace-nowrap text-xs text-zk-muted">
@@ -140,7 +140,7 @@ function ReviewEntryList({
 
 const RESULT = { pass: ["PASSED", "border-zk-ok-fg text-zk-ok-fg"], fail: ["FAILED", "border-zk-bad-fg text-zk-bad-fg"], na: ["N/A", "border-zk-border text-zk-muted"] } as const;
 
-/** A judgement's proof (#deeper-testing): each check it proved, what the file shows, and the file. */
+/** A judgement's proof (#deeper-testing): each check or square it stamped, what the file shows, and the file. */
 function ProofList({ items }: { items: ProofItem[] }) {
   return (
     <details className="mt-1.5 text-[13px]" open>

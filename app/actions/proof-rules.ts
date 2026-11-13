@@ -9,6 +9,7 @@ import { organisationAccessFor } from "@/lib/organisation-access";
 import { currentOrganisationIdFor, NO_ORGANISATION_MESSAGE } from "@/lib/organisation-context";
 import { prisma } from "@/lib/prisma";
 import { BUILT_IN_CHECKS } from "@/lib/proof";
+import { decideTestCardRow } from "@/lib/agent-api/test-card";
 
 /**
  * Settings for deeper testing (#deeper-testing, lib/proof.ts). The
@@ -138,4 +139,16 @@ export async function deleteProofCheckAction(checkId: string): Promise<ProofActi
     prisma.proofCheck.deleteMany({ where: { id: checkId, organisationId: a.organisationId } }),
   ]);
   return done(a, null, "proof_check.deleted", { checkId });
+}
+
+/** A project's owner or admin settles a test-card row nobody can prove: waive it, or file it as an idea. */
+export async function decideTestCardRowAction(bugId: string, rowId: string, decision: "waived" | "idea"): Promise<ProofActionResult> {
+  const bug = await prisma.bug.findUnique({ where: { id: id.parse(bugId) }, select: { id: true, projectId: true, organisationId: true } });
+  if (!bug) return { ok: false, error: "Issue not found." };
+  const a = await access(bug.projectId);
+  if (!a.ok) return a;
+  if (a.organisationId !== bug.organisationId) return { ok: false, error: "Issue not found." };
+  await decideTestCardRow(bug.id, id.parse(rowId), decision === "idea" ? "idea" : "waived");
+  revalidatePath("/[org]/[project]", "layout");
+  return { ok: true };
 }
