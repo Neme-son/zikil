@@ -56,6 +56,7 @@ vi.mock("@/lib/redesigns", () => ({ assertRedesignOpen: redesign.assertRedesignO
 const notify = vi.hoisted(() => ({ notifyMergeFailed: vi.fn() }));
 vi.mock("@/lib/agent-notifications", () => ({ notifyMergeFailed: notify.notifyMergeFailed }));
 
+import { clearRecentPublishedEvents } from "@/lib/agent-api/events";
 import { acceptFix as acceptFixRaw, marketingAcceptAwards } from "@/lib/agent-api/merge";
 import { award } from "@/lib/points/award";
 import { resetWorkflowCache } from "@/lib/workflow";
@@ -161,6 +162,7 @@ function verdict(
 beforeEach(() => {
   vi.clearAllMocks();
   resetWorkflowCache();
+  clearRecentPublishedEvents();
   state.verdicts = [];
   state.confirmations = [];
   db.$transaction.mockImplementation((fn: (tx: unknown) => unknown) => fn(db));
