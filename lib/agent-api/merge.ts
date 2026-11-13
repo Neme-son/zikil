@@ -11,7 +11,7 @@ import { approvedPlanSummary, planPayoutFor } from "@/lib/agent-api/plan";
 import { publish } from "@/lib/agent-api/events";
 import { isConfirmed } from "@/lib/agent-api/confirmations";
 import { countedMergeVerdicts, deliveredClaim, MANAGER_VERDICT_WEIGHT } from "@/lib/agent-api/merge-verdicts";
-import { checksFor, countsWithProof, loadProofRules, NO_CHECKS } from "@/lib/proof";
+import { cardBugSelect, checksFor, countsWithProof, loadCard, loadProofRules, NO_CHECKS } from "@/lib/proof";
 import { afterSendBack, judgementCounts, trackRules } from "@/lib/marketing/track";
 import { award, type PointAward } from "@/lib/points/award";
 import { holdPayout } from "@/lib/points/payout";
@@ -153,7 +153,7 @@ export type AcceptFixResult =
   | {
       status: 409;
       error: "not_ready";
-      missing: "already_accepted" | "redesign" | "confirmation" | "verdicts" | "claim" | "pull_request";
+      missing: "already_accepted" | "redesign" | "confirmation" | "verdicts" | "claim" | "pull_request" | "test_card";
       message: string;
       /** What the fix's author has to do, when the refusal is theirs to fix. */
       todo?: string;
@@ -441,6 +441,18 @@ async function reviewFix(
       error: "not_ready" as const,
       missing: "verdicts" as const,
       message: `This needs good-to-merge judgements weighing ${verdictsNeeded} (a manager's counts ${MANAGER_VERDICT_WEIGHT}, a working agent's 1); ${weight} so far.`,
+    };
+  }
+
+  // #deeper-testing: the test card holds an accept as it holds Done · Accepted: no square left unproven, none proven to fail.
+  const scope = marketing ? null : await prisma.bug.findUnique({ where: { id: bug.id }, select: cardBugSelect });
+  const card = scope ? await loadCard(prisma, scope) : null;
+  if (card?.on && (card.holes > 0 || card.failed > 0)) {
+    return {
+      status: 409 as const,
+      error: "not_ready" as const,
+      missing: "test_card" as const,
+      message: `The test card isn't finished: ${card.holes} square${card.holes === 1 ? "" : "s"} nobody has proven and ${card.failed} proven to fail. Testers prove the rest (GET /api/v1/issues/{id}/test-card), or the project's owners set a failed square aside.`,
     };
   }
 

@@ -2,25 +2,29 @@ import { z } from "zod";
 import type { Prisma, PrismaClient, TestRowKind, TestRowProof, TestRowRoute, TestRowSource } from "@prisma/client";
 import { storedReceipt } from "@/lib/delivery-receipt";
 import { sameCommit } from "@/lib/github/commit-sha";
+import { deliveredClaim } from "@/lib/agent-api/merge-verdicts";
 
 /**
  * Deeper testing (#deeper-testing): what a judgement must prove, and the
  * issue's test card.
  *
  * - An organisation's owners set checks for every issue and per issue type;
- *   a project's owners and admins add checks per area (`ProofRule`). With no
- *   rules at all the organisation works exactly as before: every judgement
- *   counts and there is no card.
+ *   a project's owners and admins add checks per area (`ProofRule`). An issue
+ *   no check applies to works exactly as before: every judgement counts and
+ *   there is no card.
  * - A good-to-merge counts only with proof (an attachment) for every required
  *   check, on the delivered commit. A not-good-to-merge counts toward sending
  *   the work back only with proof of what fails, and one proven fail holds the
  *   issue from acceptance (lib/agent-api/tested-status.ts).
- * - The card is the checks, the receipt's gaps and the rows testers wrote,
- *   scenarios down, environments across. Every square needs a tester's proof
- *   (two on a risky row) before the issue is accepted. It is sized to the
- *   issue's priority; wild rows past the size wait on the bench, and rows no
- *   tester can prove are routed to the deliverer's CI test or the owners, so
- *   no square holds the issue forever.
+ * - The card is the checks, the issue's acceptance criteria, the receipt's gaps
+ *   and the rows testers wrote, scenarios down, environments across. Every
+ *   square needs proof from a tester's owner other than the deliverer's (two
+ *   owners on a risky row) before the issue is accepted. Its size, set by the
+ *   priority, counts every square but the checks; past it, the last wild rows,
+ *   then the receipt's rows, then rows testers added wait on the bench (the
+ *   checks and the issue's own criteria never do). Rows no tester can prove go
+ *   to the deliverer's CI test or the owners, and owners can overrule a failed
+ *   square, so no square holds the issue forever.
  */
 
 type Db = PrismaClient | Prisma.TransactionClient;
@@ -208,7 +212,8 @@ export function checksFor(rules: ProofRules, bug: { projectId: string; typeId: s
     const info = checkInfo(id, rules);
     return info ? [{ id, required: info.required }] : [];
   });
-  return { on: rules.rules.length > 0, required: known.filter((c) => c.required).map((c) => c.id), guidance: known.filter((c) => !c.required).map((c) => c.id) };
+  // A card and the proof rule apply only where checks do: an issue no check applies to works as before.
+  return { on: known.length > 0, required: known.filter((c) => c.required).map((c) => c.id), guidance: known.filter((c) => !c.required).map((c) => c.id) };
 }
 
 export type JudgementProofState = "counts" | "no_proof" | "earlier_code" | "contradicts" | "proved_fail" | "no_fail_proof";
@@ -247,11 +252,19 @@ export function countsWithProof(
   return verdict.goodToMerge ? state === "counts" : state === "proved_fail";
 }
 
-export type CardSquare = { key: string; env: string | null; needed: number; provers: string[]; failers: string[]; state: "passed" | "failed" | "half" | "open" };
+export type CardSquare = {
+  key: string;
+  env: string | null;
+  needed: number;
+  provers: string[];
+  failers: string[];
+  /** `na`: a tester said, with a reason, it doesn't apply. `overruled`: owners set a proven fail aside. */
+  state: "passed" | "failed" | "half" | "open" | "na" | "overruled";
+};
 
 export type CardRow = {
   key: string;
-  /** The stored row's id; null for rows from the checks and the receipt. */
+  /** The stored row's id; null for rows from the checks, the issue's criteria and the receipt. */
   id: string | null;
   text: string;
   why: string | null;
@@ -265,12 +278,15 @@ export type CardRow = {
   decision: string | null;
   by: string | null;
   bench: boolean;
+  /** A check that may not fit this issue, and what to do: prove it N/A with a reason. */
+  fit: string | null;
   squares: CardSquare[];
 };
 
 export type TestCard = {
   on: boolean;
   checks: IssueChecks;
+  /** Squares the card holds besides the checks. */
   size: number;
   envs: string[];
   rows: CardRow[];
@@ -286,7 +302,7 @@ export type TestCard = {
   judgements: Record<string, { state: JudgementProofState; missing: string[] }>;
 };
 
-type CardVerdict = { id: string; agent: { name: string }; goodToMerge: boolean; headSha: string | null; proof: unknown };
+type CardVerdict = { id: string; agent: { name: string; ownerUserId: string }; onBehalfOfUserId: string; goodToMerge: boolean; headSha: string | null; proof: unknown };
 type StoredRow = {
   id: string;
   text: string;
@@ -302,7 +318,34 @@ type StoredRow = {
   agent: { name: string } | null;
 };
 
-/** The card, from the checks, the latest receipt, the stored rows and the judgements on the delivered commit. Pure. */
+/** The issue's own acceptance criteria: the list under an "Acceptance criteria" or "Definition of done" heading. */
+export function issueCriteria(description: string | null): string[] {
+  const lines = (description ?? "").split("\n");
+  const start = lines.findIndex((l) => /^\s*(#{1,6}\s*|\*\*)(acceptance criteria|definition of done)\b/i.test(l));
+  if (start < 0) return [];
+  const items: string[] = [];
+  for (const line of lines.slice(start + 1)) {
+    if (/^\s*#{1,6}\s/.test(line) || /^\s*\*\*[^*]+\*\*:?\s*$/.test(line)) break;
+    const item = /^\s*(?:[-*+]|\d+[.)])\s+(?:\[[ xX]\]\s*)?(.+)$/.exec(line)?.[1]?.trim();
+    if (item) items.push(item.slice(0, 200));
+  }
+  return items.slice(0, 12);
+}
+
+/** Why a required check may not fit this issue, or null. */
+function checkFit(id: string, issue: { typeName: string | null; hasStaging: boolean }): string | null {
+  if ((id === "repro" || id === "regression") && !/fix|bug|defect|regress/i.test(issue.typeName ?? "")) {
+    return "Meant for fixes, and this issue isn't one: if it doesn't apply, prove it N/A with a reason.";
+  }
+  if (id === "staging" && !issue.hasStaging) return "The project has no staging site: if it doesn't apply, prove it N/A with a reason.";
+  return null;
+}
+
+/**
+ * The card, from the checks, the issue's criteria, the latest receipt, the
+ * stored rows and the judgements on the delivered commit. Pure. Proof counts
+ * once per owner, and never from the deliverer's owner.
+ */
 export function buildCard(input: {
   rules: ProofRules;
   checks: IssueChecks;
@@ -311,20 +354,29 @@ export function buildCard(input: {
   receipt: unknown;
   rows: StoredRow[];
   verdicts: CardVerdict[];
+  description?: string | null;
+  delivererOwner?: string | null;
+  overruled?: readonly string[];
+  issue?: { typeName: string | null; hasStaging: boolean };
 }): TestCard {
   const { rules, checks, deliveredSha } = input;
-  const current = input.verdicts.filter((v) => !deliveredSha || !v.headSha || sameCommit(v.headSha, deliveredSha));
-  const proofs = current.map((v) => ({ name: v.agent.name, proof: storedProof(v.proof) }));
+  const overruled = new Set(input.overruled ?? []);
+  const issue = input.issue ?? { typeName: null, hasStaging: true };
+  const current = input.verdicts.filter((v) => (!deliveredSha || !v.headSha || sameCommit(v.headSha, deliveredSha)) && v.onBehalfOfUserId !== input.delivererOwner);
+  const proofs = current.map((v) => ({ name: v.agent.name, owner: v.onBehalfOfUserId, proof: storedProof(v.proof) }));
+  // One name per owner: two agents of one person count once.
+  const owners = (list: typeof proofs) => [...new Map(list.map((p) => [p.owner, p.name])).values()];
   const square = (key: string, env: string | null, needed: number, read: (p: VerdictProof) => ProofEntry | undefined): CardSquare => {
-    const provers = proofs.filter((p) => read(p.proof)?.result === "pass" && read(p.proof)?.attachmentId).map((p) => p.name);
-    const failers = proofs.filter((p) => {
-      const entry = read(p.proof);
-      return entry ? isProvenFail(entry) : false;
-    }).map((p) => p.name);
-    const state = failers.length ? "failed" : provers.length >= needed ? "passed" : provers.length ? "half" : "open";
+    const entries = proofs.map((p) => ({ p, entry: read(p.proof) }));
+    const provers = owners(entries.filter(({ entry }) => entry?.result === "pass" && entry.attachmentId).map(({ p }) => p));
+    const failers = owners(entries.filter(({ entry }) => (entry ? isProvenFail(entry) : false)).map(({ p }) => p));
+    const na = entries.some(({ entry }) => entry?.result === "na" && entry.reason);
+    const state = failers.length
+      ? overruled.has(key) ? "overruled" : "failed"
+      : provers.length >= needed ? "passed" : provers.length ? "half" : na ? "na" : "open";
     return { key, env, needed, provers, failers, state };
   };
-  const base = { why: null, kind: null, proof: "screen" as const, route: null, testAttached: false, decision: null, by: null, bench: false };
+  const base = { why: null, kind: null, proof: "screen" as const, route: null, testAttached: false, decision: null, by: null, bench: false, fit: null };
   const checkRows: CardRow[] = checks.required.map((id) => ({
     ...base,
     key: `check:${id}`,
@@ -332,7 +384,17 @@ export function buildCard(input: {
     text: checkInfo(id, rules)?.name ?? id,
     source: "check",
     checkId: id,
+    fit: checkFit(id, issue),
     squares: [square(`check:${id}`, null, 1, (p) => p.checks?.[id])],
+  }));
+  const issueRows: CardRow[] = issueCriteria(input.description ?? null).map((text, i) => ({
+    ...base,
+    key: `criteria:${i}`,
+    id: null,
+    text,
+    source: "criteria",
+    checkId: null,
+    squares: [square(`criteria:${i}`, null, 1, (p) => p.squares?.[`criteria:${i}`])],
   }));
   const receipt = storedReceipt(input.receipt);
   const receiptRows: CardRow[] = [...(receipt?.notVerified.map((r) => r.check) ?? []), ...(receipt?.reviewerShould ?? [])].map((text, i) => ({
@@ -351,6 +413,7 @@ export function buildCard(input: {
       const needed = row.needsTwo ? 2 : 1;
       const keys = row.envs.length ? row.envs.map((env) => ({ key: `${row.id}@${env}`, env })) : [{ key: row.id, env: null }];
       return {
+        ...base,
         key: row.id,
         id: row.id,
         text: row.text,
@@ -363,19 +426,19 @@ export function buildCard(input: {
         testAttached: Boolean(row.proofAttachmentId),
         decision: row.decision,
         by: row.agent?.name ?? null,
-        bench: false,
         squares: keys.map(({ key, env }) => square(key, env, needed, (p) => p.squares?.[key])),
       };
     });
   const crit = stored.filter((r) => r.source === "criteria");
   const wild = stored.filter((r) => r.source !== "criteria");
-  const rows = [...checkRows, ...crit, ...receiptRows, ...wild];
+  const rows = [...checkRows, ...issueRows, ...crit, ...receiptRows, ...wild];
 
-  // Size the card: the last rows testers wrote (wild, then criteria) wait on the bench until it fits,
-  // so no tester can hold an issue with more squares than its priority allows. Routed rows take no squares.
+  // Size the card by its priority, counting every square but the checks. Past it, the last wild rows wait on
+  // the bench, then the receipt's rows, then rows testers added: the checks and the issue's own criteria never
+  // do, so the bench can't crowd out what the issue asks. Routed rows take no squares.
   const size = CARD_SIZE[input.priority] ?? CARD_SIZE.medium;
-  let used = rows.filter((r) => !r.route).reduce((n, r) => n + r.squares.length, 0);
-  for (const row of [...crit, ...wild].reverse().filter((r) => !r.route)) {
+  let used = rows.filter((r) => !r.route && r.source !== "check").reduce((n, r) => n + r.squares.length, 0);
+  for (const row of [...[...wild].reverse(), ...[...receiptRows].reverse(), ...[...crit].reverse()].filter((r) => !r.route)) {
     if (used <= size) break;
     row.bench = true;
     used -= row.squares.length;
@@ -393,7 +456,7 @@ export function buildCard(input: {
     rows,
     holes: squares.filter((s) => s.state === "open" || s.state === "half").length,
     failed: squares.filter((s) => s.state === "failed").length,
-    stamped: squares.filter((s) => s.state === "passed").length,
+    stamped: squares.filter((s) => s.state === "passed" || s.state === "na" || s.state === "overruled").length,
     total: squares.length,
     rating: ratingVerdict ? { by: ratingVerdict.name, value: ratingVerdict.proof.rating! } : null,
     waitingOnCi: rows.filter((r) => r.route === "ci" && !r.testAttached && !r.bench).length,
@@ -424,7 +487,7 @@ export async function loadCard(db: Db, bug: Prisma.BugGetPayload<{ select: typeo
   const rules = await loadProofRules(db, bug.organisationId);
   const checks = checksFor(rules, bug);
   if (!checks.on) return buildCard({ rules, checks, priority: bug.priority, deliveredSha: null, receipt: null, rows: [], verdicts: [] });
-  const [delivery, rows, verdicts] = await Promise.all([
+  const [delivery, rows, verdicts, more, overrides] = await Promise.all([
     db.delivery.findFirst({ where: { bugId: bug.id }, orderBy: [{ updatedAt: "desc" }, { id: "desc" }], select: { receipt: true } }),
     db.testCardRow.findMany({
       where: { bugId: bug.id },
@@ -432,8 +495,34 @@ export async function loadCard(db: Db, bug: Prisma.BugGetPayload<{ select: typeo
       select: { id: true, text: true, why: true, source: true, kind: true, proof: true, envs: true, needsTwo: true, route: true, proofAttachmentId: true, decision: true, agent: { select: { name: true } } },
     }),
     bug.pullRequestUrl
-      ? db.testVerdict.findMany({ where: { bugId: bug.id, pullRequestUrl: bug.pullRequestUrl }, orderBy: [{ createdAt: "asc" }, { id: "asc" }], select: { id: true, goodToMerge: true, headSha: true, proof: true, agent: { select: { name: true } } } })
+      ? db.testVerdict.findMany({
+          where: { bugId: bug.id, pullRequestUrl: bug.pullRequestUrl },
+          orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+          select: { id: true, goodToMerge: true, headSha: true, proof: true, onBehalfOfUserId: true, agent: { select: { name: true, ownerUserId: true } } },
+        })
       : Promise.resolve([]),
+    db.bug.findUnique({
+      where: { id: bug.id },
+      select: {
+        description: true,
+        type: { select: { name: true } },
+        project: { select: { stagingUrl: true } },
+        claims: { select: { status: true, claimedAt: true, releasedAt: true, agentId: true, agent: { select: { ownerUserId: true } } } },
+      },
+    }),
+    db.testCardOverride.findMany({ where: { bugId: bug.id }, select: { squareKey: true } }),
   ]);
-  return buildCard({ rules, checks, priority: bug.priority, deliveredSha: bug.pullRequestHeadSha, receipt: delivery?.receipt ?? null, rows, verdicts });
+  return buildCard({
+    rules,
+    checks,
+    priority: bug.priority,
+    deliveredSha: bug.pullRequestHeadSha,
+    receipt: delivery?.receipt ?? null,
+    rows,
+    verdicts,
+    description: more?.description ?? null,
+    delivererOwner: more ? (deliveredClaim({ pullRequestUrl: bug.pullRequestUrl, claims: more.claims })?.agent.ownerUserId ?? null) : null,
+    overruled: overrides.map((o) => o.squareKey),
+    issue: { typeName: more?.type?.name ?? null, hasStaging: Boolean(more?.project?.stagingUrl) },
+  });
 }

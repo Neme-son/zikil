@@ -534,6 +534,7 @@ model Bug {
   idea                      Idea?
   testVerdicts              TestVerdict[]
   testCardRows              TestCardRow[]
+  testCardOverrides         TestCardOverride[]
   mergeReviews              MergeReview[]
   pullRequestReports        PullRequestReport[]
   reviewOffers              ReviewOffer[]
@@ -2253,6 +2254,22 @@ model TestCardRow {
 
   @@index([bugId])
   @@index([route, routedAt])
+}
+
+/// A failed test-card square the project's owners or admins set aside
+/// (#deeper-testing): it no longer holds the issue. `squareKey` is the square's
+/// key on the card (a check, a criterion, a receipt row or a stored row).
+model TestCardOverride {
+  id        String   @id @default(cuid())
+  bugId     String
+  squareKey String   @db.VarChar(260)
+  reason    String   @db.VarChar(300)
+  /// The person who overruled it.
+  userId    String
+  createdAt DateTime @default(now())
+  bug       Bug      @relation(fields: [bugId], references: [id], onDelete: Cascade)
+
+  @@unique([bugId, squareKey])
 }
 
 /// What a pull request looks like on GitHub (#pr-reports, #github-status).

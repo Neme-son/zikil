@@ -1,6 +1,6 @@
 import { entrySubstatus, trackRules } from "@/lib/marketing/track";
 import type { AgentLevel } from "@prisma/client";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 /** The manager's merge review (#434, #493, #526, #owner-agents): only a manager or merger agent accepts or rejects, never the claim holder; an accept needs confirmation, enough judgements on the linked pull request and a report that it can merge at the tested head. */
 type VerdictRow = {
@@ -10,6 +10,7 @@ type VerdictRow = {
   onBehalfOfUserId: string;
   pullRequestUrl: string | null;
   headSha?: string | null;
+  proof?: unknown;
   createdAt: Date;
   updatedAt: Date;
   agent: { id: string; ownerUserId: string; activations: { organisationId: string; level: "working" | "manager" | "merger" }[] };
@@ -26,7 +27,9 @@ const db = vi.hoisted(() => ({
   comment: { create: vi.fn() },
   testVerdict: { findMany: vi.fn() },
   // #deeper-testing: no checks set, so every judgement counts as before.
-  proofRule: { findMany: async () => [] },
+  proofRule: { findMany: vi.fn(async (): Promise<unknown[]> => []) },
+  testCardRow: { findMany: vi.fn(async (): Promise<unknown[]> => []) },
+  testCardOverride: { findMany: vi.fn(async () => []) },
   proofCheck: { findMany: async () => [] },
   // #plan-review: the accept looks for the delivering claim's approved plan; none here.
   plan: { findFirst: vi.fn(async () => null) },
@@ -144,8 +147,10 @@ function verdict(
   onBehalfOfUserId = ownerId,
   pullRequestUrl: string | null = PR,
   headSha: string | null = "linked-sha",
+  proof: unknown = null,
 ) {
   state.verdicts.push({
+    proof,
     id: `v-${agentId}`,
     bugId: "bug1",
     goodToMerge: true,
@@ -696,3 +701,28 @@ describe("acceptFix: marketing work goes Live (#M-API-5)", () => {
     expect(liveBug.revisionCount).toBe(1);
   });
 });
+
+describe("acceptFix: pay and acceptance follow proof (#deeper-testing)", () => {
+  const proven = { checks: { fixed: { result: "pass", attachmentId: "att", shows: "It works on the delivered commit." } } };
+  beforeEach(() => db.proofRule.findMany.mockResolvedValue([{ id: "every", projectId: null, issueTypeId: null, projectAreaId: null, checks: ["fixed"] }]));
+  afterEach(() => db.proofRule.findMany.mockImplementation(async () => []));
+
+  it("counts, and pays, only judgements with proof where the organisation has checks", async () => {
+    confirmWith("rob", "sam");
+    for (const [agent, owner] of [["r1", "rob"], ["r2", "sam"], ["r3", "tia"]]) verdict(agent, owner);
+    expect(await acceptFix(merger("m1", "mo", "manager"), "bug1")).toMatchObject({ status: 409, missing: "verdicts" });
+    state.verdicts = [];
+    for (const [agent, owner] of [["r1", "rob"], ["r2", "sam"], ["r3", "tia"]]) verdict(agent, owner, owner, PR, "linked-sha", proven);
+    expect(await acceptFix(merger("m1", "mo", "manager"), "bug1")).toMatchObject({ status: 200, accepted: true });
+  });
+
+  it("waits for the test card: a square nobody has proven holds the accept", async () => {
+    confirmWith("rob", "sam");
+    for (const [agent, owner] of [["r1", "rob"], ["r2", "sam"], ["r3", "tia"]]) verdict(agent, owner, owner, PR, "linked-sha", proven);
+    // A tester's row nobody has proven yet.
+    db.testCardRow.findMany.mockResolvedValueOnce([{ id: "row1", text: "Reload after saving", why: null, source: "beyond", kind: "reload", proof: "screen", envs: [], needsTwo: false, route: null, proofAttachmentId: null, decision: null, agent: { name: "Kestrel" } }]);
+    expect(await acceptFix(merger("m1", "mo", "manager"), "bug1")).toMatchObject({ status: 409, missing: "test_card" });
+    expect(db.bug.update).not.toHaveBeenCalled();
+  });
+});
+

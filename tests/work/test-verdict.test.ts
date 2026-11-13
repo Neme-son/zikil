@@ -1,5 +1,5 @@
 import { afterSendBack, judgementCounts } from "@/lib/marketing/track";
-import { buildCard, checksFor, countsWithProof, judgementProof, NO_CHECKS, proofProblem, type ProofRules } from "@/lib/proof";
+import { buildCard, checksFor, countsWithProof, issueCriteria, judgementProof, NO_CHECKS, proofProblem, type ProofRules } from "@/lib/proof";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 /** Judging delivered work (#434, #529, #727, #owner-agents): the agent holding the claim can't judge its own work, anyone else can; one verdict per agent; good to merge needs a ready pull request; weighted judgements move the issue. */
@@ -37,7 +37,7 @@ const state = vi.hoisted(() => ({ verdicts: [] as Row[], reviewOffers: [] as Arr
 }> }));
 
 const db = vi.hoisted(() => ({
-  bug: { findFirst: vi.fn() },
+  bug: { findFirst: vi.fn(), findUnique: vi.fn(async () => null) },
   delivery: { findFirst: vi.fn(), findMany: vi.fn() },
   membership: { findUnique: vi.fn(), findMany: vi.fn() },
   issueClaim: { groupBy: vi.fn() },
@@ -49,6 +49,7 @@ const db = vi.hoisted(() => ({
   proofCheck: { findMany: async () => [] },
   attachment: { updateMany: vi.fn(), findMany: vi.fn() },
   testCardRow: { findFirst: vi.fn(), findMany: vi.fn(async () => []), count: vi.fn(), createMany: vi.fn(), update: vi.fn() },
+  testCardOverride: { findMany: vi.fn(async () => []) },
   pullRequestReport: { findFirst: vi.fn() },
   agentAuditEvent: { create: vi.fn() },
   comment: { create: vi.fn() },
@@ -862,6 +863,8 @@ describe("deeper testing: what counts (#deeper-testing)", () => {
     expect(checksFor(rules, fixInWeb)).toEqual({ on: true, required: ["fixed", "repro", "phone"], guidance: ["guide"] });
     expect(checksFor(rules, { projectId: "p2", typeId: null, areaId: "area-web" }).required).toEqual(["fixed"]);
     expect(checksFor({ rules: [], custom: [] }, fixInWeb)).toEqual({ on: false, required: [], guidance: [] });
+    // Checks the organisation set for another area don't touch this issue: it works as before.
+    expect(checksFor({ rules: [rules.rules[2]], custom: rules.custom }, { projectId: "p1", typeId: null, areaId: null }).on).toBe(false);
   });
 
   it("counts every judgement, as before, where the organisation has no checks", () => {
@@ -910,7 +913,7 @@ describe("deeper testing: what counts (#deeper-testing)", () => {
         deliveredSha: "abc1234",
         receipt: null,
         rows: [row("r1", { envs: ["Phone", "Desktop"] }), row("r2", { needsTwo: true }), row("r3", { route: "env" })],
-        verdicts: verdicts.map((v) => ({ ...v, agent: { name: v.id }, goodToMerge: true, headSha: "abc1234" })),
+        verdicts: verdicts.map((v) => ({ ...v, agent: { name: v.id, ownerUserId: v.id }, onBehalfOfUserId: v.id, goodToMerge: true, headSha: "abc1234" })),
       });
     expect(card([]).holes).toBe(4); // the check, two squares of r1, r2
     const proven = { checks: { fixed: pass() }, squares: { "r1@Phone": pass(), "r1@Desktop": pass(), r2: pass() } };
@@ -926,7 +929,7 @@ describe("deeper testing: what counts (#deeper-testing)", () => {
       deliveredSha: "abc1234",
       receipt: null,
       rows: [row("r1", { envs: ["Phone", "Desktop"] }), row("r2", { needsTwo: true }), row("r3", { route: "env" })],
-      verdicts: [{ id: "Ivy", proof: proven, agent: { name: "Ivy" }, goodToMerge: true, headSha: full }],
+      verdicts: [{ id: "Ivy", proof: proven, agent: { name: "Ivy", ownerUserId: "ivy" }, onBehalfOfUserId: "ivy", goodToMerge: true, headSha: full }],
     });
     expect(onFull.holes).toBe(1);
     expect(judgementProof({ goodToMerge: true, headSha: full, proof: proven }, ["fixed"], "abc1234").state).not.toBe("earlier_code");
@@ -955,10 +958,10 @@ describe("deeper testing: proof is your own (#deeper-testing)", () => {
     expect(state.verdicts).toHaveLength(0);
   });
 
-  it("doesn't let the card's author rate its own card", async () => {
-    db.testCardRow.findFirst.mockResolvedValue({ agentId: "r1" });
-    const result = await submitTestVerdict(reviewer("r1", "rob"), "bug1", { ...good, proof: { rating: "thorough" } });
-    expect(result).toMatchObject({ status: 400, field: "proof" });
+  it("doesn't let the card's author, or another agent of the same person, rate the card", async () => {
+    db.testCardRow.findFirst.mockResolvedValue({ agent: { ownerUserId: "rob" } });
+    expect(await submitTestVerdict(reviewer("r1", "rob"), "bug1", { ...good, proof: { rating: "thorough" } })).toMatchObject({ status: 400, field: "proof" });
+    expect(await submitTestVerdict(reviewer("r2", "rob"), "bug1", { ...good, proof: { rating: "thorough" } })).toMatchObject({ status: 400, field: "proof" });
     expect(state.verdicts).toHaveLength(0);
   });
 });
@@ -971,8 +974,8 @@ describe("deeper testing: nobody buries or dodges a card (#deeper-testing)", () 
   beforeEach(() => {
     db.bug.findFirst.mockResolvedValue(delivered);
     db.proofRule.findMany.mockResolvedValue([{ id: "every", projectId: null, issueTypeId: null, projectAreaId: null, checks: ["fixed"] }]);
-    // Kestrel (k1) drew up the card.
-    db.testCardRow.findFirst.mockImplementation(async ({ where }: { where: { id?: string } }) => (where.id ? { id: where.id, text: "Keyboard open", route: null, agentId: "k1" } : { agentId: "k1" }));
+    // Kemi's agent drew up the card.
+    db.testCardRow.findFirst.mockImplementation(async ({ where }: { where: { id?: string } }) => (where.id ? { id: where.id, text: "Keyboard open", route: null, agent: { ownerUserId: "kemi" } } : { agent: { ownerUserId: "kemi" } }));
     db.testCardRow.count.mockResolvedValue(0);
   });
   afterEach(() => db.proofRule.findMany.mockImplementation(async () => []));
@@ -986,6 +989,15 @@ describe("deeper testing: nobody buries or dodges a card (#deeper-testing)", () 
     db.testCardRow.count.mockResolvedValue(3);
     expect(await refusal(addTestCardRows(reviewer("f1", "fay"), "bug1", { rows: [wildRow] }))).toEqual({ status: 409, error: "too_many_rows" });
     expect(db.testCardRow.createMany).not.toHaveBeenCalled();
+  });
+
+  it("judges independence by owner: the deliverer's other agents can't draw up the card, the author's other agents are the author", async () => {
+    db.bug.findFirst.mockResolvedValue(bugRow({ ...delivered, claims: [{ status: "active", releasedAt: null, claimedAt: new Date(), agentId: "d1", agent: { ownerUserId: "fay" } }] }));
+    expect(await refusal(addTestCardRows(reviewer("f2", "fay"), "bug1", { rows: [wildRow] }))).toEqual({ status: 403, error: "fixer_cannot_test" });
+    db.bug.findFirst.mockResolvedValue(delivered);
+    // Kemi's second agent writes a criteria row, as the author may.
+    expect(await refusal(addTestCardRows(reviewer("k2", "kemi"), "bug1", { rows: [{ text: "Composer stays up", source: "criteria" }], noWildReason: "A layout fix with no case past normal use." }))).toBeNull();
+    expect(db.testCardRow.createMany).toHaveBeenCalled();
   });
 
   it("doesn't let a tester route away a row someone else wrote", async () => {
@@ -1015,3 +1027,173 @@ describe("deeper testing: a file must show what it proves (#deeper-testing)", ()
     expect(proofProblem({ checks: { regression: entry("log", "tests/other.test.ts") } }, lookup)).toMatch(/name the test/);
   });
 });
+
+describe("deeper testing: the card's rules (#deeper-testing)", () => {
+  const rules: ProofRules = { rules: [{ id: "every", projectId: null, issueTypeId: null, projectAreaId: null, checks: ["fixed", "repro", "staging"] }], custom: [] };
+  const checks = { on: true, required: ["fixed", "repro", "staging"], guidance: [] };
+  const pass = (attachmentId = "att") => ({ result: "pass" as const, attachmentId, shows: "It works on the delivered commit." });
+  const fail = { result: "fail" as const, attachmentId: "att", shows: "It fails on the delivered commit." };
+  const judged = (owner: string, agent: string, proof: unknown) => ({ id: `v-${agent}`, agent: { name: agent, ownerUserId: owner }, onBehalfOfUserId: owner, goodToMerge: true, headSha: "abc1234", proof });
+  const row = (id: string, source: "criteria" | "beyond", needsTwo = false) => ({ id, text: id, why: null, kind: null, proof: "screen" as const, envs: [], needsTwo, source, route: null, proofAttachmentId: null, decision: null, agent: null });
+  const card = (input: Partial<Parameters<typeof buildCard>[0]>) => buildCard({ rules, checks, priority: "medium", deliveredSha: "abc1234", receipt: null, rows: [], verdicts: [], ...input });
+
+  it("reads the issue's acceptance criteria as rows of their own", () => {
+    const description = "Intro.\n\n## Acceptance criteria\n- Saving keeps the draft\n- [ ] The note shows in the list\n\n## Notes\n- not a criterion";
+    expect(issueCriteria(description)).toEqual(["Saving keeps the draft", "The note shows in the list"]);
+    expect(issueCriteria("No list here.")).toEqual([]);
+    expect(card({ description }).rows.filter((r) => r.key.startsWith("criteria:")).map((r) => r.text)).toEqual(["Saving keeps the draft", "The note shows in the list"]);
+  });
+
+  it("never benches the checks or the issue's criteria; past the size, wild rows go first, then the receipt's, then rows testers added", () => {
+    const receipt = { notVerified: Array.from({ length: 5 }, (_, i) => ({ check: `Gap ${i}`, why: "not tried" })) };
+    const low = card({ priority: "low", description: "## Acceptance criteria\n- One\n- Two", receipt, rows: [row("c1", "criteria"), row("w1", "beyond"), row("w2", "beyond")] });
+    // Besides the 3 checks: 2 criteria + 1 tester row + 5 receipt rows + 2 wild = 10 squares, 4 over a low card's 6.
+    expect(low.rows.filter((r) => r.bench).map((r) => r.key).sort()).toEqual(["receipt:3", "receipt:4", "w1", "w2"]);
+    expect(low.rows.filter((r) => r.source === "check" || r.key.startsWith("criteria:")).every((r) => !r.bench)).toBe(true);
+  });
+
+  it("counts proof once per person, and never from the deliverer's person", () => {
+    const rows = [row("r2", "beyond", true)];
+    expect(card({ rows, verdicts: [judged("ann", "A1", { squares: { r2: pass() } }), judged("ann", "A2", { squares: { r2: pass() } })] }).rows.at(-1)!.squares[0].state).toBe("half");
+    expect(card({ rows, verdicts: [judged("ann", "A1", { squares: { r2: pass() } }), judged("bo", "B1", { squares: { r2: pass() } })] }).rows.at(-1)!.squares[0].state).toBe("passed");
+    const deliverers = card({ delivererOwner: "dev", verdicts: [judged("dev", "D2", { checks: { fixed: pass() } })] });
+    expect(deliverers.rows.find((r) => r.key === "check:fixed")!.squares[0].state).toBe("open");
+  });
+
+  it("settles a square shown not to apply, and stops holding on a fail the owners set aside", () => {
+    const na = { result: "na" as const, reason: "Not a fix: there's no bug to show." };
+    const settled = card({ verdicts: [judged("ann", "A1", { checks: { fixed: pass(), repro: na, staging: { ...na, reason: "No staging site." } } })] });
+    expect(settled).toMatchObject({ holes: 0, failed: 0, stamped: 3 });
+    const failing = [judged("ann", "A1", { checks: { fixed: fail, repro: na, staging: na } })];
+    expect(card({ verdicts: failing }).failed).toBe(1);
+    const aside = card({ verdicts: failing, overruled: ["check:fixed"] });
+    expect(aside).toMatchObject({ failed: 0, holes: 0 });
+    expect(aside.rows[0].squares[0].state).toBe("overruled");
+  });
+
+  it("flags a fix-only check on an issue that isn't a fix, and On staging where the project has no staging site", () => {
+    const fit = (issue: { typeName: string | null; hasStaging: boolean }) => Object.fromEntries(card({ issue }).rows.filter((r) => r.checkId).map((r) => [r.checkId, Boolean(r.fit)]));
+    expect(fit({ typeName: "Feature", hasStaging: false })).toEqual({ fixed: false, repro: true, staging: true });
+    expect(fit({ typeName: "Bug fix", hasStaging: true })).toEqual({ fixed: false, repro: false, staging: false });
+  });
+});
+
+describe("deeper testing: the weekly sweep (#deeper-testing)", () => {
+  const verdictRow = (bug: string, number: number) => ({
+    headSha: "abc1234", goodToMerge: true, proof: null, pullRequestUrl: "https://github.com/acme/web/pull/1",
+    agent: { id: "fern", name: "Fern", ownerUserId: "dami" },
+    bug: { id: bug, organisationId: "o1", projectId: "p1", typeId: null, areaId: null, priority: "medium", pullRequestUrl: "https://github.com/acme/web/pull/1", pullRequestHeadSha: "abc1234", number, title: `Issue ${number}` },
+  });
+  async function sweepWith(sent: boolean) {
+    vi.resetModules();
+    const seen = { later: [] as { kind: string; recipientId: string }[], now: [] as { kind: string; recipientId: string }[], questions: [] as { body: string }[], routed: [] as unknown[] };
+    const sweepDb = {
+      testCardRow: {
+        findMany: vi.fn(async () => [{ id: "row1", text: "Two saves at once", bug: { id: "b1", title: "Saving", organisationId: "o1" } }]),
+        update: vi.fn(async (arg: unknown) => { seen.routed.push(arg); return {}; }),
+      },
+      membership: { findMany: vi.fn(async () => [{ userId: "owner1" }]) },
+      testVerdict: { findMany: vi.fn(async () => [verdictRow("b1", 1), verdictRow("b2", 2)]) },
+      proofRule: { findMany: vi.fn(async () => [{ id: "every", projectId: null, issueTypeId: null, projectAreaId: null, checks: ["fixed"] }]) },
+      proofCheck: { findMany: vi.fn(async () => []) },
+      agentQuestion: { findFirst: vi.fn(async () => (sent ? { id: "q0" } : null)), create: vi.fn(async ({ data }: { data: { body: string } }) => ({ id: "q1", body: data.body })) },
+      notification: { findFirst: vi.fn(async () => (sent ? { id: "n0" } : null)) },
+    };
+    vi.doMock("@/lib/prisma", () => ({ prisma: sweepDb }));
+    vi.doMock("@/lib/notify", () => ({
+      notifyLater: (...events: { kind: string; recipientId: string }[]) => { seen.later.push(...events); },
+      deliverNotifications: async (event: { kind: string; recipientId: string }) => { seen.now.push(event); },
+    }));
+    vi.doMock("@/lib/agent-notifications", () => ({ notifyAgentQuestion: (q: { body: string }) => { seen.questions.push(q); } }));
+    const { sweepTesting } = await import("@/lib/agent-api/testing-sweep");
+    const result = await sweepTesting(new Date("2026-11-13T12:00:00Z"));
+    vi.doUnmock("@/lib/prisma");
+    vi.doUnmock("@/lib/notify");
+    vi.doUnmock("@/lib/agent-notifications");
+    vi.resetModules();
+    return { result, seen, sweepDb };
+  }
+
+  it("hands a test the deliverer left for a day to the owners, escalates an agent that skipped proof twice, and sums up the week", async () => {
+    const { result, seen } = await sweepWith(false);
+    expect(result).toEqual({ toOwners: 1, escalated: 1, summaries: 1 });
+    expect(seen.routed).toEqual([expect.objectContaining({ where: { id: "row1" }, data: expect.objectContaining({ route: "env" }) })]);
+    expect(seen.later).toEqual([expect.objectContaining({ kind: "testing", recipientId: "owner1" })]);
+    expect(seen.questions[0].body).toMatch(/^\[proof\] Fern said good to merge without proof 2 times/);
+    expect(seen.now).toEqual([expect.objectContaining({ kind: "testing", recipientId: "dami" })]);
+  });
+
+  it("asks an owner once a week, and sends the weekly line once", async () => {
+    const { result } = await sweepWith(true);
+    expect(result).toMatchObject({ escalated: 0, summaries: 0 });
+  });
+});
+
+describe("deeper testing: the owners decide (#deeper-testing)", () => {
+  async function actionsAs(admin: boolean, organisationId: string) {
+    vi.resetModules();
+    const actionDb = {
+      bug: { findUnique: vi.fn(async () => ({ id: "b1", projectId: "p1", organisationId: "o1" })) },
+      project: { findFirst: vi.fn(async ({ where }: { where: { organisationId: string } }) => (where.organisationId === "o1" ? { id: "p1" } : null)) },
+      testCardOverride: { upsert: vi.fn(async () => ({})) },
+      testCardRow: { updateMany: vi.fn(async () => ({ count: 1 })) },
+      projectAuditEvent: { create: vi.fn(async () => ({})) },
+    };
+    vi.doMock("@/lib/prisma", () => ({ prisma: actionDb }));
+    vi.doMock("@/lib/auth-helpers", () => ({ requireUser: async () => ({ id: "u1", role: "user" }) }));
+    vi.doMock("@/lib/organisation-context", () => ({ currentOrganisationIdFor: async () => organisationId, NO_ORGANISATION_MESSAGE: "Choose an organisation." }));
+    vi.doMock("@/lib/agents/membership", () => ({ isAdminOfOrganisation: async () => admin }));
+    vi.doMock("@/lib/organisation-access", () => ({ organisationAccessFor: async () => ({ membershipRole: admin ? "admin" : "member" }) }));
+    vi.doMock("next/cache", () => ({ revalidatePath: () => {} }));
+    const actions = await import("@/app/actions/proof-rules");
+    for (const m of ["@/lib/prisma", "@/lib/auth-helpers", "@/lib/organisation-context", "@/lib/agents/membership", "@/lib/organisation-access", "next/cache"]) vi.doUnmock(m);
+    return { actions, actionDb };
+  }
+  const aside = { squareKey: "check:fixed", reason: "Its tester's agent is gone." };
+
+  it("lets the project's owners and admins waive a row or set a failed square aside, and nobody else", async () => {
+    const member = await actionsAs(false, "o1");
+    expect(await member.actions.overruleTestCardSquareAction("b1", aside)).toMatchObject({ ok: false });
+    expect(await member.actions.decideTestCardRowAction("b1", "row1", "waived")).toMatchObject({ ok: false });
+    expect(member.actionDb.testCardOverride.upsert).not.toHaveBeenCalled();
+    expect(member.actionDb.testCardRow.updateMany).not.toHaveBeenCalled();
+
+    const elsewhere = await actionsAs(true, "o2");
+    expect(await elsewhere.actions.overruleTestCardSquareAction("b1", aside)).toMatchObject({ ok: false });
+    expect(elsewhere.actionDb.testCardOverride.upsert).not.toHaveBeenCalled();
+
+    const admin = await actionsAs(true, "o1");
+    expect(await admin.actions.overruleTestCardSquareAction("b1", { ...aside, reason: "no" })).toMatchObject({ ok: false });
+    expect(await admin.actions.overruleTestCardSquareAction("b1", aside)).toEqual({ ok: true });
+    expect(admin.actionDb.testCardOverride.upsert).toHaveBeenCalledWith(expect.objectContaining({ create: expect.objectContaining({ bugId: "b1", squareKey: "check:fixed", userId: "u1" }) }));
+    expect(tested.refreshJudgedStatus).toHaveBeenCalledWith(expect.anything(), "b1", "u1");
+    expect(await admin.actions.decideTestCardRowAction("b1", "row1", "waived")).toEqual({ ok: true });
+  });
+});
+
+describe("deeper testing: the Tests bar on Issues (#deeper-testing)", () => {
+  it("shows, per delivered issue, the weight of judgements that count against what is needed", async () => {
+    const { judgementBars } = await vi.importActual<typeof import("@/lib/agent-api/tested-status")>("@/lib/agent-api/tested-status");
+    const PR = "https://github.com/acme/web/pull/7";
+    const v = (owner: string, proof: unknown) => ({ goodToMerge: true, headSha: "abc1234", proof, onBehalfOfUserId: owner, pullRequestUrl: PR, agent: { id: `a-${owner}`, ownerUserId: owner, activations: [{ organisationId: "o1", level: "working" }] } });
+    const proven = { checks: { fixed: { result: "pass", attachmentId: "att", shows: "It works on the delivered commit." } } };
+    const barsDb = {
+      bug: {
+        findMany: vi.fn(async () => [{
+          id: "b1", organisationId: "o1", projectId: "p1", typeId: null, areaId: null, priority: "medium", status: "done", substatus: "requires_review", track: "product",
+          revisionCount: 0, pullRequestUrl: PR, pullRequestHeadSha: "abc1234", assigneeId: "ada", beneficiaryUserId: "ada", reporterId: "rex", createdByAgentId: null, createdByAgent: null,
+          claims: [{ id: "c1", status: "active", claimedAt: new Date(), releasedAt: null, agentId: "solver", beneficiaryUserId: "ada", dispatcherUserId: null, agent: { ownerUserId: "ada" } }],
+          testVerdicts: [v("rob", proven), v("sam", null), v("tia", proven)],
+        }]),
+      },
+      proofRule: { findMany: vi.fn(async () => [{ id: "every", projectId: null, issueTypeId: null, projectAreaId: null, checks: ["fixed"] }]) },
+      proofCheck: { findMany: vi.fn(async () => []) },
+      projectWorkflow: { findUnique: vi.fn(async () => null) },
+    };
+    const bars = await judgementBars(barsDb as never, ["b1"]);
+    // Two of three good judgements have proof; the bare one doesn't count.
+    expect(bars.get("b1")).toEqual({ good: 2, needed: 3 });
+    expect((await judgementBars(barsDb as never, [])).size).toBe(0);
+  });
+});
+

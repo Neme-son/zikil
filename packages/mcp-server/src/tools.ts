@@ -987,7 +987,7 @@ export const TOOLS: readonly ToolDef[] = [
         .object({
           checks: z.record(z.string(), proofEntry).optional().describe("By check id, from ziki_list_test_verdicts (checks) or ziki_get_test_card."),
           squares: z.record(z.string(), proofEntry).optional().describe("By test-card square key, from ziki_get_test_card."),
-          rating: z.enum(["thorough", "too_easy"]).optional().describe("Not the card's author: is it thorough enough? The first rating holds."),
+          rating: z.enum(["thorough", "too_easy"]).optional().describe("Not the card author's agents: is it thorough enough? The first rating holds."),
         })
         .strict()
         .optional()
@@ -997,7 +997,7 @@ export const TOOLS: readonly ToolDef[] = [
   {
     name: "ziki_get_test_card",
     summary:
-      "Read an issue's test card: the checks it needs and what each asks you to attach, the rows from the receipt and from testers, and every square's key and who proved it. Prove squares in your judgement (proof.squares on ziki_submit_test_result).",
+      "Read an issue's test card: the checks it needs and what each asks you to attach, the issue's acceptance criteria, the rows from the receipt and from testers, and every square's key and who proved it. Prove squares in your judgement (proof.squares on ziki_submit_test_result); answer na with a reason for a check marked fit that doesn't apply. Proof counts once per person.",
     level: "working",
     method: "GET",
     route: "/issues/{id}/test-card",
@@ -1007,7 +1007,7 @@ export const TOOLS: readonly ToolDef[] = [
   {
     name: "ziki_add_test_card_rows",
     summary:
-      "Add rows to an issue's test card before you read the code: from the acceptance criteria (source criteria), or a case they don't cover (source beyond, with its kind: limits, bad_input, failure, mid_change, reload, two_at_once, permissions, still_works, devices). The card needs at least one beyond row, or noWildReason. The first agent to write rows is the card's author (up to 12); others add only beyond rows, up to 3. The agent that delivered the work can't.",
+      "Add rows to an issue's test card before you read the code: from the acceptance criteria (source criteria), or a case they don't cover (source beyond, with its kind: limits, bad_input, failure, mid_change, reload, two_at_once, permissions, still_works, devices). The card needs at least one beyond row, or noWildReason. The person whose agent writes the first rows is the card's author (up to 12 rows); others add only beyond rows, up to 3. The agents of the person who delivered the work can't.",
     level: "working",
     method: "POST",
     route: "/issues/{id}/test-card",
@@ -1039,7 +1039,7 @@ export const TOOLS: readonly ToolDef[] = [
   {
     name: "ziki_test_card_row",
     summary:
-      "Route a test-card row nobody can prove with a screenshot: needs_test (the deliverer adds an automated test; after a day without one the owners decide) or cant_prove (the owners decide). Only the agent that added the row routes it. The deliverer attaches its test with action test and attachmentId. Routed rows never hold the issue.",
+      "Route a test-card row nobody can prove with a screenshot: needs_test (the deliverer adds an automated test; after a day without one the owners decide) or cant_prove (the owners decide). Only the agents of the person who added the row route it. The deliverer attaches its test with action test and attachmentId. Routed rows never hold the issue.",
     level: "working",
     method: "POST",
     route: "/issues/{id}/test-card/{row}",

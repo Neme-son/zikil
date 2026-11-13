@@ -87,6 +87,17 @@ export async function setupSandbox(options: { reset: boolean; serverUrl: string 
     (await prisma.project.create({
       data: { organisationId: organisation.id, slug: SANDBOX.projectSlug, name: SANDBOX.name, workflow: { create: {} } },
     }));
+  // #deeper-testing: one area with a check ("Works on the PR"), so a scenario can file an issue there and
+  // get a test card, while issues anywhere else have no checks and work as before. Its id is fixed
+  // (`<sandbox>-checked`) so scenarios can name it.
+  const checkedArea = await prisma.projectArea.upsert({
+    where: { id: `${SANDBOX.organisationSlug}-checked` },
+    update: {},
+    create: { id: `${SANDBOX.organisationSlug}-checked`, projectId: project.id, name: "Checked", slug: "checked" },
+  });
+  if (!(await prisma.proofRule.findFirst({ where: { projectAreaId: checkedArea.id }, select: { id: true } }))) {
+    await prisma.proofRule.create({ data: { organisationId: organisation.id, projectId: project.id, projectAreaId: checkedArea.id, checks: ["fixed"] } });
+  }
   // Work in progress is up for a sense check at once (#abandon), so the scenarios need not wait two hours.
   await prisma.projectWorkflow.upsert({
     where: { projectId: project.id },

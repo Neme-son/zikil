@@ -1,5 +1,5 @@
 import { ROW_KINDS, type CardRow, type CardSquare, type TestCard } from "@/lib/proof";
-import { TestCardDecision } from "@/components/test-card-decision";
+import { OverruleSquare, TestCardDecision } from "@/components/test-card-decision";
 
 const TAG: Record<CardRow["source"], { label: string; tone: string }> = {
   check: { label: "Project check", tone: "bg-zk-tint text-zk-accent" },
@@ -12,19 +12,28 @@ const TAG: Record<CardRow["source"], { label: string; tone: string }> = {
 /** Each stamp's own slight tilt, the same on every visit. */
 const tilt = (key: string) => `${(([...key].reduce((n, ch) => n + ch.charCodeAt(0), 0) % 13) - 6) * 1.5}deg`;
 
-/** One square: a tilted PASSED or FAILED stamp, the count on a risky row, or "?" while nobody has tried it. */
+/** What each settled square's stamp says, and its colours. */
+const STAMP: Partial<Record<CardSquare["state"], { label: string; box: string; ink: string }>> = {
+  passed: { label: "PASSED", box: "border-zk-ok-fg/30 bg-zk-ok-bg", ink: "border-zk-ok-fg text-zk-ok-fg" },
+  failed: { label: "FAILED", box: "border-zk-bad-bd bg-zk-bad-bg", ink: "border-zk-bad-fg text-zk-bad-fg" },
+  na: { label: "N/A", box: "border-zk-border bg-zk-chip", ink: "border-zk-muted text-zk-muted" },
+  overruled: { label: "SET ASIDE", box: "border-zk-border bg-zk-chip", ink: "border-zk-muted text-zk-muted" },
+};
+
+/** One square: a tilted stamp once settled (passed, failed, N/A or set aside), the count on a risky row, or "?" while nobody has tried it. */
 function Square({ square }: { square: CardSquare }) {
-  const who = square.failers.length ? `Fails, proven by ${square.failers.join(", ")}` : square.provers.length ? `Proven by ${square.provers.join(", ")}` : "Nobody has tried this yet";
-  const box =
-    square.state === "passed" ? "border-zk-ok-fg/30 bg-zk-ok-bg" : square.state === "failed" ? "border-zk-bad-bd bg-zk-bad-bg" : "border-dashed border-zk-border bg-zk-surface";
+  const who = square.state === "overruled"
+    ? `Proven to fail by ${square.failers.join(", ")}, set aside by the owners`
+    : square.failers.length ? `Fails, proven by ${square.failers.join(", ")}` : square.provers.length ? `Proven by ${square.provers.join(", ")}` : square.state === "na" ? "A tester showed it doesn't apply" : "Nobody has tried this yet";
+  const stamp = STAMP[square.state];
   return (
-    <span title={who} className={`grid h-11 w-full place-items-center rounded-lg border-2 ${box}`}>
-      {square.state === "passed" || square.state === "failed" ? (
+    <span title={who} className={`grid h-11 w-full place-items-center rounded-lg border-2 ${stamp?.box ?? "border-dashed border-zk-border bg-zk-surface"}`}>
+      {stamp ? (
         <span
           style={{ "--tilt": tilt(square.key) } as React.CSSProperties}
-          className={`card-stamp rounded border-2 px-1 py-px font-mono text-[10px] font-black tracking-wider ${square.state === "passed" ? "border-zk-ok-fg text-zk-ok-fg" : "border-zk-bad-fg text-zk-bad-fg"}`}
+          className={`card-stamp rounded border-2 px-1 py-px font-mono text-[10px] font-black tracking-wider ${stamp.ink}`}
         >
-          {square.state === "passed" ? "PASSED" : "FAILED"}
+          {stamp.label}
         </span>
       ) : (
         <span className={`font-mono text-sm font-bold ${square.state === "half" ? "text-zk-warn-fg" : "text-zk-muted"}`}>{square.state === "half" ? `${square.provers.length}/${square.needed}` : "?"}</span>
@@ -89,7 +98,7 @@ export function TestCardPanel({
       </div>
       <p className="mt-1 text-[13px] text-zk-text2">
         Everything testers must prove, on one card{author ? <>. Drawn up by <b className="text-zk-text">{author}</b></> : null}; sized for a {priority} issue: up to{" "}
-        <b className="text-zk-text">{card.size} squares</b>.
+        <b className="text-zk-text">{card.size} squares</b> besides its checks.
       </p>
 
       <div className="mt-3 overflow-x-auto">
@@ -112,6 +121,7 @@ export function TestCardPanel({
                   <span className={`rounded px-1 ${TAG[row.source].tone}`}>{TAG[row.source].label}</span>
                   {row.kind ? <span title={ROW_KINDS[row.kind].tip} className="rounded bg-zk-warn-bg px-1 text-zk-warn-fg">{ROW_KINDS[row.kind].label}</span> : null}
                   {row.proof !== "screen" ? <span className="rounded bg-zk-chip px-1 text-zk-text2">{row.proof === "test" ? "Test run" : "Logs"}</span> : null}
+                  {row.fit ? <span title={row.fit} className="rounded bg-zk-warn-bg px-1 text-zk-warn-fg">May not apply</span> : null}
                   {row.by ? <span className="font-normal text-zk-muted">added by {row.by}</span> : null}
                 </span>
               </span>
@@ -152,6 +162,19 @@ export function TestCardPanel({
         </ul>
       ) : null}
 
+      {canDecide && live.some((r) => !r.route && r.squares.some((s) => s.state === "failed")) ? (
+        <ul className="m-0 mt-3 flex list-none flex-col gap-2 p-0">
+          {live.flatMap((row) =>
+            row.route ? [] : row.squares.filter((s) => s.state === "failed").map((s) => (
+              <li key={s.key} className="rounded-xl border border-zk-bad-bd bg-zk-bad-bg/40 px-3 py-2.5 text-[13px] text-zk-text2">
+                <b className="text-zk-text">“{row.text}”</b>{s.env ? ` on ${s.env}` : ""} is proven to fail by {s.failers.join(", ")}, and holds the issue. If the fail no longer stands (its tester is gone, or it&apos;s out of scope), set it aside.
+                <OverruleSquare bugId={bugId} squareKey={s.key} />
+              </li>
+            )),
+          )}
+        </ul>
+      ) : null}
+
       {bench.length ? (
         <div className="mt-3 rounded-xl border border-dashed border-zk-border px-3 py-2.5 text-xs text-zk-text2">
           <p className="m-0 font-semibold">On the bench · the card is full ({card.size} squares for a {priority} issue)</p>
@@ -178,6 +201,9 @@ export function TestCardPanel({
         </span>
         <span>
           <b className="text-zk-bad-fg">FAILED</b> proven to fail
+        </span>
+        <span>
+          <b>N/A</b> shown not to apply, with a reason
         </span>
         <span>
           <b>?</b> nobody yet

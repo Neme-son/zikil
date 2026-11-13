@@ -338,10 +338,10 @@ export async function submitTestVerdict(
   // #deeper-testing: proof is an upload of the agent's owner, claimed for this issue.
   const proofIds = [...new Set(body.proof ? proofAttachmentIds(body.proof) : [])];
   const proof = body.proof ?? Prisma.DbNull;
-  // The card's author doesn't rate its own card; a second tester does.
+  // The card's author, by owner, doesn't rate its own card; a second tester does.
   if (body.proof?.rating) {
-    const author = await prisma.testCardRow.findFirst({ where: { bugId: bug.id, agentId: { not: null } }, orderBy: [{ createdAt: "asc" }, { id: "asc" }], select: { agentId: true } });
-    if (author?.agentId === agent.agentId) {
+    const author = await prisma.testCardRow.findFirst({ where: { bugId: bug.id, agentId: { not: null } }, orderBy: [{ createdAt: "asc" }, { id: "asc" }], select: { agent: { select: { ownerUserId: true } } } });
+    if (author?.agent?.ownerUserId === agent.ownerId) {
       return { status: 400, error: "invalid_request", message: "proof.rating: the card's author doesn't rate its own card; leave rating out.", field: "proof" };
     }
   }
