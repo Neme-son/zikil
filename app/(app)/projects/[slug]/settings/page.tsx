@@ -10,7 +10,9 @@ import { ProjectSettingsForm } from "./settings-form";
 import { ProjectAreasManager } from "./areas-manager";
 import { WorkflowSettingsForm } from "./workflow-settings-form";
 import { ProjectRepositoriesManager } from "./repositories-manager";
+import { PreviewSettingsForm } from "./preview-settings-form";
 import { workflowValues } from "@/lib/workflow-config";
+import { previewSettingsValues } from "@/lib/validations/preview-settings";
 import {
   getPlatformRewardConfig,
   projectDefaultsFromPlatform,
@@ -31,6 +33,12 @@ const SECTIONS = [
     label: "GitHub",
     hint: "The GitHub App installation",
     icon: "M9 19c-5 1.5-5-2.5-7-3m14 6v-3.87a3.37 3.37 0 0 0-.94-2.61c3.14-.35 6.44-1.54 6.44-7A5.44 5.44 0 0 0 20 4.77 5.07 5.07 0 0 0 19.91 1S18.73.65 16 2.48a13.38 13.38 0 0 0-7 0C6.27.65 5.09 1 5.09 1A5.07 5.07 0 0 0 5 4.77a5.44 5.44 0 0 0-1.5 3.78c0 5.42 3.3 6.61 6.44 7A3.37 3.37 0 0 0 9 18.13V22",
+  },
+  {
+    id: "previews",
+    label: "Previews",
+    hint: "Pull request preview builds",
+    icon: "M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8zM12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6z",
   },
   {
     id: "workflow",
@@ -91,6 +99,9 @@ export default async function ProjectSettingsPage({
         select: { id: true, name: true, slug: true, description: true, paths: true },
       })
     : [];
+  const previewSettings = section === "previews"
+    ? previewSettingsValues(await prisma.projectPreviewSettings.findUnique({ where: { projectId: project.id } }))
+    : null;
   const platformDefaults = section === "details" ? projectDefaultsFromPlatform(await getPlatformRewardConfig(prisma)) : null;
   const base = `/projects/${encodeURIComponent(project.slug)}/settings`;
 
@@ -108,7 +119,7 @@ export default async function ProjectSettingsPage({
         </Link>
         <h1 className="m-0 text-[28px] font-extrabold tracking-[-0.02em] text-zk-text">{project.name} settings</h1>
         <p className="m-0 text-sm text-zk-muted">
-          Owners and admins manage the project&apos;s details, GitHub, workflow and areas.{" "}
+          Owners and admins manage the project&apos;s details, GitHub, previews, workflow and areas.{" "}
           <Link href={issuesPath(refOf(project))} className="font-semibold text-zk-accent hover:underline">
             Open its issues
           </Link>
@@ -185,6 +196,28 @@ export default async function ProjectSettingsPage({
                 />
               </section>
             </div>
+          ) : null}
+
+          {section === "previews" && previewSettings ? (
+            <section className={card} aria-labelledby="previews-heading">
+              <div className="flex flex-col gap-1">
+                <h2 id="previews-heading" className="m-0 text-lg font-bold text-zk-text">Previews</h2>
+                <span className="text-[13px] text-zk-muted">
+                  Ziki builds each pull request of the main repository and links a working preview from its issue. For frontends
+                  that build to static files. Changes are audited.
+                </span>
+              </div>
+              {!project.githubInstallationId ? (
+                <p role="status" className="rounded-[14px] bg-zk-warn-bg p-3 text-sm text-zk-warn-fg">
+                  Private repositories need the GitHub App, so Ziki can fetch their code.{" "}
+                  <Link href={`${base}?section=github`} className="font-semibold underline">
+                    Connect it in GitHub
+                  </Link>
+                  .
+                </p>
+              ) : null}
+              <PreviewSettingsForm slug={project.slug} settings={previewSettings} repoUrl={project.repoUrl} />
+            </section>
           ) : null}
 
           {section === "workflow" ? (

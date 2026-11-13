@@ -17,6 +17,7 @@ import { agentMentionId } from "@/lib/mentions";
 import { requireUser } from "@/lib/auth-helpers";
 import { bugInOrganisation, currentOrganisationIdFor } from "@/lib/organisation-context";
 import { issueHref, issuePath, queryString } from "@/lib/issue-ref";
+import { takesBids } from "@/lib/issue-substatus";
 import { findProjectIssue, parseIssueNumber } from "@/lib/project-issue";
 import { resolveSessionUserId } from "@/lib/session-user";
 import { LocalTime } from "@/components/local-time";
@@ -154,6 +155,8 @@ import { SubmissionEvidence } from "@/components/submission-evidence";
 import { PullRequestChecks } from "@/components/pull-request-checks";
 import { GitHubStatusPanel, type GitHubStatusPanelProps } from "@/components/github-status-panel";
 import { storedGitHubStatus } from "@/lib/github/sync";
+import { lastReadyPreviewUrl, latestPreviewBuild } from "@/lib/previews/builds";
+import { PreviewCard, type PreviewCardProps } from "@/components/preview-card";
 import { githubStatusPowers } from "@/lib/github/status-access";
 import { voteDirection } from "@/lib/voting";
 import {
@@ -796,13 +799,13 @@ export default async function BugDetailPage({ params, searchParams }: BugPagePro
     ]);
   // Anyone who owns an agent in the organisation can award, through it, an open bid whose votes reached the threshold (#award-bids).
   const canAwardBids =
-    (bug.substatus === "open" || bug.substatus === "requires_confirmation") && !bug.isDeleted
+    takesBids(bug.substatus) && !bug.isDeleted
       ? await loadOptional("award permission", false, async () => Boolean(await awardingAgentOf(user.id, bug.organisationId)))
       : false;
   // One-click bid: while the issue takes bids, nobody is working on it, and you have no open bid on it,
   // the Bids step shows a Bid button with your agents to choose from.
   const bidAgents =
-    (bug.substatus === "open" || bug.substatus === "requires_confirmation") && !bug.isDeleted
+    takesBids(bug.substatus) && !bug.isDeleted
       ? await loadOptional("bid agents", [] as { id: string; name: string }[], async () => {
           const [workedOn, myOpenBid] = await Promise.all([
             prisma.issueClaim.count({ where: { bugId: bug.id, releasedAt: null, status: "active" } }),
@@ -1010,6 +1013,29 @@ export default async function BugDetailPage({ params, searchParams }: BugPagePro
     };
   }
 
+  // #previews: Ziki's latest preview build of the linked pull request.
+  let previewCard: PreviewCardProps | null = null;
+  if (bug.pullRequestUrl && !bug.isDeleted) {
+    const pullRequestUrl = bug.pullRequestUrl;
+    const [previewBuild, lastReadyUrl, previewsOn] = await Promise.all([
+      loadOptional("preview build", null, () => latestPreviewBuild(bug.id, pullRequestUrl)),
+      loadOptional("last preview", null, () => lastReadyPreviewUrl(bug.id, pullRequestUrl)),
+      loadOptional("preview settings", false, () =>
+        prisma.projectPreviewSettings.findUnique({ where: { projectId: bug.projectId }, select: { enabled: true } }).then((row) => Boolean(row?.enabled)),
+      ),
+    ]);
+    // A build already made shows even after previews are turned off; otherwise only while they're on.
+    if (previewBuild || previewsOn) {
+      previewCard = {
+        bugId: bug.id,
+        pullNumber: parsePullRequestUrl(pullRequestUrl)?.number ?? null,
+        build: previewBuild,
+        lastReadyUrl,
+        canFollow: Boolean(access.membershipRole) || access.admin,
+      };
+    }
+  }
+
   // Comments on the issue itself, at every stage (lib/comment-placement.ts).
   const takesComments = !bug.isDeleted && canContribute;
   // Looked up here, not on `hold`: holder is also what agents read through the API.
@@ -1128,7 +1154,7 @@ export default async function BugDetailPage({ params, searchParams }: BugPagePro
   // Threshold-only (#vote-governance): the bar says which vote decides the step, and how far it has got.
   const thresholdOnly = isThresholdOnly(workflow);
   // The open bids' weighted votes (bidHistoryEntries weighs them): the next step names the most voted.
-  const topBidVotes = !bug.isDeleted && bug.substatus === "open"
+  const topBidVotes = !bug.isDeleted && (bug.substatus === "open" || bug.substatus === "merged_broken")
     ? Math.max(0, ...bidList.filter(isOpenBid).map((bid) => bid.votes ?? 0))
     : 0;
   const mergeReviewVotesNow = thresholdOnly && !bug.isDeleted && bug.substatus === "accepted"
@@ -1543,7 +1569,7 @@ export default async function BugDetailPage({ params, searchParams }: BugPagePro
               bidAction={bidAgents.length > 0 ? <BidButton bugId={bug.id} agents={bidAgents} /> : undefined}
               bids={bidList}
               at={firstAt(bidList)}
-              collapsed={bug.status !== "open"}
+              collapsed={!takesBids(bug.substatus)}
               canAward={canAwardBids}
               awardThreshold={workflow.awardThreshold}
             />
@@ -2115,6 +2141,7 @@ export default async function BugDetailPage({ params, searchParams }: BugPagePro
           {deliveredBanner ? <DeliveredBanner {...deliveredBanner} /> : null}
 
           {githubPanel ? <GitHubStatusPanel {...githubPanel} /> : null}
+          {previewCard ? <PreviewCard {...previewCard} /> : null}
 
               {/* Who has the issue, while it is the latest thing (In progress); the timeline below keeps the award after that. */}
               {(hold?.status === "active" || hold?.status === "planning") && bug.status === "in_progress" ? <AwardBox hold={hold} agentPaused={Boolean(workingAgent?.pausedAt)} bugId={bug.id} isWatching={isWatchingIssue} isIssueOwner={bug.reporterId === user.id} /> : null}
@@ -2193,7 +2220,7 @@ export default async function BugDetailPage({ params, searchParams }: BugPagePro
                           bidAction={bidAgents.length > 0 ? <BidButton bugId={bug.id} agents={bidAgents} /> : undefined}
                           bids={bidList}
                           at={firstAt(bidList)}
-                          collapsed={bug.status !== "open"}
+                          collapsed={!takesBids(bug.substatus)}
                           canAward={canAwardBids}
                           awardThreshold={workflow.awardThreshold}
                         />

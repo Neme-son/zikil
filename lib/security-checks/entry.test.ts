@@ -3,17 +3,20 @@ import { Prisma } from "@prisma/client";
 
 const prismaMock = vi.hoisted(() => ({
   securityTarget: { findUnique: vi.fn(), create: vi.fn() },
-  securityCheck: { findFirst: vi.fn(), create: vi.fn(), findMany: vi.fn(), updateMany: vi.fn() },
+  securityCheck: { findFirst: vi.fn(), create: vi.fn(), findMany: vi.fn(), count: vi.fn() },
+  securityCheckResult: { findMany: vi.fn(), updateMany: vi.fn() },
 }));
 vi.mock("@/lib/prisma", () => ({ prisma: prismaMock }));
 
-import { addTargetAndCheck, listWorkspaceChecks, newOwnershipToken, nextStepPath } from "./entry";
-import { canPayForCheck, payForCheck } from "./payment";
+import { addTargetAndCheck, listWorkspaceChecks, newOwnershipToken, nextStepPath, parseSiteFilter, refusedMessage, siteStage } from "./entry";
+import { findingPrice, unlockFindings } from "./payment";
 
 const site = { kind: "website" as const, value: "settle.ng", input: "https://settle.ng" };
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // Free scans left unless a test says otherwise.
+  prismaMock.securityCheck.count.mockResolvedValue(0);
 });
 
 describe("addTargetAndCheck (#security-checks part 1)", () => {
@@ -30,7 +33,7 @@ describe("addTargetAndCheck (#security-checks part 1)", () => {
     expect(created).toMatchObject({ organisationId: "org1", kind: "website", value: "settle.ng", input: "https://settle.ng", addedById: "u1" });
     expect(created.ownershipToken).toMatch(/^ziki-verify-[0-9a-f]{32}$/);
     expect(prismaMock.securityCheck.create.mock.calls[0][0].data).toEqual({
-      organisationId: "org1", targetId: "t1", requestedById: "u1", priceCoins: 50, status: "awaiting_ownership",
+      organisationId: "org1", targetId: "t1", requestedById: "u1", free: true, priceCoins: 50, status: "awaiting_ownership",
     });
   });
 
@@ -76,19 +79,48 @@ describe("addTargetAndCheck (#security-checks part 1)", () => {
   });
 });
 
+describe("free-scan limits (plan C1)", () => {
+  it("opens no check once the site has had its free scan, and says so", async () => {
+    prismaMock.securityTarget.findUnique.mockResolvedValue({ id: "t1", verifiedAt: new Date() });
+    prismaMock.securityCheck.findFirst.mockResolvedValueOnce(null).mockResolvedValueOnce({ id: "c-old" });
+    prismaMock.securityCheck.count.mockResolvedValueOnce(1).mockResolvedValueOnce(1);
+
+    const added = await addTargetAndCheck("org1", "u1", site);
+
+    expect(added).toEqual({ refused: "target_used", targetId: "t1", lastCheckId: "c-old" });
+    expect(prismaMock.securityCheck.create).not.toHaveBeenCalled();
+    expect(refusedMessage("target_used", "settle.ng")).toBe("settle.ng has already been scanned. Open its report to unlock fixes.");
+  });
+
+  it("stops at the workspace's monthly free scans, counted from the 1st of the month", async () => {
+    prismaMock.securityTarget.findUnique.mockResolvedValue({ id: "t2", verifiedAt: null });
+    prismaMock.securityCheck.findFirst.mockResolvedValue(null);
+    prismaMock.securityCheck.count.mockResolvedValueOnce(0).mockResolvedValueOnce(3);
+    const now = new Date("2026-11-12T10:00:00Z");
+
+    const added = await addTargetAndCheck("org1", "u1", site, now);
+
+    expect(added).toMatchObject({ refused: "workspace_limit" });
+    expect(prismaMock.securityCheck.count.mock.calls[1][0].where).toEqual({
+      organisationId: "org1", free: true, createdAt: { gte: new Date("2026-11-01T00:00:00Z") },
+    });
+    expect(refusedMessage("workspace_limit", "settle.ng", now)).toBe("You've used this month's 3 scans. More start on 1 December.");
+  });
+});
+
 describe("nextStepPath", () => {
-  it("sends an unproven target to prove ownership, a proven one to pay", () => {
+  it("sends an unproven target to show it's yours, and a proven one back to Your sites", () => {
     expect(nextStepPath({ targetId: "t1", checkId: "c1", verified: false })).toBe("/security/targets/t1/verify");
-    expect(nextStepPath({ targetId: "t1", checkId: "c1", verified: true })).toBe("/security/checks/c1/pay");
+    expect(nextStepPath({ targetId: "t1", checkId: "c1", verified: true })).toBe("/security?check=c1&added=1");
   });
 });
 
 describe("listWorkspaceChecks", () => {
-  it("lists only the checks this person asked for in this workspace, newest first, without results", async () => {
+  it("lists only the checks this person asked for, newest first, with how many findings are unlocked", async () => {
     const createdAt = new Date("2026-11-11T10:00:00Z");
     prismaMock.securityCheck.findMany.mockResolvedValue([
-      { id: "c1", status: "awaiting_ownership", paidAt: null, priceCoins: 50, createdAt, target: { id: "t1", kind: "website", value: "settle.ng", verifiedAt: null } },
-      { id: "c2", status: "checking", paidAt: createdAt, priceCoins: 50, createdAt, target: { id: "t2", kind: "repo", value: "settle/app", verifiedAt: createdAt } },
+      { id: "c1", status: "awaiting_ownership", postedAt: null, createdAt, target: { id: "t1", kind: "website", value: "settle.ng", verifiedAt: null }, results: [] },
+      { id: "c2", status: "done", postedAt: createdAt, createdAt, target: { id: "t2", kind: "repo", value: "settle/app", verifiedAt: createdAt }, results: [{ unlockedAt: createdAt }, { unlockedAt: null }] },
     ]);
 
     const rows = await listWorkspaceChecks("org1", "u1");
@@ -96,41 +128,73 @@ describe("listWorkspaceChecks", () => {
     const query = prismaMock.securityCheck.findMany.mock.calls[0][0];
     expect(query.where).toEqual({ organisationId: "org1", requestedById: "u1" });
     expect(query.orderBy).toEqual({ createdAt: "desc" });
-    expect(query.select.results).toBeUndefined();
-    expect(rows.map((r) => [r.id, r.value, r.verified, r.paid])).toEqual([
-      ["c1", "settle.ng", false, false],
-      ["c2", "settle/app", true, true],
+    // Only whether each finding is unlocked: never its text.
+    expect(query.select.results).toEqual({ select: { unlockedAt: true } });
+    expect(rows.map((r) => [r.id, r.verified, r.posted, r.findings, r.unlocked])).toEqual([
+      ["c1", false, false, 0, 0],
+      ["c2", true, true, 2, 1],
     ]);
   });
 });
 
-describe("payment (simulated)", () => {
-  it("only sets paidAt, once, for the person's own live check", async () => {
-    prismaMock.securityCheck.updateMany.mockResolvedValue({ count: 1 });
-    const now = new Date("2026-11-11T12:00:00Z");
+describe("unlocking fixes per finding (plan C1, simulated payment)", () => {
+  const posted = { postedAt: new Date("2026-11-12T09:00:00Z") };
 
-    expect(await payForCheck("c1", "org1", "u1", now)).toBe("paid");
-    expect(prismaMock.securityCheck.updateMany).toHaveBeenCalledWith({
-      where: { id: "c1", organisationId: "org1", requestedById: "u1", paidAt: null, status: { not: "cancelled" } },
-      data: { paidAt: now },
+  it("unlocks every locked finding and totals its price by severity", async () => {
+    prismaMock.securityCheck.findFirst.mockResolvedValue(posted);
+    prismaMock.securityCheckResult.findMany.mockResolvedValue([
+      { id: "r1", severity: "critical", priceCoins: 5 },
+      { id: "r2", severity: "low", priceCoins: null },
+    ]);
+    prismaMock.securityCheckResult.updateMany.mockResolvedValue({ count: 2 });
+    const now = new Date("2026-11-12T12:00:00Z");
+
+    expect(await unlockFindings("c1", "org1", "u1", "all", now)).toEqual({ ok: true, unlocked: 2, coins: 6 });
+    expect(prismaMock.securityCheck.findFirst.mock.calls[0][0].where).toEqual({ id: "c1", organisationId: "org1", requestedById: "u1" });
+    expect(prismaMock.securityCheckResult.updateMany).toHaveBeenCalledWith({
+      where: { id: { in: ["r1", "r2"] }, checkId: "c1", unlockedAt: null },
+      data: { unlockedAt: now },
     });
   });
 
-  it("never pays twice, and says why it didn't pay", async () => {
-    prismaMock.securityCheck.updateMany.mockResolvedValue({ count: 0 });
-    prismaMock.securityCheck.findFirst.mockResolvedValueOnce({ paidAt: new Date(), status: "queued" });
-    expect(await payForCheck("c1", "org1", "u1")).toBe("already_paid");
-    prismaMock.securityCheck.findFirst.mockResolvedValueOnce({ paidAt: null, status: "cancelled" });
-    expect(await payForCheck("c1", "org1", "u1")).toBe("cancelled");
-    prismaMock.securityCheck.findFirst.mockResolvedValueOnce(null);
-    expect(await payForCheck("someone-elses-check", "org1", "u1")).toBe("not_found");
-    expect(prismaMock.securityCheck.findFirst.mock.calls.at(-1)?.[0].where).toEqual({ id: "someone-elses-check", organisationId: "org1", requestedById: "u1" });
+  it("unlocks only the chosen findings", async () => {
+    prismaMock.securityCheck.findFirst.mockResolvedValue(posted);
+    prismaMock.securityCheckResult.findMany.mockResolvedValue([{ id: "r2", severity: "high", priceCoins: 3 }]);
+    prismaMock.securityCheckResult.updateMany.mockResolvedValue({ count: 1 });
+
+    expect(await unlockFindings("c1", "org1", "u1", ["r2"])).toEqual({ ok: true, unlocked: 1, coins: 3 });
+    expect(prismaMock.securityCheckResult.findMany.mock.calls[0][0].where).toEqual({ checkId: "c1", unlockedAt: null, id: { in: ["r2"] } });
   });
 
-  it("knows which checks can still be paid", () => {
-    expect(canPayForCheck({ paidAt: null, status: "awaiting_ownership" })).toBe(true);
-    expect(canPayForCheck({ paidAt: null, status: "done" })).toBe(true);
-    expect(canPayForCheck({ paidAt: new Date(), status: "queued" })).toBe(false);
-    expect(canPayForCheck({ paidAt: null, status: "cancelled" })).toBe(false);
+  it("refuses someone else's check, an unposted report, and findings already unlocked", async () => {
+    prismaMock.securityCheck.findFirst.mockResolvedValueOnce(null);
+    expect(await unlockFindings("c1", "org1", "u1", "all")).toEqual({ ok: false, reason: "not_found" });
+    prismaMock.securityCheck.findFirst.mockResolvedValueOnce({ postedAt: null });
+    expect(await unlockFindings("c1", "org1", "u1", "all")).toEqual({ ok: false, reason: "not_posted" });
+    prismaMock.securityCheck.findFirst.mockResolvedValueOnce(posted);
+    prismaMock.securityCheckResult.findMany.mockResolvedValueOnce([]);
+    expect(await unlockFindings("c1", "org1", "u1", "all")).toEqual({ ok: false, reason: "nothing_to_unlock" });
+    expect(prismaMock.securityCheckResult.updateMany).not.toHaveBeenCalled();
+  });
+
+  it("prices a finding by its stored price, or its severity's for older ones", () => {
+    expect(findingPrice({ severity: "critical", priceCoins: null })).toBe(5);
+    expect(findingPrice({ severity: "medium", priceCoins: null })).toBe(2);
+    expect(findingPrice({ severity: "high", priceCoins: 3 })).toBe(3);
+  });
+});
+
+describe("siteStage and parseSiteFilter (Your sites sidebar)", () => {
+  it("puts each site in one place", () => {
+    expect(siteStage({ status: "awaiting_ownership", verified: false, posted: false })).toBe("prove");
+    expect(siteStage({ status: "checking", verified: true, posted: false })).toBe("checking");
+    expect(siteStage({ status: "done", verified: true, posted: true })).toBe("fix");
+    expect(siteStage({ status: "cancelled", verified: true, posted: false })).toBe("cancelled");
+  });
+
+  it("falls back to all for anything unknown", () => {
+    expect(parseSiteFilter("fix")).toBe("fix");
+    expect(parseSiteFilter("nope")).toBe("all");
+    expect(parseSiteFilter(undefined)).toBe("all");
   });
 });

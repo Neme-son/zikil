@@ -13,6 +13,7 @@ import { sweepOrphanedIssues } from "@/lib/orphaned-issues";
 import { sweepUndraftedIdeas } from "@/lib/cron/draft-structuring";
 import { processSearchOutbox, pruneProcessedSearchOutbox } from "@/lib/search-index";
 import { refreshMergeQueue } from "@/lib/github/sync";
+import { followPreviewBuilds } from "@/lib/previews/builds";
 import { sweepSecurityChecks } from "@/lib/security-checks/engine";
 
 export const FAILURE_ALERT_THRESHOLD = 3;
@@ -60,6 +61,7 @@ export type PlatformSweepsResult = {
       reclaimed?: number;
       skipped?: number;
       assigned?: number;
+      posted?: number;
       paid?: number;
       error?: string;
     };
@@ -73,6 +75,7 @@ export type PlatformSweepsResult = {
       error?: string;
     };
     githubStatus: { status: "ok" | "error"; checked?: number; moved?: number; failed?: number; error?: string };
+    previews: { status: "ok" | "error"; checked?: number; failed?: number; error?: string };
     deliveries: { status: "ok" | "error"; processed?: number; error?: string };
     retention: {
       status: "ok" | "error";
@@ -117,6 +120,7 @@ export async function runPlatformSweeps(): Promise<PlatformSweepsResult | { skip
         orphanedIssues: { status: "ok" },
         draftStructuring: { status: "ok" },
         githubStatus: { status: "ok" },
+        previews: { status: "ok" },
         deliveries: { status: "ok" },
         retention: { status: "ok" },
         searchIndex: { status: "ok" },
@@ -189,8 +193,9 @@ export async function runPlatformSweeps(): Promise<PlatformSweepsResult | { skip
       result.sweeps.claims = { status: "error", error: err instanceof Error ? err.message : String(err) };
     }
 
-    // 2a. Security checks (#security-checks): start queued checks, take back stale jobs,
-    // give waiting jobs to always-on agents, and pay agents of paid checks.
+    // 2a. Security checks (#security-checks): start proven checks (Ziki AI splits them),
+    // take back stale parts, give waiting parts to cleared agents, post finished
+    // reports (Ziki AI summary) and pay the finders of unlocked findings.
     try {
       const res = await sweepSecurityChecks(prisma);
       recordSweepSuccess("securityChecks");
@@ -237,6 +242,16 @@ export async function runPlatformSweeps(): Promise<PlatformSweepsResult | { skip
     } catch (err) {
       recordSweepFailure("githubStatus", err);
       result.sweeps.githubStatus = { status: "error", error: err instanceof Error ? err.message : String(err) };
+    }
+
+    // 3a. Preview builds (#previews): follow the builder's unfinished runs.
+    try {
+      const res = await followPreviewBuilds();
+      recordSweepSuccess("previews");
+      result.sweeps.previews = { status: "ok", ...res };
+    } catch (err) {
+      recordSweepFailure("previews", err);
+      result.sweeps.previews = { status: "error", error: err instanceof Error ? err.message : String(err) };
     }
 
     // 4. Webhook Deliveries

@@ -15,6 +15,7 @@ import { extendSchema } from "@/lib/agent-api/deadline";
 import { releaseSchema } from "@/lib/agent-api/offer";
 import { structureInputSchema } from "@/lib/agent-api/structure";
 import { testVerdictBodySchema } from "@/lib/agent-api/test-verdict";
+import { forceMergeBodySchema } from "@/lib/agent-api/force-merge";
 import { deliveryBodySchema } from "@/lib/agent-api/delivery";
 import { confirmationSchema } from "@/lib/agent-api/confirmations";
 import { penaltySchema } from "@/lib/agent-api/confirmation-penalties";
@@ -92,6 +93,7 @@ const ROUTE_SCHEMAS: Record<string, z.ZodType> = {
   ziki_penalise_confirmation: penaltySchema,
   ziki_give_idea_verdict: ideaVerdictFields,
   ziki_submit_test_result: testVerdictBodySchema,
+  ziki_force_merge: forceMergeBodySchema,
   ziki_merge_fix: mergeReviewBodySchema,
   ziki_ask_owner: agentQuestionSchema,
   ziki_escalate: agentEscalationSchema,

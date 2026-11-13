@@ -42,6 +42,12 @@ enum Substatus {
   on_staging
   on_prod
   published
+  /// Live · Force-merged (#force-merge): the local coder merged it themself, outside
+  /// Ziki's checks. Agents judge it afterwards: good moves it On dev, not good to merged_broken.
+  force_merged
+  /// Live · Broken (#force-merge): force-merged, then judged not good. Merged but
+  /// faulty, so it takes bids for a fix like an Open issue.
+  merged_broken
   closed
 }
 
@@ -274,6 +280,7 @@ model User {
   securityVerifications SecurityVerification[]
   securityFindingsReported  SecurityFinding[]       @relation("SecurityFindingReporter")
   securityTargetsAdded      SecurityTarget[]        @relation("SecurityTargetAddedBy")
+  onCallInvitesSent         OnCallInvite[]          @relation("OnCallInviteSender")
   securityChecksRequested   SecurityCheck[]         @relation("SecurityCheckRequester")
   name                      String
   email                     String                  @unique
@@ -404,6 +411,7 @@ model IssueType {
 
 model Bug {
   featurePlanItems          FeaturePlanItem[]
+  previewBuilds             PreviewBuild[]
   pullRequestLinkRepairs    PullRequestLinkRepair[]
   /// The private details when this issue is a security finding (#security-findings).
   securityFinding           SecurityFinding?
@@ -937,6 +945,8 @@ model Project {
   agentEvents           AgentEvent[]
   goals                 Goal[]
   workflow              ProjectWorkflow?
+  previewSettings       ProjectPreviewSettings?
+  previewBuilds         PreviewBuild[]
   mistakes              AgentMistake[]
   notes                 ProjectNotes?
   brief                 ProjectBrief?
@@ -1011,6 +1021,58 @@ model ProjectWorkflow {
   createdAt              DateTime          @default(now())
   updatedAt              DateTime          @updatedAt
   project                Project           @relation(fields: [projectId], references: [id], onDelete: Cascade)
+}
+
+/// How Ziki builds pull request previews of the project's main repository
+/// (#previews): a frontend built to static files and uploaded to Ziki's
+/// Cloudflare Pages account. Off until an owner or admin turns it on, because
+/// previews are public links. No row means the defaults below.
+model ProjectPreviewSettings {
+  projectId      String   @id
+  enabled        Boolean  @default(false)
+  /// The folder to build in, relative to the repository root.
+  rootDir        String   @default(".")
+  /// Null: detected from the lock file.
+  installCommand String?
+  buildCommand   String   @default("npm run build")
+  /// The build's output folder, relative to rootDir.
+  outputDir      String   @default("dist")
+  nodeVersion    String   @default("22")
+  /// Name to value, set while building. Public: built into the frontend code.
+  buildVariables Json     @default("{}")
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  project        Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+}
+
+/// One preview build of a pull request commit (#previews): Ziki started the
+/// preview builder (PREVIEW_BUILDER_REPO) for it and follows the run. One per
+/// issue and commit, so seeing the same commit again starts nothing.
+model PreviewBuild {
+  id          String    @id @default(cuid())
+  projectId   String
+  bugId       String
+  /// The pull request's repository, owner/name.
+  repository  String
+  pullNumber  Int
+  headSha     String
+  /// queued (dispatched, no run seen yet), building, ready or failed.
+  status      String    @default("queued")
+  /// The builder's workflow run, once known.
+  runId       String?
+  runUrl      String?
+  /// The pull request's preview address, once ready.
+  url         String?
+  /// Why it failed, in a sentence.
+  error       String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  completedAt DateTime?
+  project     Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  bug         Bug       @relation(fields: [bugId], references: [id], onDelete: Cascade)
+
+  @@unique([bugId, headSha])
+  @@index([status, updatedAt])
 }
 
 /// A project-owned work area, such as frontend or backend (#609).
@@ -1245,9 +1307,15 @@ model ProjectJoinRequest {
 model Agent {
   /// Parts of security checks this agent holds or did (#security-checks).
   securityCheckItems   SecurityCheckItem[]
-  /// A Ziki-managed always-on agent (#security-checks): a super admin sets it. Always-on
-  /// agents are given security-check jobs, wherever the client's workspace is.
-  alwaysOnAt           DateTime?
+  /// An on-call agent (#on-call): a normal working agent from a very active owner,
+  /// invited by a super admin and accepted by its owner. On-call agents get
+  /// priority work, such as security-check parts and new workspaces. Null when not on call.
+  onCallAt             DateTime?
+  /// Site-wide security clearance (#security-checks): set by a super admin, usually
+  /// with an on-call invite. Only cleared agents get security-check jobs or read results.
+  securityClearedAt    DateTime?
+  /// Invitations to go on call, newest last (#on-call).
+  onCallInvites        OnCallInvite[]
   requests             AgentRequest[]
   agentNotes           AgentNote[]
   id                   String                @id @default(cuid())
@@ -1350,6 +1418,12 @@ model AgentActivation {
   burst          Boolean      @default(false)
   /// An organisation owner or admin cleared it to read this organisation's private security findings (#security-findings).
   securityCleared Boolean     @default(false)
+  /// An on-call guest (#on-call): added automatically to a new workspace to give
+  /// quick wins. The agent works here, but its owner isn't a member and can't
+  /// browse the workspace. It leaves after delivering its first task here.
+  guestUntilFirstDelivery Boolean @default(false)
+  /// When the guest stay ended (first delivery, or removed by the workspace owner).
+  guestEndedAt   DateTime?
   /// When the higher budget stops (#596). Null on an enabled grant means it has no expiry.
   burstUntil     DateTime?
   activatedAt    DateTime     @default(now())
@@ -3150,8 +3224,12 @@ model SecurityCheck {
   requestedById  String
   requestedBy    User                  @relation("SecurityCheckRequester", fields: [requestedById], references: [id], onDelete: Cascade)
   status         SecurityCheckStatus   @default(awaiting_ownership)
-  /// The price in coins when the check was asked for.
+  /// The price in coins when the check was asked for. Replaced by per-finding
+  /// prices (SecurityCheckResult.priceCoins) and removed once the pay page uses them.
   priceCoins     Int
+  /// A free scan (#security-checks): the first scan of a target is free, within
+  /// FREE_SCANS_PER_TARGET and FREE_SCANS_PER_WORKSPACE_PER_MONTH.
+  free           Boolean               @default(false)
   /// When the client paid; null while unpaid. Unlocks the full report and releases agent pay.
   paidAt         DateTime?
   /// When the collate job was queued, after every part was in; null before. Guards against queuing it twice.
@@ -3218,9 +3296,17 @@ model SecurityCheckResult {
   /// The private finding it became on "Fix on Ziki"; null until then.
   findingId   String?           @unique
   finding     SecurityFinding?  @relation(fields: [findingId], references: [id], onDelete: SetNull)
+  /// What unlocking it costs the client in coins, and what its finder earns:
+  /// SEVERITY_PRICE for its severity when it was reported. Null on results reported before this rule.
+  priceCoins  Int?
+  /// When the client unlocked it (#security-checks); its details and fix show only after this.
+  unlockedAt  DateTime?
+  /// When its finder was paid for it, once, after the unlock.
+  payoutReleasedAt DateTime?
   createdAt   DateTime          @default(now())
 
   @@index([checkId, severity])
+  @@index([checkId, unlockedAt])
   @@index([itemId])
 }
 
@@ -3447,4 +3533,32 @@ model LoginHistory {
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId, createdAt])
+}
+
+/// Where an on-call invitation is (#on-call).
+enum OnCallInviteStatus {
+  pending
+  accepted
+  declined
+  cancelled
+}
+
+/// A super admin's invitation for an agent to go on call (#on-call). The agent's
+/// owner accepts or declines; accepting sets Agent.onCallAt, and
+/// Agent.securityClearedAt when the invite clears it for security checks.
+model OnCallInvite {
+  id               String             @id @default(cuid())
+  agentId          String
+  agent            Agent              @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  invitedById      String
+  invitedBy        User               @relation("OnCallInviteSender", fields: [invitedById], references: [id], onDelete: Cascade)
+  /// Whether accepting also clears the agent for security checks.
+  clearForSecurity Boolean            @default(false)
+  status           OnCallInviteStatus @default(pending)
+  respondedAt      DateTime?
+  createdAt        DateTime           @default(now())
+  updatedAt        DateTime           @updatedAt
+
+  @@index([agentId, status])
+  @@index([status, createdAt])
 }

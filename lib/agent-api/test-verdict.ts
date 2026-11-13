@@ -18,6 +18,8 @@ import { gateReport, latestPullRequestReport, notifyAuthor, type StoredPullReque
 import { conflictComment } from "@/lib/agent-api/merge-conflict";
 import { judgeBlockKind } from "@/lib/agent-api/judge-block";
 import { refreshJudgedStatus } from "@/lib/agent-api/tested-status";
+import { settleForceMerged } from "@/lib/agent-api/force-merge";
+import { deliveredClaim } from "@/lib/agent-api/merge-verdicts";
 import { entryDescription, entryReplySelect, entrySummary, toEntryReplies, type EntryReply } from "@/lib/agent-api/entry-fields";
 import { IssueApiError } from "@/lib/agent-api/errors";
 import { approvedPlanSummary } from "@/lib/agent-api/plan";
@@ -106,6 +108,7 @@ const reviewedBugSelect = {
   claims: {
     select: {
       status: true,
+      claimedAt: true,
       releasedAt: true,
       agentId: true,
       beneficiaryUserId: true,
@@ -222,7 +225,8 @@ export async function submitTestVerdict(
         field: "files",
       };
     }
-    if (bug.status !== "done" || !bug.pullRequestUrl) {
+    // #force-merge: work its author merged without Ziki's checks is judged afterwards, at Live · Force-merged.
+    if ((bug.status !== "done" && bug.substatus !== "force_merged") || !bug.pullRequestUrl) {
       return {
         status: 409,
         error: "not_delivered",
@@ -236,7 +240,9 @@ export async function submitTestVerdict(
   // a newer commit says so; otherwise the SHA recorded when the PR was linked.
   const headSha = bug.track === "marketing" ? null : (body.headSha ?? bug.pullRequestHeadSha);
 
-  if (activeClaimAgent(bug) === agent.agentId) {
+  // #force-merge: the claim the work was done under is released at the merge; its agent still can't judge it.
+  const forceMerged = bug.substatus === "force_merged";
+  if (activeClaimAgent(bug) === agent.agentId || (forceMerged && deliveredClaim(bug)?.agentId === agent.agentId)) {
     return {
       status: 403,
       error: "fixer_cannot_verdict",
@@ -282,7 +288,8 @@ export async function submitTestVerdict(
   }
 
   // A tester only says "good to merge" about a pull request that is ready, as reported.
-  if (body.goodToMerge && bug.track !== "marketing") {
+  // Force-merged work is already merged: what the pull request's report says no longer blocks a judgement.
+  if (body.goodToMerge && bug.track !== "marketing" && !forceMerged) {
     const block = readyBlock(bug, await latestPullRequestReport(bug.id, pullRequestUrl));
     if (block) {
       // #review-entries: nothing is posted on the issue. The caller gets the
@@ -406,6 +413,8 @@ export async function submitTestVerdict(
     });
     // #delivered-step: enough independent judgements move it to Done, or back to Open.
     await refreshJudgedStatus(prisma, bug.id, agent.ownerId);
+    // #force-merge: enough judgements move force-merged work On dev, or mark it Live · Broken.
+    if (forceMerged) await settleForceMerged(agent, bug.id);
     // #agent-profile: a judgement moves the rating of whoever delivered the work.
     await refreshIssueRatings(prisma, bug.id).catch((error: unknown) => console.error("[agent-rating] refresh failed", error));
     return result;

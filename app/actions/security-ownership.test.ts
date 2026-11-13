@@ -46,9 +46,9 @@ describe("verifySecurityTarget (#security-checks part 2)", () => {
     expect(mocks.record).not.toHaveBeenCalled();
   });
 
-  it("records the first way that is there and goes on to pay or skip", async () => {
+  it("records the first way that is there and goes back to Assets, where the free scan runs", async () => {
     mocks.prove.mockImplementation(async (_target, method: string) => (method === "html_tag" ? { ok: true } : { ok: false, reason: "no" }));
-    await expect(verifySecurityTarget("t1")).rejects.toThrow("REDIRECT /security/checks/c1/pay");
+    await expect(verifySecurityTarget("t1")).rejects.toThrow("REDIRECT /security?check=c1");
     expect(mocks.record).toHaveBeenCalledWith("t1", "org1", "u1", "html_tag");
   });
 
@@ -62,7 +62,7 @@ describe("verifySecurityTarget (#security-checks part 2)", () => {
 
   it("never asks a proven target again", async () => {
     mocks.findTarget.mockResolvedValue({ ...target, verifiedAt: new Date() });
-    await expect(verifySecurityTarget("t1")).rejects.toThrow("REDIRECT /security/checks/c1/pay");
+    await expect(verifySecurityTarget("t1")).rejects.toThrow("REDIRECT /security?check=c1");
     expect(mocks.prove).not.toHaveBeenCalled();
   });
 });

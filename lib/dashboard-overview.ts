@@ -83,7 +83,7 @@ export function firstCloseForOrganisation(organisationId: string): Prisma.Sql {
     FROM "BugActivity" a
     INNER JOIN "Bug" bug ON bug."id" = a."bugId"
     WHERE a.type = 'status_changed'
-      AND a.metadata ->> 'to' IN ('resolved', 'on_dev', 'on_staging', 'on_prod', 'published', 'closed')
+      AND a.metadata ->> 'to' IN ('resolved', 'on_dev', 'on_staging', 'on_prod', 'published', 'force_merged', 'closed')
       AND bug."organisationId" = ${organisationId}
       AND bug."isDeleted" = false
       AND bug."track" = 'product'
