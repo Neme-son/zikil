@@ -124,7 +124,7 @@ export function SecurityChat({ id = "security-chat", focusOnOpen = false }: { id
             value={text}
             disabled={pending}
             maxLength={MESSAGE_MAX}
-            placeholder={turns.length ? "Reply to Ziki" : "ziki.dev, or tell Ziki what you want to secure"}
+            placeholder={turns.length ? "Reply to Ziki" : "Tell Ziki what you want to secure"}
             autoComplete="off"
             aria-invalid={error ? true : undefined}
             aria-describedby={error ? errorId : `${id}-reading`}

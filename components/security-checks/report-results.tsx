@@ -64,7 +64,7 @@ export function ReportResults({ report, show = "all" }: { report: CheckReport; s
                 href={`/security/checks/${report.checkId}/pay`}
                 className="mt-3 inline-flex h-10 items-center rounded-full bg-electric-blue-strong px-5 text-sm font-bold text-white hover:brightness-105 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-electric-blue focus-visible:ring-offset-2"
               >
-                Pay {report.priceCoins} coins to see all
+                Unlock fixes
               </Link>
             </div>
           </div>

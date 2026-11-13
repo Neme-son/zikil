@@ -30,8 +30,8 @@ export type ChatAnswer =
 /** Messages one person may send the assistant in an hour. */
 const ASSISTANT_RATE_LIMIT = { max: 30, windowMs: 60 * 60 * 1000 };
 
-const NO_WORKSPACE = "Join or create a workspace to check a site.";
-const ASK_FOR_ADDRESS = "Paste your website, a server address or a GitHub repo, and I'll set up your free scan.";
+const NO_WORKSPACE = "Join or create a workspace to secure your assets.";
+const ASK_FOR_ADDRESS = "Paste your website, a server address or a GitHub repo, and I'll set up a scan.";
 
 export async function talkToSecurityAssistant(history: AssistantTurn[]): Promise<ChatAnswer> {
   const user = await requireUser();
@@ -44,7 +44,7 @@ export async function talkToSecurityAssistant(history: AssistantTurn[]): Promise
 
   // A plain link needs no AI.
   const direct = parseSecurityTarget(last.text);
-  if (direct.ok) return addAndGo(access.organisationId, user.id, direct.target, "Got it. Next, show it's yours and your free scan starts.");
+  if (direct.ok) return addAndGo(access.organisationId, user.id, direct.target, "Got it. Next, show it's yours and the scan starts.");
   if (direct.error === PRIVATE_TARGET_ERROR) return { kind: "reply", reply: PRIVATE_TARGET_ERROR };
 
   const limit = checkRateLimit(`security-assistant:${user.id}`, ASSISTANT_RATE_LIMIT);
@@ -69,7 +69,7 @@ async function addAndGo(
   const added = await addTargetAndCheck(organisationId, userId, target);
   if ("refused" in added) return { kind: "reply", reply: refusedMessage(added.refused, target.value) };
   revalidatePath("/security");
-  // Not proven yet: on to "Show it's yours". Proven already: back to Sites, where the free scan starts.
+  // Not proven yet: on to "Show it's yours". Proven already: back to Assets, where the free scan starts.
   return { kind: "go", reply, href: nextStepPath(added) };
 }
 
