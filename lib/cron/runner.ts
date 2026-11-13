@@ -14,6 +14,7 @@ import { sweepUndraftedIdeas } from "@/lib/cron/draft-structuring";
 import { processSearchOutbox, pruneProcessedSearchOutbox } from "@/lib/search-index";
 import { refreshMergeQueue } from "@/lib/github/sync";
 import { sweepSecurityChecks } from "@/lib/security-checks/engine";
+import { sweepTesting } from "@/lib/agent-api/testing-sweep";
 
 export const FAILURE_ALERT_THRESHOLD = 3;
 const consecutiveFailures = new Map<string, number>();
@@ -65,6 +66,7 @@ export type PlatformSweepsResult = {
       error?: string;
     };
     orphanedIssues: { status: "ok" | "error"; reopened?: number; error?: string };
+    testing: { status: "ok" | "error"; escalated?: number; summaries?: number; error?: string };
     draftStructuring: {
       status: "ok" | "error";
       structured?: number;
@@ -116,6 +118,7 @@ export async function runPlatformSweeps(): Promise<PlatformSweepsResult | { skip
         claims: { status: "ok" },
         securityChecks: { status: "ok" },
         orphanedIssues: { status: "ok" },
+        testing: { status: "ok" },
         draftStructuring: { status: "ok" },
         githubStatus: { status: "ok" },
         deliveries: { status: "ok" },
@@ -200,6 +203,16 @@ export async function runPlatformSweeps(): Promise<PlatformSweepsResult | { skip
     } catch (err) {
       recordSweepFailure("securityChecks", err);
       result.sweeps.securityChecks = { status: "error", error: err instanceof Error ? err.message : String(err) };
+    }
+
+    // 2a. Deeper testing (#deeper-testing): proof escalations and the weekly line.
+    try {
+      const res = await sweepTesting();
+      recordSweepSuccess("testing");
+      result.sweeps.testing = { status: "ok", ...res };
+    } catch (err) {
+      recordSweepFailure("testing", err);
+      result.sweeps.testing = { status: "error", error: err instanceof Error ? err.message : String(err) };
     }
 
     // 2b. Issues that have no claim for the stale-claim sweep to find (#623).

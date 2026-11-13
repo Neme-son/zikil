@@ -1,4 +1,5 @@
 import { afterSendBack, judgementCounts } from "@/lib/marketing/track";
+import { checksFor, countsWithProof, judgementProof, NO_CHECKS, proofProblem, type ProofRules } from "@/lib/proof";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 /** Judging delivered work (#434, #529, #727, #owner-agents): the agent holding the claim can't judge its own work, anyone else can; one verdict per agent; good to merge needs a ready pull request; weighted judgements move the issue. */
@@ -42,7 +43,11 @@ const db = vi.hoisted(() => ({
   issueClaim: { groupBy: vi.fn() },
   projectWorkflow: { findUnique: vi.fn() },
   reviewOffer: { findMany: vi.fn(), findUnique: vi.fn(), updateMany: vi.fn(), create: vi.fn(), groupBy: vi.fn() },
-  testVerdict: { findFirst: vi.fn(), create: vi.fn(), update: vi.fn() },
+  testVerdict: { findFirst: vi.fn(), findMany: vi.fn(async () => []), create: vi.fn(), update: vi.fn() },
+  // #deeper-testing: no checks set, so every judgement counts as before.
+  proofRule: { findMany: vi.fn(async (): Promise<unknown[]> => []) },
+  proofCheck: { findMany: async () => [] },
+  attachment: { updateMany: vi.fn(), findMany: vi.fn() },
   pullRequestReport: { findFirst: vi.fn() },
   agentAuditEvent: { create: vi.fn() },
   comment: { create: vi.fn() },
@@ -409,6 +414,8 @@ describe("the Delivered rule after each judgement (#delivered-step)", () => {
           })),
         ),
       },
+      proofRule: { findMany: async () => [] },
+      proofCheck: { findMany: async () => [] },
       issueClaim: { update: vi.fn(async () => ({})) },
       bugActivity: { create: vi.fn(async () => ({})) },
       agentEvent: { create: vi.fn(async () => ({ id: "e1" })) },
@@ -834,5 +841,81 @@ describe("late review-offer acceptance commits expiry (#532)", () => {
     expect(db.jobReviewOffer.updateMany).toHaveBeenCalledTimes(1);
     expect(db.jobReviewOffer.create).toHaveBeenCalledTimes(1);
     expect(db.agentEvent.create).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("deeper testing: what counts (#deeper-testing)", () => {
+  const rules: ProofRules = {
+    rules: [
+      { id: "every", projectId: null, issueTypeId: null, projectAreaId: null, checks: ["fixed"] },
+      { id: "fix", projectId: null, issueTypeId: "type-fix", projectAreaId: null, checks: ["repro"] },
+      { id: "web", projectId: "p1", issueTypeId: null, projectAreaId: "area-web", checks: ["phone", "guide"] },
+    ],
+    custom: [{ id: "guide", name: "Keyboard only", instructions: "Tab through it.", required: false }],
+  };
+  const fixInWeb = { projectId: "p1", typeId: "type-fix", areaId: "area-web" };
+  const pass = (attachmentId = "att") => ({ result: "pass" as const, attachmentId, shows: "It works on the delivered commit." });
+
+  it("needs the organisation's checks for every issue and its type, and the project's for its area; guidance never holds a yes", () => {
+    expect(checksFor(rules, fixInWeb)).toEqual({ on: true, required: ["fixed", "repro", "phone"], guidance: ["guide"] });
+    expect(checksFor(rules, { projectId: "p2", typeId: null, areaId: "area-web" }).required).toEqual(["fixed"]);
+    expect(checksFor({ rules: [], custom: [] }, fixInWeb)).toEqual({ on: false, required: [], guidance: [] });
+  });
+
+  it("counts every judgement, as before, where the organisation has no checks", () => {
+    expect(countsWithProof({ goodToMerge: true, headSha: "abc1234", proof: null }, NO_CHECKS, "abc1234")).toBe(true);
+    expect(countsWithProof({ goodToMerge: false, headSha: "abc1234", proof: null }, NO_CHECKS, "abc1234")).toBe(true);
+  });
+
+  it("counts a good-to-merge only with proof for every required check, on the delivered commit", () => {
+    const checks = checksFor(rules, fixInWeb);
+    const full = { checks: { fixed: pass(), repro: pass(), phone: { result: "na", reason: "No phone layout changed." } } };
+    expect(countsWithProof({ goodToMerge: true, headSha: "abc1234", proof: null }, checks, "abc1234")).toBe(false);
+    expect(judgementProof({ goodToMerge: true, headSha: "abc1234", proof: { checks: { fixed: pass() } } }, checks.required, "abc1234")).toEqual({ state: "no_proof", missing: ["repro", "phone"] });
+    expect(countsWithProof({ goodToMerge: true, headSha: "abc1234", proof: full }, checks, "abc1234")).toBe(true);
+    expect(countsWithProof({ goodToMerge: true, headSha: "0ld0000", proof: full }, checks, "abc1234")).toBe(false);
+  });
+
+  it("counts a not-good-to-merge only with proof of what fails, and never a yes that proves a fail", () => {
+    const checks = checksFor(rules, fixInWeb);
+    const fails = { checks: { phone: { result: "fail", attachmentId: "att", shows: "It fails on the delivered commit." } } };
+    expect(countsWithProof({ goodToMerge: false, headSha: "abc1234", proof: null }, checks, "abc1234")).toBe(false);
+    expect(countsWithProof({ goodToMerge: false, headSha: "abc1234", proof: fails }, checks, "abc1234")).toBe(true);
+    expect(judgementProof({ goodToMerge: true, headSha: "abc1234", proof: fails }, checks.required, "abc1234").state).toBe("contradicts");
+  });
+});
+
+describe("deeper testing: proof is your own (#deeper-testing)", () => {
+  const pass = (attachmentId: string) => ({ result: "pass" as const, attachmentId, shows: "It works on the delivered commit." });
+
+  it("refuses proof that cites someone else's upload on the issue, and stores nothing", async () => {
+    db.attachment.updateMany.mockResolvedValue({ count: 0 });
+    // att-ada is on the issue already, but Ada uploaded it, not Rob.
+    db.attachment.findMany.mockImplementation(async ({ where }: { where: { uploaderId?: string } }) => (where.uploaderId === "rob" ? [] : [{ id: "att-ada", contentType: "image/png", size: 40_000 }]));
+    const result = await submitTestVerdict(reviewer("r1", "rob"), "bug1", { ...good, proof: { checks: { fixed: pass("att-ada") } } });
+    expect(result).toMatchObject({ status: 400, error: "invalid_request", field: "proof" });
+    expect(db.attachment.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: expect.objectContaining({ uploaderId: "rob" }) }));
+    expect(state.verdicts).toHaveLength(0);
+  });
+});
+
+describe("deeper testing: a file must show what it proves (#deeper-testing)", () => {
+  const FILES: Record<string, { contentType: string; size: number }> = {
+    shot: { contentType: "image/png", size: 48_000 },
+    blank: { contentType: "image/png", size: 70 },
+    log: { contentType: "text/plain", size: 900 },
+  };
+  const lookup = { file: (id: string) => FILES[id], changed: ["tests/composer.test.ts"] };
+  const entry = (attachmentId: string, test?: string) => ({ result: "pass" as const, attachmentId, shows: "What the tester saw on the commit.", test });
+
+  it("takes a real screenshot for what you see, and a test's output with its file for a test", () => {
+    expect(proofProblem({ checks: { phone: entry("shot"), regression: entry("log", "tests/composer.test.ts") } }, lookup)).toBeNull();
+  });
+
+  it("refuses a blank image, a picture of a test, a log for a screenshot, and a test that isn't among the changed files", () => {
+    expect(proofProblem({ checks: { phone: entry("blank") } }, lookup)).toMatch(/too small/);
+    expect(proofProblem({ checks: { regression: entry("shot", "tests/composer.test.ts") } }, lookup)).toMatch(/picture can't prove a test/);
+    expect(proofProblem({ checks: { phone: entry("log") } }, lookup)).toMatch(/attach a screenshot/);
+    expect(proofProblem({ checks: { regression: entry("log", "tests/other.test.ts") } }, lookup)).toMatch(/name the test/);
   });
 });

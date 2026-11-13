@@ -111,6 +111,15 @@ export type NotificationEvent =
       kind: "plan_submitted";
       planId: string;
       round: number;
+    })
+  | (AgentBase & {
+      /**
+       * Deeper testing (#deeper-testing): an agent owner's weekly summary of
+       * judgements handled without them. `message` is the whole line.
+       */
+      kind: "testing";
+      subject: string;
+      message: string;
     });
 
 /** The kinds raised by agents and the platform rather than by issue edits. */
@@ -122,6 +131,7 @@ export const AGENT_NOTIFICATION_KINDS = [
   "reviewer_eligible",
   "merge_failed",
   "plan_submitted",
+  "testing",
 ] as const;
 
 export type PlannedNotification = {
@@ -173,6 +183,8 @@ function agentTarget(event: Extract<NotificationEvent, AgentBase>, issuePath: st
       return { path: issuePath ?? "/home", label: "Open the issue" };
     case "plan_submitted":
       return { path: issuePath ? `${issuePath}#plan` : "/home", label: "Review the plan" };
+    case "testing":
+      return issuePath ? { path: issuePath, label: "Open the issue" } : { path: "/inbox", label: "Open your inbox" };
   }
 }
 
@@ -231,6 +243,10 @@ function planAgentNotification(
       ];
       break;
     }
+    case "testing":
+      subject = event.subject;
+      lines = [event.message];
+      break;
     case "plan_submitted": {
       const title = event.bugTitle ?? "this issue";
       subject = event.round > 1
