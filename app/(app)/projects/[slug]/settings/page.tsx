@@ -1,4 +1,9 @@
 import "@/app/(app)/settings/settings-design.css";
+import { checkOptions, loadProofRules } from "@/lib/proof";
+import { ProofRulesEditor } from "@/components/proof-rules-editor";
+import { organisationAccessFor } from "@/lib/organisation-access";
+import { PRODUCT_TRACK } from "@/lib/marketing/track";
+import type { AppRole } from "@/lib/roles";
 import Link from "next/link";
 import { issuesPath, orgPath, refOf } from "@/lib/project-paths";
 import { notFound, redirect } from "next/navigation";
@@ -10,7 +15,9 @@ import { ProjectSettingsForm } from "./settings-form";
 import { ProjectAreasManager } from "./areas-manager";
 import { WorkflowSettingsForm } from "./workflow-settings-form";
 import { ProjectRepositoriesManager } from "./repositories-manager";
+import { PreviewSettingsForm } from "./preview-settings-form";
 import { workflowValues } from "@/lib/workflow-config";
+import { previewSettingsValues } from "@/lib/validations/preview-settings";
 import {
   getPlatformRewardConfig,
   projectDefaultsFromPlatform,
@@ -33,6 +40,12 @@ const SECTIONS = [
     icon: "M9 19c-5 1.5-5-2.5-7-3m14 6v-3.87a3.37 3.37 0 0 0-.94-2.61c3.14-.35 6.44-1.54 6.44-7A5.44 5.44 0 0 0 20 4.77 5.07 5.07 0 0 0 19.91 1S18.73.65 16 2.48a13.38 13.38 0 0 0-7 0C6.27.65 5.09 1 5.09 1A5.07 5.07 0 0 0 5 4.77a5.44 5.44 0 0 0-1.5 3.78c0 5.42 3.3 6.61 6.44 7A3.37 3.37 0 0 0 9 18.13V22",
   },
   {
+    id: "previews",
+    label: "Previews",
+    hint: "Pull request preview builds",
+    icon: "M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8zM12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6z",
+  },
+  {
     id: "workflow",
     label: "Workflow",
     hint: "The gates agents work under",
@@ -43,6 +56,13 @@ const SECTIONS = [
     label: "Areas",
     hint: "Parts of the product",
     icon: "M3 3h7v7H3zM14 3h7v7h-7zM14 14h7v7h-7zM3 14h7v7H3z",
+  },
+  {
+    // #deeper-testing: what a judgement on this project's issues must prove.
+    id: "checks",
+    label: "Checks",
+    hint: "What testers must prove",
+    icon: "M9 11l3 3L22 4M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11",
   },
 ] as const;
 
@@ -55,6 +75,25 @@ function parseSection(value: string | undefined, github: string | undefined): Se
 }
 
 const card = "rounded-[20px] border border-zk-border bg-zk-surface p-6 flex flex-col gap-4";
+
+/** The Checks section's data: the organisation's rules (read-only here) and this project's per area. */
+async function projectChecks(organisationId: string, projectId: string, user: { id: string; role?: AppRole | null }) {
+  const [rules, types, areas, access] = await Promise.all([
+    loadProofRules(prisma, organisationId),
+    prisma.issueType.findMany({ where: { organisationId, ...PRODUCT_TRACK }, select: { id: true, name: true } }),
+    prisma.projectArea.findMany({ where: { projectId }, orderBy: { name: "asc" }, select: { id: true, name: true } }),
+    organisationAccessFor(user.id, organisationId, user.role),
+  ]);
+  return {
+    owner: access.membershipRole === "owner",
+    organisationName: access.organisationName ?? "the organisation",
+    orgRules: rules.rules.filter((r) => !r.projectId),
+    projectRules: rules.rules.filter((r) => r.projectId === projectId),
+    options: checkOptions(rules),
+    types,
+    areas,
+  };
+}
 
 export default async function ProjectSettingsPage({
   params,
@@ -91,6 +130,10 @@ export default async function ProjectSettingsPage({
         select: { id: true, name: true, slug: true, description: true, paths: true },
       })
     : [];
+  const checks = section === "checks" ? await projectChecks(organisationId, project.id, user) : null;
+  const previewSettings = section === "previews"
+    ? previewSettingsValues(await prisma.projectPreviewSettings.findUnique({ where: { projectId: project.id } }))
+    : null;
   const platformDefaults = section === "details" ? projectDefaultsFromPlatform(await getPlatformRewardConfig(prisma)) : null;
   const base = `/projects/${encodeURIComponent(project.slug)}/settings`;
 
@@ -108,7 +151,7 @@ export default async function ProjectSettingsPage({
         </Link>
         <h1 className="m-0 text-[28px] font-extrabold tracking-[-0.02em] text-zk-text">{project.name} settings</h1>
         <p className="m-0 text-sm text-zk-muted">
-          Owners and admins manage the project&apos;s details, GitHub, workflow and areas.{" "}
+          Owners and admins manage the project&apos;s details, GitHub, previews, workflow, areas and checks.{" "}
           <Link href={issuesPath(refOf(project))} className="font-semibold text-zk-accent hover:underline">
             Open its issues
           </Link>
@@ -187,6 +230,28 @@ export default async function ProjectSettingsPage({
             </div>
           ) : null}
 
+          {section === "previews" && previewSettings ? (
+            <section className={card} aria-labelledby="previews-heading">
+              <div className="flex flex-col gap-1">
+                <h2 id="previews-heading" className="m-0 text-lg font-bold text-zk-text">Previews</h2>
+                <span className="text-[13px] text-zk-muted">
+                  Ziki builds each pull request of the main repository and links a working preview from its issue. For frontends
+                  that build to static files. Changes are audited.
+                </span>
+              </div>
+              {!project.githubInstallationId ? (
+                <p role="status" className="rounded-[14px] bg-zk-warn-bg p-3 text-sm text-zk-warn-fg">
+                  Private repositories need the GitHub App, so Ziki can fetch their code.{" "}
+                  <Link href={`${base}?section=github`} className="font-semibold underline">
+                    Connect it in GitHub
+                  </Link>
+                  .
+                </p>
+              ) : null}
+              <PreviewSettingsForm slug={project.slug} settings={previewSettings} repoUrl={project.repoUrl} />
+            </section>
+          ) : null}
+
           {section === "workflow" ? (
             <section className={card} aria-labelledby="workflow-heading">
               <div className="flex flex-col gap-1">
@@ -198,6 +263,31 @@ export default async function ProjectSettingsPage({
           ) : null}
 
           {section === "areas" ? <ProjectAreasManager projectSlug={project.slug} areas={areas} /> : null}
+
+          {checks ? (
+            <section className={card} aria-labelledby="checks-heading">
+              <div className="flex flex-col gap-1">
+                <h2 id="checks-heading" className="m-0 text-lg font-bold text-zk-text">Checks</h2>
+                <span className="text-[13px] text-zk-muted">
+                  What a judgement must prove before it counts. Testers attach proof for each check; builds and tests are already read from the pull request.
+                </span>
+              </div>
+              <div className="rounded-xl border border-zk-border bg-zk-tint/50 p-4">
+                <p className="m-0 mb-2 flex flex-wrap items-center gap-2 text-xs font-bold tracking-[0.06em] text-zk-muted uppercase">
+                  From {checks.organisationName}
+                  {checks.owner ? (
+                    <Link href={orgPath(refOf(project), "checks")} className="text-xs font-semibold tracking-normal text-zk-accent normal-case hover:underline">
+                      Edit in Org › Checks
+                    </Link>
+                  ) : null}
+                </p>
+                <ProofRulesEditor projectId={null} rules={checks.orgRules} checks={checks.options} scopes={checks.types} editable={false} />
+                {checks.owner ? null : <p className="m-0 mt-2 text-xs text-zk-muted">Set by the organisation&apos;s owners for every project. Add checks for this project&apos;s areas below.</p>}
+              </div>
+              <h3 className="m-0 text-sm font-bold text-zk-text">This project&apos;s own checks</h3>
+              <ProofRulesEditor projectId={project.id} rules={checks.projectRules} checks={checks.options} scopes={checks.areas} editable />
+            </section>
+          ) : null}
         </div>
       </div>
     </div>
