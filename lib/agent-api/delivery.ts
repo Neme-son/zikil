@@ -178,7 +178,7 @@ export async function listDeliveries(scope: { organisationId: string; projectId?
 }
 
 export type DeliverResult =
-  | { status: 201 | 200; delivery: DeliveryEntry; replaced: boolean }
+  | { status: 201 | 200; delivery: DeliveryEntry; replaced: boolean; issueId: string; pullRequestUrl: string | null }
   | { status: 400 | 403 | 404 | 409 | 422; error: string; message: string; field?: string };
 
 /**
@@ -453,5 +453,5 @@ export async function deliverWork(
 
   const entries = await deliveryEntries({ id: bug.id, pullRequestUrl });
   const entry = entries.find((row) => row.id === delivery.id)!;
-  return { status: replaced ? 200 : 201, delivery: entry, replaced };
+  return { status: replaced ? 200 : 201, delivery: entry, replaced, issueId: bug.id, pullRequestUrl };
 }

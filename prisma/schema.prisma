@@ -411,6 +411,7 @@ model IssueType {
 
 model Bug {
   featurePlanItems          FeaturePlanItem[]
+  previewBuilds             PreviewBuild[]
   pullRequestLinkRepairs    PullRequestLinkRepair[]
   /// The private details when this issue is a security finding (#security-findings).
   securityFinding           SecurityFinding?
@@ -944,6 +945,8 @@ model Project {
   agentEvents           AgentEvent[]
   goals                 Goal[]
   workflow              ProjectWorkflow?
+  previewSettings       ProjectPreviewSettings?
+  previewBuilds         PreviewBuild[]
   mistakes              AgentMistake[]
   notes                 ProjectNotes?
   brief                 ProjectBrief?
@@ -1018,6 +1021,58 @@ model ProjectWorkflow {
   createdAt              DateTime          @default(now())
   updatedAt              DateTime          @updatedAt
   project                Project           @relation(fields: [projectId], references: [id], onDelete: Cascade)
+}
+
+/// How Ziki builds pull request previews of the project's main repository
+/// (#previews): a frontend built to static files and uploaded to Ziki's
+/// Cloudflare Pages account. Off until an owner or admin turns it on, because
+/// previews are public links. No row means the defaults below.
+model ProjectPreviewSettings {
+  projectId      String   @id
+  enabled        Boolean  @default(false)
+  /// The folder to build in, relative to the repository root.
+  rootDir        String   @default(".")
+  /// Null: detected from the lock file.
+  installCommand String?
+  buildCommand   String   @default("npm run build")
+  /// The build's output folder, relative to rootDir.
+  outputDir      String   @default("dist")
+  nodeVersion    String   @default("22")
+  /// Name to value, set while building. Public: built into the frontend code.
+  buildVariables Json     @default("{}")
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  project        Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+}
+
+/// One preview build of a pull request commit (#previews): Ziki started the
+/// preview builder (PREVIEW_BUILDER_REPO) for it and follows the run. One per
+/// issue and commit, so seeing the same commit again starts nothing.
+model PreviewBuild {
+  id          String    @id @default(cuid())
+  projectId   String
+  bugId       String
+  /// The pull request's repository, owner/name.
+  repository  String
+  pullNumber  Int
+  headSha     String
+  /// queued (dispatched, no run seen yet), building, ready or failed.
+  status      String    @default("queued")
+  /// The builder's workflow run, once known.
+  runId       String?
+  runUrl      String?
+  /// The pull request's preview address, once ready.
+  url         String?
+  /// Why it failed, in a sentence.
+  error       String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  completedAt DateTime?
+  project     Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  bug         Bug       @relation(fields: [bugId], references: [id], onDelete: Cascade)
+
+  @@unique([bugId, headSha])
+  @@index([status, updatedAt])
 }
 
 /// A project-owned work area, such as frontend or backend (#609).
