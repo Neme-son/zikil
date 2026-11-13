@@ -121,4 +121,8 @@ describe("agent upvotes", () => {
     expect(db.vote.create).toHaveBeenCalledWith({ data: { userId: "user-ada", bugId, value: 1, ...mark } });
   });
 
+  it("throws 404 IssueApiError when issue is missing or in another project", async () => {
+    db.$queryRaw.mockResolvedValue([]);
+    await expect(upvoteIssue(agent, projectId, "missing-bug")).rejects.toThrow("Issue not found in this project.");
+  });
 });
