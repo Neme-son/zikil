@@ -49,6 +49,7 @@ import { contestsIn, liveStakesOf, sweepStakes } from "@/lib/agent-api/stakes";
 import { STAKE_REFRESH_MS } from "@/lib/stake-rules";
 import { eventStreamBus, ORGANISATION_WRITE, type StreamEvent } from "@/lib/events/stream-bus";
 import { activeLevels, levelIn } from "@/lib/agents/active-in";
+import { cardBugSelect, checkInfo, checksFor, judgementProof, loadProofRules } from "@/lib/proof";
 import { BIDDING_SUBSTATUSES } from "@/lib/issue-substatus";
 
 /**
@@ -1017,7 +1018,23 @@ async function agentWork(agent: AgentContext, projectId: string, offerWindowSeco
     where: { agentId: agent.agentId, status: "planning", releasedAt: null, bug: { projectId } },
     select: { id: true, offeredAt: true, createdAt: true, bug: { select: { id: true, number: true, title: true } }, plan: { select: { id: true, round: true, decision: true, reviewBy: true, decisionNote: true } } },
   });
-  return { offers, reviewOffers, jobReviewOffers, claims, unread, planning };
+  // #deeper-testing: this agent's good-to-merge judgements that don't count yet for want of proof.
+  const judged =
+    track === "marketing"
+      ? []
+      : await prisma.testVerdict.findMany({
+          where: { agentId: agent.agentId, goodToMerge: true, bug: { projectId, status: "done", isDeleted: false } },
+          select: { goodToMerge: true, headSha: true, proof: true, pullRequestUrl: true, bug: { select: cardBugSelect } },
+        });
+  const rules = judged.length ? await loadProofRules(prisma, agent.organisationId) : null;
+  const unproven = new Map<string, string[]>();
+  for (const verdict of judged) {
+    if (!rules || verdict.pullRequestUrl !== verdict.bug.pullRequestUrl) continue;
+    const checks = checksFor(rules, verdict.bug);
+    const { state, missing } = judgementProof(verdict, checks.required, verdict.bug.pullRequestHeadSha);
+    if (checks.on && state === "no_proof") unproven.set(verdict.bug.id, missing.map((id) => checkInfo(id, rules)?.name ?? id));
+  }
+  return { offers, reviewOffers, jobReviewOffers, claims, unread, planning, unproven };
 }
 
 const apiPath = (id: string, tail: string, projectId: string) => `/api/v1/issues/${id}/${tail}?projectId=${projectId}`;
@@ -1276,19 +1293,36 @@ export function itemsFor(agent: AgentContext, work: ProjectWork, mine: AgentWork
   }
 
   // 4. Fixes to test, then issues to take.
+  const unproven = mine.unproven;
   for (const test of work.tests) {
     if (!independent(test.id)) continue;
     const facts = work.facts.get(test.id);
     // One judgement per person per class (#owner-agents): the owner's agent of the other class may still judge.
     const mine = verdictClass(agent.level);
-    if (facts?.testerOwners.some((v) => v.ownerUserId === owner && v.verdictClass === mine && v.pullRequestUrl === test.pullRequestUrl)) continue;
+    if (facts?.testerOwners.some((v) => v.ownerUserId === owner && v.verdictClass === mine && v.pullRequestUrl === test.pullRequestUrl)) {
+      // #deeper-testing: a judgement without the proof it needs is asked for again, not dropped.
+      const missing = unproven.get(test.id);
+      if (missing) {
+        items.push({
+          kind: "test_fix",
+          key: `test_fix:${test.id}:proof:${missing.join(",")}`,
+          title: `Prove your judgement on #${test.number}`,
+          detail: `Your good-to-merge doesn't count yet, and earns nothing: it has no proof for ${missing.join(", ")}. Upload each file with POST /api/v1/attachments, then judge again with proof.checks.`,
+          minimumRole: "working",
+          canAct: true,
+          issue: issueRef(test),
+          actions: [{ name: "submit_test_result", minimumRole: "working", method: "POST", path: apiPath(test.id, "test-results", pid), cli: `submit-test-result --id ${test.id} --good-to-merge true --summary <your verdict> --description <what you tested> --proof <json>` }],
+        });
+      }
+      continue;
+    }
     items.push({
       kind: "test_fix",
       key: `test_fix:${test.id}:${test.pullRequestUrl ?? ""}`,
       title: test.forceMerged ? `Judge the force-merged work in #${test.number}` : `Judge the delivered work for #${test.number}`,
       detail: test.forceMerged
-        ? "Its author merged this pull request themself, without Ziki's checks (#force-merge). Test the merged code and judge whether it is good: a summary of at most two sentences, a full description of what you tested, and the changed files you judged (`files`). Enough good judgements move it On dev; enough not-good ones mark it Live · Broken so someone fixes it."
-        : "Check out the delivered pull request, test it, and judge whether it is good to merge: a summary of at most two sentences and a full description of what you tested. Read the delivery receipt first (GET test-results carries it as `receipt`): test what the deliverer says it did not verify, and follow its reviewerShould steps. Enough good judgements make it Done; enough not-good ones send it back to Open. List the changed files you judged (`files`: a path and optional lines); a verdict without them is refused.",
+        ? "Its author merged this pull request themself, without Ziki's checks (#force-merge). Test the merged code and judge whether it is good: a summary of at most two sentences, a full description of what you tested, and the changed files you judged (`files`). Enough good judgements move it On dev; enough not-good ones mark it Live · Broken so someone fixes it. Where the organisation has checks, attach proof for every required check (`proof.checks`): a file for each and what it shows."
+        : "Check out the delivered pull request, test it, and judge whether it is good to merge: a summary of at most two sentences and a full description of what you tested. Read the delivery receipt first (GET test-results carries it as `receipt`): test what the deliverer says it did not verify, and follow its reviewerShould steps. Enough good judgements make it Done; enough not-good ones send it back to Open. List the changed files you judged (`files`: a path and optional lines); a verdict without them is refused. Where the organisation has checks, attach proof for every required check (`proof.checks`): a file for each and what it shows.",
       minimumRole: "working",
       ...(work.judgeBlocks.has(test.id) ? { canAct: false, blockedReason: work.judgeBlocks.get(test.id) } : { canAct: true }),
       issue: issueRef(test),
