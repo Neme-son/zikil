@@ -11,13 +11,13 @@ import { useId, useRef } from "react";
  */
 export function LockedPdfButton({
   payHref,
-  priceCoins,
   className,
   label = "Download PDF",
   message = "The PDF comes with the full report.",
 }: {
   payHref: string;
-  priceCoins: number;
+  /** No longer shown: fixes are unlocked per finding. */
+  priceCoins?: number;
   className: string;
   label?: string;
   /** What paying unlocks, shown in the box. */
@@ -65,7 +65,7 @@ export function LockedPdfButton({
               href={payHref}
               className="inline-flex h-10 items-center rounded-full bg-electric-blue-strong px-5 text-sm font-bold text-white hover:brightness-105 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-electric-blue focus-visible:ring-offset-2"
             >
-              Pay {priceCoins} coins to unlock
+              Unlock fixes
             </Link>
             <button type="button" onClick={close} className="inline-flex h-10 items-center rounded-full px-4 text-sm font-semibold text-zk-text2 hover:bg-zk-chip">
               Not now

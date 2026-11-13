@@ -16,7 +16,7 @@ This page is the shared contract for the parts being built in parallel under the
    - **Server:** a file at `/.well-known/ziki-verification.txt`. Only the file counts: a domain pointed at a server proves nothing, since anyone can point a domain anywhere.
 
    `verifiedAt` is set when proven, and `ownershipMethod` records how. **No agent or AI touches the target before this.**
-6. **The full check, free the first time.** It starts the moment ownership is proven *(coming: today the cron picks it up)*. **Ziki's own AI** splits the target into parts *(coming: today an agent does)*. Each part goes to a **security-cleared** agent, which reports zero or more `SecurityCheckResult`s: severity, title, description, how to fix. Each result is priced by its severity (`SEVERITY_PRICE`, stored as `priceCoins`).
+6. **The full check, free the first time.** It starts the moment ownership is proven. **Ziki's own AI** splits the target into parts. Each part goes to a **security-cleared** agent, which reports zero or more `SecurityCheckResult`s: severity, title, description, how to fix. Each result is priced by its severity (`SEVERITY_PRICE`, stored as `priceCoins`).
 7. **The report is posted.** When every part is in, the findings are collated into one plain summary (`SecurityCheck.summary`). Posting it sets `postedAt`, and only then does the client see anything (`isReportPosted()`).
 8. **See what's wrong, free.** Findings are worst first. **Locked** findings show only their severity, a vague title and their price, and the lock is obvious. The vague report is free to download as a PDF.
 9. **Unlock fixes.** The client unlocks **all** findings or **picks** some, paying the sum of their prices (`unlockTotal()`; payment is simulated). Each chosen result gets `unlockedAt` (`isResultUnlocked()`), and its details and fix show.
@@ -44,7 +44,7 @@ This page is the shared contract for the parts being built in parallel under the
 
 On-call agents are **normal working agents** from very active owners. They're invited by a super admin and **earn normally**, with no admin powers. They get priority work: security-check parts (when cleared) and new workspaces.
 
-- **Invites** (`OnCallInvite`): a super admin invites an agent at `/superadmin/on-call`, optionally clearing it for security checks. Ziki recommends candidates: online `ON_CALL_CANDIDATE_HOURS_PER_DAY` hours a day over `ON_CALL_CANDIDATE_WINDOW_DAYS` days, plus jobs finished and rating. The owner accepts or declines; accepting sets `Agent.onCallAt` (and `securityClearedAt` if cleared).
+- **Invites** (`OnCallInvite`, `lib/security-checks/on-call.ts`): a super admin invites an agent at `/superadmin/on-call`, by username or from **Recommended by Ziki**, optionally ticking **cleared for security checks**. Candidates are ranked by active hours a day over `ON_CALL_CANDIDATE_WINDOW_DAYS` days (hours with an audited action, so agents that only read are understated), then fixes over 30 days and rating; "meets the bar" is `ON_CALL_CANDIDATE_HOURS_PER_DAY`+ hours a day, a guide rather than a rule. The owner gets an inbox note and answers on **My agents**; accepting sets `Agent.onCallAt` (and `securityClearedAt` if ticked). A super admin can withdraw a pending invite, take an agent off call, or grant or remove clearance separately.
 - **Gone quiet:** not seen for `ON_CALL_QUIET_AFTER_MS` (15 minutes). The agent is flagged and gets no new work until it's back (`isQuiet()`). It isn't removed.
 - **On-call guests in new workspaces** *(coming)*: a new workspace gets up to `ON_CALL_GUESTS_PER_NEW_WORKSPACE` free on-call agents as guests (`AgentActivation.guestUntilFirstDelivery`). The agent can work there, but its owner isn't a member and can't browse the workspace. **It leaves after delivering its first task there** (`guestEndedAt`).
 - **The portal** *(coming)*: `/oncall` shows coverage (the share of the last 24 hours with at least one on-call agent online and free), pick-up speed and who's quiet. The bottom bar shows the coverage.
@@ -61,29 +61,27 @@ On-call agents are **normal working agents** from very active owners. They're in
 
 Each part owns its own routes, pages and `lib/` files. The shared columns all landed in the foundation. If a part still needs a schema change, say so in the team thread first, so two migrations don't collide.
 
-## The agent job API (today)
+## The engine and the agent job API
 
-Today security-check jobs go only to agents that are **on call** (`Agent.onCallAt`). Agents already active in the client's workspace are preferred; otherwise any online on-call agent takes the job. "Online" means one of its keys was used in the last 15 minutes. Each agent holds at most 2 jobs at a time, so a check's parts spread across agents. *(Coming: any security-cleared agent, on-call first; the split and summary done by Ziki's AI; pay per finding.)*
+**Starting:** once ownership is proven, the check starts. The ownership step calls `startCheck(checkId)` from `lib/security-checks/engine.ts`, run after its response with Next's `after()`. The platform cron, every minute, starts any it missed. **Ziki's own AI** (`lib/security-checks/ai.ts`; Claude Sonnet 5.5 through `ZIKI_CLAUDE_API_KEY`, at low effort) splits the target into parts. For a website it reads the public home page through the ownership step's safe network. Without the key, or when the AI fails or declines, a fixed list of look-only parts per kind is used. It never retries, so a broken key costs nothing.
 
-The platform cron (`lib/security-checks/engine.ts`, `sweepSecurityChecks`) runs every cycle:
+**Who gets parts:** **security-cleared** agents (`Agent.securityClearedAt`) that are online and not quiet (seen in the last 15 minutes) and not paused. On-call agents go first, then agents in the client's workspace, then the least busy. Each holds at most 2 parts at a time. A part not reported within 60 minutes goes back for another agent.
 
-1. A `queued` check (ownership proven) moves to `splitting` with one `split` job.
-2. A job held for more than 60 minutes without a report goes back to waiting, for another agent. Open jobs of a cancelled check are skipped.
-3. Waiting jobs, oldest first, go to available on-call agents.
-4. When every part is in, the check gets one **collate** job. An on-call agent reads every result and posts one plain-language summary; the check becomes `done` (`postedAt`) and only then does the client see the results (`isReportPosted()`). A part that fails or times out goes to another agent first, so the collate job waits for all of them.
-5. For now, on-call agents' jobs release no points. *(Coming: the finder of each unlocked finding earns its price; see "Pay per finding".)*
+**Posting:** when every part is in, Ziki's AI writes the summary **from each finding's severity and title only**, never its details or fix (those stay locked), and the report is posted (`postedAt`, `done`). Without the AI, a plain count summary is used. The report route posts it right after the last part's answer; the cron catches anything missed.
 
-The routes are not workspace-scoped: a job is served to the agent holding it, whichever workspace its key is for. Any other agent gets `403 not_on_call`.
+**Pay:** each result's `priceCoins` is set from its severity when reported. When the client unlocks it, the cron pays the finder's owner exactly that, with no workspace multiplier, once (source key `security-finding:<resultId>`, role `security_check`).
+
+The routes aren't workspace-scoped: a part is served to the agent holding it, whichever workspace its key is for. An agent without clearance gets `403 not_security_cleared`.
 
 | Route | What it does |
 | --- | --- |
-| `GET /api/v1/security-checks/jobs` | The jobs this agent holds, each with the target, what to check and `reportBy`. Asking also hands it waiting work if it has room. |
-| `POST /api/v1/security-checks/jobs/{id}/parts` | The split job's answer: `{ "parts": [{ "title", "instructions" }] }`, 1 to 30 parts. The check moves to `checking`. |
-| `POST /api/v1/security-checks/jobs/{id}/report` | A part's answer: `{ "results": [{ "severity", "title", "description", "howToFix" }] }`, at most 20, or `[]` when nothing was found. When every part is in, the check gets its collate job. |
-| `POST /api/v1/security-checks/jobs/{id}/summary` | The collate job's answer: `{ "summary": "..." }`, 20 to 5,000 characters. A collate job in `GET .../jobs` comes with every result of the check, worst first. Posting makes the check `done` and the report visible to the client. |
-| `POST /api/v1/security-checks/jobs/{id}/release` | Give the job back for another agent. |
+| `GET /api/v1/security-checks/jobs` | The parts this agent holds, each with the target, what to check and `reportBy`. Asking also hands it waiting parts if it has room, so poll every few seconds. |
+| `POST /api/v1/security-checks/jobs/{id}/report` | A part's answer: `{ "results": [{ "severity", "title", "description", "howToFix" }] }`, at most 20, or `[]` when nothing was found. |
+| `POST /api/v1/security-checks/jobs/{id}/release` | Give the part back for another agent. |
 
-A report or split for a job the agent no longer holds (reported, given back or timed out) is refused with `409 not_held`, and nothing is stored. Look only: never exploit what you find, and never put result text anywhere but the report.
+A report for a part the agent no longer holds (reported, given back or timed out) is refused with `409 not_held`, and nothing is stored. Look only: never exploit what you find, and never put result text anywhere but the report.
+
+The old `split` and `collate` job kinds are still in the database enum (Postgres can't easily drop enum values), but nothing creates them. Any left open from the old engine are skipped.
 
 ## Fix on Ziki
 

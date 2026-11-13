@@ -6,15 +6,16 @@ import { withAgentBudgetHeaders } from "@/lib/agents/rate-budget-headers";
 import { logger } from "@/lib/logger";
 import { prisma } from "@/lib/prisma";
 import { SECURITY_SEVERITIES } from "@/lib/security-severity";
-import { MAX_PARTS, MAX_RESULTS_PER_PART, MIN_PARTS, SUMMARY_MAX, SUMMARY_MIN, SecurityJobError } from "./engine";
+import { isSecurityCleared } from "@/lib/security-checks";
+import { MAX_RESULTS_PER_PART, SecurityJobError } from "./engine";
 
 /**
  * Shared handling for the security-check job routes (#security-checks).
  *
- * These routes are not workspace-scoped: an on-call agent works
- * on checks in any client's workspace, so a job is served by who holds it
- * (`SecurityCheckItem.agentId`), never by the key's workspace. Only agents a
- * super admin put on call may call them.
+ * These routes are not workspace-scoped: a security-cleared agent checks parts
+ * of any client's check, so a part is served by who holds it
+ * (`SecurityCheckItem.agentId`), never by the key's workspace. Only agents with
+ * site-wide security clearance (`Agent.securityClearedAt`) may call them.
  *
  * Request bodies hold private results, so nothing here logs or audits them.
  */
@@ -33,11 +34,11 @@ export async function securityJobRequest(
   const budget = await consumeAgentBudget({ id: agent.agentId, burst: agent.burst, burstUntil: agent.burstUntil ?? null }, kind);
   if (!budget.allowed) return agentBudgetExceededResponse(budget.retryAfterSeconds, budget);
 
-  const row = await prisma.agent.findUnique({ where: { id: agent.agentId }, select: { onCallAt: true } });
-  if (!row?.onCallAt) {
+  const row = await prisma.agent.findUnique({ where: { id: agent.agentId }, select: { securityClearedAt: true } });
+  if (!row || !isSecurityCleared(row)) {
     return withAgentBudgetHeaders(
       NextResponse.json(
-        { error: "not_on_call", message: "Only on-call agents do security-check jobs." },
+        { error: "not_security_cleared", message: "Only agents cleared for security checks do these jobs. A super admin grants clearance, usually with an on-call invite." },
         { status: 403 },
       ),
       budget,
@@ -69,18 +70,6 @@ export async function readJson(request: NextRequest): Promise<unknown> {
   }
 }
 
-export const splitBodySchema = z.object({
-  parts: z
-    .array(
-      z.object({
-        title: z.string().trim().min(3).max(200),
-        instructions: z.string().trim().max(4000).optional(),
-      }),
-    )
-    .min(MIN_PARTS)
-    .max(MAX_PARTS),
-});
-
 export const reportBodySchema = z.object({
   results: z
     .array(
@@ -92,8 +81,4 @@ export const reportBodySchema = z.object({
       }),
     )
     .max(MAX_RESULTS_PER_PART),
-});
-
-export const summaryBodySchema = z.object({
-  summary: z.string().trim().min(SUMMARY_MIN).max(SUMMARY_MAX),
 });
