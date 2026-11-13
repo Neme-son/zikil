@@ -12,6 +12,7 @@ import {
   cookieFindings,
   emailFindings,
   headerFindings,
+  MAX_REDIRECTS,
   previewScan,
   realPreviewNetwork,
   type CertificateAnswer,
@@ -147,6 +148,56 @@ describe("preview scan (#security-checks, 12 Nov plan D3)", () => {
 
     const www = network({ ...WELL_KEPT, pages: { ...WELL_KEPT.pages, "https://settle.ng/": { status: 301, location: "https://www.settle.ng/" }, "https://www.settle.ng/": { headers: SAFE_HEADERS } } });
     expect(await scan("settle.ng", www)).toMatchObject({ ok: true, findings: [] });
+  });
+
+  it("follows more than 3 same-site redirects, and never calls a redirect loop 'no HTTPS'", async () => {
+    // Five hops on the site before the page: followed to the end, headers read, nothing wrong.
+    const hops: Record<string, Partial<PageAnswer>> = {};
+    for (let i = 0; i < 5; i++) hops[i === 0 ? "https://settle.ng/" : `https://settle.ng/${i}`] = { status: 302, location: `https://settle.ng/${i + 1}` };
+    hops["https://settle.ng/5"] = { headers: SAFE_HEADERS };
+    const long = await scan("settle.ng", network({ ...WELL_KEPT, pages: { ...WELL_KEPT.pages, ...hops } }));
+    expect(long).toMatchObject({ ok: true, findings: [] });
+    expect(long.ok && long.checked).toContain("headers");
+
+    clearPreviewCache();
+    // A loop that never ends: HTTPS couldn't be checked, so it isn't judged at all.
+    const loop = network({ ...WELL_KEPT, pages: { ...WELL_KEPT.pages, "https://settle.ng/": { status: 302, location: "https://settle.ng/" } } });
+    const looped = await scan("settle.ng", loop);
+    if (!looped.ok) throw new Error(looped.reason);
+    expect(looped.findings.map((f) => f.id)).not.toContain("no-https");
+    expect(looped.findings.map((f) => f.id)).not.toContain("no-https-redirect");
+    expect(looped.checked).not.toContain("https");
+    expect(looped.checked).not.toContain("headers");
+    expect(loop.page.mock.calls.length).toBeLessThanOrEqual(MAX_REDIRECTS + 2); // the hops, plus the plain-HTTP read
+  });
+
+  it("reads SPF and DMARC from the registrable domain when the link is a subdomain", async () => {
+    const app = {
+      pages: { "https://app.settle.ng/": { headers: SAFE_HEADERS }, "http://app.settle.ng/": { status: 301, location: "https://app.settle.ng/" } },
+      certificate: GOOD_CERT,
+    };
+    // Records only on settle.ng: the subdomain is covered, nothing is missing.
+    const covered = await scan("app.settle.ng", network({ ...app, txt: WELL_KEPT.txt }));
+    expect(covered).toMatchObject({ ok: true, findings: [] });
+    expect(covered.ok && covered.checked).toContain("email");
+
+    // Public suffixes with two labels resolve the same way.
+    const uk = await scan("shop.example.co.uk", network({
+      pages: { "https://shop.example.co.uk/": { headers: SAFE_HEADERS }, "http://shop.example.co.uk/": { status: 301, location: "https://shop.example.co.uk/" } },
+      certificate: GOOD_CERT,
+      txt: { "example.co.uk": [["v=spf1 -all"]], "_dmarc.example.co.uk": [["v=DMARC1; p=reject"]] },
+    }));
+    expect(uk).toMatchObject({ ok: true, findings: [] });
+
+    clearPreviewCache();
+    // A subdomain's own DMARC record wins over the parent's.
+    const own = await scan("app.settle.ng", network({ ...app, txt: { ...WELL_KEPT.txt, "_dmarc.app.settle.ng": [["v=DMARC1; p=none"]] } }));
+    expect(own.ok && own.findings.map((f) => f.id)).toEqual(["dmarc-not-enforced"]);
+
+    clearPreviewCache();
+    // And a missing record names the domain that was checked.
+    const bare = await scan("app.settle.ng", network({ ...app, txt: {} }));
+    expect(bare.ok && bare.findings.find((f) => f.id === "missing-spf")?.detail).toContain("settle.ng has no SPF record");
   });
 
   it("limits each visitor to a few previews an hour, and reuses a recent result without counting it", async () => {
