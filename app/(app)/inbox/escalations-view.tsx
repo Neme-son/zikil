@@ -7,7 +7,7 @@ import { issueHref } from "@/lib/issue-ref";
 import type { WorkTrack } from "@prisma/client";
 import { escalationOnTrack, escalationTrackWhere } from "@/lib/my-work-filter";
 import { LocalTime } from "@/components/local-time";
-import { EscalationTypeBadge, QuickResolveButtons } from "./escalation-controls";
+import { EscalationTypeBadge, InlineAgentReplyBox } from "./escalation-controls";
 
 const VIEWS = [
   { value: "waiting", label: "Waiting" },
@@ -29,7 +29,7 @@ export async function EscalationsView({
   const organisationId = await currentOrganisationIdFor(user.id);
   const params = searchParams ? await searchParams : {};
   const track = params.track ?? "all";
-  const [questions, proposals] = organisationId
+  const [questions, proposals, pausedClaims] = organisationId
     ? await Promise.all([
         listOwnerQuestions(user.id, organisationId, track),
         prisma.redesignProposal.findMany({
@@ -46,8 +46,20 @@ export async function EscalationsView({
             authorAgent: { select: { name: true } },
           },
         }),
+        prisma.issueClaim.findMany({
+          where: {
+            agent: { ownerUserId: user.id },
+            bug: { project: { organisationId } },
+            status: "active",
+            releasedAt: null,
+            waitingOnOwnerSince: { not: null },
+          },
+          select: { bugId: true, agentId: true },
+        }),
       ])
-    : [[], []];
+    : [[], [], []];
+
+  const pausedClaimKeys = new Set(pausedClaims.map((c) => `${c.agentId}:${c.bugId}`));
 
   const view: View = VIEWS.some((v) => v.value === params.status) ? (params.status as View) : "waiting";
   const trackQuery = track === "all" ? "" : `&track=${track}`;
@@ -55,6 +67,7 @@ export async function EscalationsView({
   const rows = [
     ...questions.map((q) => {
       const parsed = parseEscalationBody(q.body);
+      const isClaimPaused = q.bugId ? pausedClaimKeys.has(`${q.agent.id}:${q.bugId}`) : false;
       return {
         id: q.id,
         kind: "question" as const,
@@ -64,6 +77,7 @@ export async function EscalationsView({
         body: parsed.cleanBody,
         createdAt: q.createdAt,
         waiting: !q.answeredAt,
+        claimPaused: isClaimPaused,
         answer: q.answer,
         bug: q.bug,
         href: `/inbox/escalations/${q.id}`,
@@ -78,6 +92,7 @@ export async function EscalationsView({
       body: p.body,
       createdAt: p.createdAt,
       waiting: p.status === "proposed",
+      claimPaused: false,
       answer: null,
       bug: p.bug,
       href: `/redesigns/${p.id}`,
@@ -132,7 +147,7 @@ export async function EscalationsView({
                 </div>
                 {item.waiting ? (
                   <span className="inline-flex items-center rounded-full border border-zk-warn-bd bg-zk-warn-bg px-2.5 py-0.5 text-xs font-semibold text-zk-warn-fg">
-                    Waiting on you
+                    {item.claimPaused ? "Claim paused · Waiting on you" : "Waiting on you"}
                   </span>
                 ) : (
                   <span className="inline-flex items-center rounded-full bg-zk-ok-bg px-2.5 py-0.5 text-xs font-semibold text-zk-ok-fg">Resolved</span>
@@ -151,11 +166,17 @@ export async function EscalationsView({
               ) : null}
 
               {item.waiting && item.kind === "question" ? (
-                <div className="flex flex-wrap items-center justify-between gap-3 border-t border-zk-divider pt-2">
-                  <QuickResolveButtons escalationId={item.id} />
-                  <Link href={item.href} className="text-xs font-semibold text-zk-accent hover:underline">
-                    Write a response →
-                  </Link>
+                <div className="space-y-3 border-t border-zk-divider pt-3">
+                  <InlineAgentReplyBox
+                    escalationId={item.id}
+                    body={item.body}
+                    type={item.type}
+                  />
+                  <div className="flex justify-end">
+                    <Link href={item.href} className="text-xs font-semibold text-zk-accent hover:underline">
+                      Full details →
+                    </Link>
+                  </div>
                 </div>
               ) : item.waiting ? (
                 <div className="border-t border-zk-divider pt-2">
