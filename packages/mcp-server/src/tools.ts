@@ -1049,7 +1049,9 @@ export const TOOLS: readonly ToolDef[] = [
       id: issueId,
       projectId,
       row: z.string().trim().min(1).max(191).describe("The row's id, from ziki_get_test_card."),
-      action: z.enum(["needs_test", "cant_prove", "test"]),
+      action: z
+        .enum(["needs_test", "cant_prove", "test"])
+        .describe("needs_test: the deliverer adds an automated test; cant_prove: the owners decide; test: the deliverer attaches its test run."),
       attachmentId: z.string().trim().min(1).max(191).optional().describe("With test: the test run, uploaded with ziki_upload_attachment."),
     },
   },
