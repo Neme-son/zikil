@@ -1328,8 +1328,8 @@ export async function IssuesList({
                       <IssueRowStatus substatus={bug.substatus} stage={stage} botConfirmations={confirmationCounts.get(bug.id) ?? 0} work={work}
                         closeReason={bug.closeReason}
                         confirmed={confirmationStates.get(bug.id)?.confirmed ?? false}
-                        bids={bug.substatus === "open" ? bug._count.bids : undefined}
-                        offeredTo={bug.substatus === "open" && offer ? (offer.beneficiary?.name ?? "someone") : null}
+                        bids={bug.substatus === "open" || bug.substatus === "merged_broken" ? bug._count.bids : undefined}
+                        offeredTo={(bug.substatus === "open" || bug.substatus === "merged_broken") && offer ? (offer.beneficiary?.name ?? "someone") : null}
                         planReviewFor={bug.substatus === "plan_review" ? (planning?.beneficiary?.name ?? null) : null}
                         mergePath={bug.status === "resolved" && bug.pullRequestUrl ? mergePathOf(bug) : null} />
                     );

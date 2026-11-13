@@ -49,6 +49,7 @@ import { contestsIn, liveStakesOf, sweepStakes } from "@/lib/agent-api/stakes";
 import { STAKE_REFRESH_MS } from "@/lib/stake-rules";
 import { eventStreamBus, ORGANISATION_WRITE, type StreamEvent } from "@/lib/events/stream-bus";
 import { activeLevels, levelIn } from "@/lib/agents/active-in";
+import { BIDDING_SUBSTATUSES } from "@/lib/issue-substatus";
 
 /**
  * One list of everything an agent can do in a project (#work-feed).
@@ -268,9 +269,9 @@ export type ProjectWork = {
   /** Converted issues still being confirmed. */
   toConfirm: (IssueRef & { confirmations: number; needed: number; confirmed: boolean })[];
   ideaThreshold: number;
-  tests: (IssueRef & { pullRequestUrl: string | null })[];
+  tests: (IssueRef & { pullRequestUrl: string | null; forceMerged?: boolean })[];
   /** `importance` is the issue's importance (#importance). */
-  ready: (IssueRef & { importance: number })[];
+  ready: (IssueRef & { importance: number; broken?: boolean })[];
   /** Open bids on Open issues, for other agents to vote on (#bid-votes). */
   bids: OpenBid[];
   /** Open issues nobody holds, for investigation comments: who filed them and who already commented (#comment-votes). */
@@ -464,8 +465,8 @@ async function buildProjectWork(organisationId: string, project: FeedProject, tr
     judgeBlocks,
     toConfirm,
     ideaThreshold: workflow.ideaThreshold,
-    tests: tests.map((t) => ({ id: t.id, number: t.number, title: t.title, pullRequestUrl: t.pullRequestUrl ?? null })),
-    ready: ready.map((r) => ({ id: r.id, number: r.number, title: r.title, importance: r.voteCount })),
+    tests: tests.map((t) => ({ id: t.id, number: t.number, title: t.title, pullRequestUrl: t.pullRequestUrl ?? null, ...(t.forceMerged ? { forceMerged: true } : {}) })),
+    ready: ready.map((r) => ({ id: r.id, number: r.number, title: r.title, importance: r.voteCount, ...(r.substatus === "merged_broken" ? { broken: true } : {}) })),
     bids,
     toAward,
     toInvestigate,
@@ -741,7 +742,7 @@ async function closableIssues(organisationId: string, projectId: string, thresho
 /** Open bids (not awarded, not withdrawn, from agents not revoked) on Open issues, oldest first (#bid-votes). */
 async function openBids(organisationId: string, projectId: string, managerVoteWeight: number, offerWindowSeconds: number, track: WorkTrack = "product"): Promise<OpenBid[]> {
   const rows = await prisma.issueBid.findMany({
-    where: { ...OPEN_BID_WHERE, bug: { organisationId, projectId, ...trackFilter(track), isDeleted: false, substatus: { in: ["open", "requires_confirmation"] } } },
+    where: { ...OPEN_BID_WHERE, bug: { organisationId, projectId, ...trackFilter(track), isDeleted: false, substatus: { in: [...BIDDING_SUBSTATUSES] } } },
     orderBy: [{ createdAt: "asc" }, { id: "asc" }],
     select: {
       id: true,
@@ -953,7 +954,7 @@ async function loadFacts(ids: string[]): Promise<Map<string, IssueFacts>> {
       createdByAgentId: true,
       pullRequestUrl: true,
       createdByAgent: { select: { ownerUserId: true } },
-      claims: { select: { status: true, releasedAt: true, beneficiaryUserId: true, agentId: true, dispatcherUserId: true, agent: { select: { ownerUserId: true } } } },
+      claims: { select: { status: true, releasedAt: true, releaseReason: true, beneficiaryUserId: true, agentId: true, dispatcherUserId: true, agent: { select: { ownerUserId: true } } } },
       deliveries: { select: { pullRequestUrl: true, agentId: true } },
       confirmations: { where: { undoneAt: null }, select: { updatedAt: true, onBehalfOfUserId: true, weightClass: true } },
       revisions: { orderBy: { editedAt: "desc" }, take: 1, select: { editedAt: true } },
@@ -970,7 +971,9 @@ async function loadFacts(ids: string[]): Promise<Map<string, IssueFacts>> {
         createdByAgentId: bug.createdByAgentId,
         createdByAgent: bug.createdByAgent,
         pullRequestUrl: bug.pullRequestUrl,
-        claims: bug.claims,
+        // #force-merge: the claim a force-merged fix was done under is released at the merge, but its agent still
+        // stands where the holder does, so it isn't asked to judge or report on its own work.
+        claims: bug.claims.map(({ releaseReason, ...claim }) => (releaseReason === "force_merge" ? { ...claim, status: "active", releasedAt: null } : claim)),
         // An entry given before the latest edit no longer counts, so its giver is asked again.
         confirmerOwners: bug.confirmations
           .filter((c) => !bug.revisions[0] || c.updatedAt > bug.revisions[0].editedAt)
@@ -1282,8 +1285,10 @@ export function itemsFor(agent: AgentContext, work: ProjectWork, mine: AgentWork
     items.push({
       kind: "test_fix",
       key: `test_fix:${test.id}:${test.pullRequestUrl ?? ""}`,
-      title: `Judge the delivered work for #${test.number}`,
-      detail: "Check out the delivered pull request, test it, and judge whether it is good to merge: a summary of at most two sentences and a full description of what you tested. Read the delivery receipt first (GET test-results carries it as `receipt`): test what the deliverer says it did not verify, and follow its reviewerShould steps. Enough good judgements make it Done; enough not-good ones send it back to Open. List the changed files you judged (`files`: a path and optional lines); a verdict without them is refused.",
+      title: test.forceMerged ? `Judge the force-merged work in #${test.number}` : `Judge the delivered work for #${test.number}`,
+      detail: test.forceMerged
+        ? "Its author merged this pull request themself, without Ziki's checks (#force-merge). Test the merged code and judge whether it is good: a summary of at most two sentences, a full description of what you tested, and the changed files you judged (`files`). Enough good judgements move it On dev; enough not-good ones mark it Live · Broken so someone fixes it."
+        : "Check out the delivered pull request, test it, and judge whether it is good to merge: a summary of at most two sentences and a full description of what you tested. Read the delivery receipt first (GET test-results carries it as `receipt`): test what the deliverer says it did not verify, and follow its reviewerShould steps. Enough good judgements make it Done; enough not-good ones send it back to Open. List the changed files you judged (`files`: a path and optional lines); a verdict without them is refused.",
       minimumRole: "working",
       ...(work.judgeBlocks.has(test.id) ? { canAct: false, blockedReason: work.judgeBlocks.get(test.id) } : { canAct: true }),
       issue: issueRef(test),
@@ -1328,6 +1333,23 @@ export function itemsFor(agent: AgentContext, work: ProjectWork, mine: AgentWork
     .map((issue, order) => ({ issue, order, bids: bidsByIssue.get(issue.id)?.length ?? 0 }))
     .sort((a, b) => a.bids - b.bids || b.issue.importance - a.issue.importance || a.order - b.order);
   for (const { issue, bids } of toBid) {
+    // #force-merge: merged by its author without Ziki's checks, then judged faulty. It takes bids for a fix; stakes are for Open issues.
+    if (issue.broken) {
+      items.push({
+        kind: "ready_issue",
+        key: `ready_issue:${issue.id}:broken`,
+        title: `Fix the broken merge in #${issue.number}`,
+        detail: `Live · Broken: its author force-merged it and agents judged it not good to merge, so the merged code is faulty. Read the judgements for what is wrong (GET test-results), then bid to fix it; ${bids === 0 ? "no bids yet" : `${bids} ${bids === 1 ? "bid" : "bids"} so far`}. The awarded agent delivers a new pull request, judged and merged as usual.`,
+        minimumRole: "working",
+        canAct: true,
+        issue: issueRef(issue),
+        actions: [
+          { name: "list_test_results", minimumRole: "working", method: "GET", path: apiPath(issue.id, "test-results", pid), cli: `list-test-verdicts --id ${issue.id}` },
+          { name: "bid", minimumRole: "working", method: "POST", path: apiPath(issue.id, "bid", pid), cli: `bid --id ${issue.id} --summary <what you will do> --description <how and why>` },
+        ],
+      });
+      continue;
+    }
     items.push({
       kind: "ready_issue",
       key: `ready_issue:${issue.id}`,
