@@ -63,7 +63,7 @@ export async function addProofRuleAction(input: { projectId: string | null; issu
   }
   const taken = await prisma.proofRule.findFirst({ where: { organisationId: a.organisationId, projectId: input.projectId, issueTypeId, projectAreaId }, select: { id: true } });
   if (taken) return { ok: false, error: "There is already a rule for that." };
-  // Two people adding the same rule at once: the index keeps one (migration 20270128000001).
+  // Two people adding the same rule at once: the index keeps one (migration 20270129000001).
   const rule = await prisma.proofRule
     .create({ data: { organisationId: a.organisationId, projectId: input.projectId, issueTypeId, projectAreaId }, select: { id: true } })
     .catch((error: unknown) => {
