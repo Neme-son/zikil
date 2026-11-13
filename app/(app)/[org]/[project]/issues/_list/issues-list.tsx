@@ -31,10 +31,9 @@ import { WORK_TAG_TONE, whatsNext } from "@/lib/whats-next";
 import { IDEA_SORT_COOKIE, ISSUE_SORT_COOKIE, getIdeaOrderBy, parseIdeaSort } from "@/lib/list-sort";
 import { SortHeader } from "@/components/sort-header";
 import { PROJECT_LINKS_SLOT_ID, ProjectIconLinks, ProjectLinks } from "@/components/project-links";
-import { AgentSetupNotice, type UnconfiguredAgent } from "@/components/agent-setup-notice";
 import { OrganisationNextStepCard } from "@/components/organisation-next-step-card";
 import { NEXT_STEP_COOKIE, organisationNextStep, type OrganisationNextStep } from "@/lib/organisation-next-step";
-import { missingProfileFields } from "@/lib/agents/work-gate";
+import { missingProfileFields, type ProfileField } from "@/lib/agents/work-gate";
 import { isAdminOfOrganisation } from "@/lib/agents/membership";
 import type { AppRole } from "@/lib/roles";
 import { IssueFilters } from "@/components/issue-filters";
@@ -128,6 +127,9 @@ const REJECTED_IDEAS_STATUS = "rejected_ideas";
 /** The filters under the Ideas tab: new ideas (no `?ideas=`), or `?ideas=drafts`. */
 const IDEAS_PARAM = "ideas";
 type IdeasView = "new" | "drafts" | "rejected";
+
+/** One of your agents that can't work until its profile is set up (#agent-work-gate). */
+type UnconfiguredAgent = { id: string; name: string; username: string; missing: ProfileField[] };
 /** Most ideas a list shows, highest score first. */
 
 /** `?status=rejected`: someone's confirmation entry rejected the issue (#1122, #issue-confirmations). */
@@ -687,7 +689,8 @@ export async function IssuesList({
     loadOrEmpty("project links", () => prisma.project.findUnique({ where: { id: project.id }, select: { siteUrl: true, repoUrl: true } }), null),
     organisationId && userId ? loadOrEmpty("project admin", () => isAdminOfOrganisation(user, organisationId), false) : Promise.resolve(false),
   ]);
-  // #agent-work-gate: your agents that aren't allowed to work until their profile is set up.
+  // #agent-work-gate: your agents that aren't allowed to work until their profile is set up. The agents bar
+  // marks each one "Set up"; here they only hold back the next-step card and the ideas page's opening question.
   const unconfiguredAgents: UnconfiguredAgent[] =
     organisationId && userId
       ? await loadOrEmpty(
@@ -711,7 +714,7 @@ export async function IssuesList({
         )
       : [];
   // The next-step card (#agents-dock) where the empty agents bar used to be: the one next thing for you, from your role and what the
-  // organisation has. Never beside AgentSetupNotice, and dismissable per organisation.
+  // organisation has. Not while one of your agents is blocked (the agents bar says so), and dismissable per organisation.
   let nextStep: OrganisationNextStep | null = null;
   if (organisationId && userId && membershipRole && !isDeletedView) {
     const dismissed = parseDismissed((await cookies()).get(NEXT_STEP_COOKIE)?.value).includes(organisationId);
@@ -1167,7 +1170,6 @@ export async function IssuesList({
         {/* Earnings (#earnings): the way to earn, on the page everyone lands on, closed with × like the panel above. */}
         {isIdeasView && !isDeletedView && earnProject ? <EarnPanel project={earnProject} line={earnBannerLine(earnProject)} /> : null}
 
-        <AgentSetupNotice agents={unconfiguredAgents} />
         {nextStep && organisationId ? <OrganisationNextStepCard step={nextStep} organisationId={organisationId} /> : null}
 
         {milestoneSummary ? (

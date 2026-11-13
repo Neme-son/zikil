@@ -403,6 +403,7 @@ model IssueType {
   updatedAt   DateTime  @updatedAt
   bugs        Bug[]
   ideas       Idea[]
+  proofRules  ProofRule[]
 
   @@unique([organisationId, name])
   @@unique([id, organisationId])
@@ -888,6 +889,8 @@ model Organisation {
   goals              Goal[]
   supportThreads     SupportThread[]
   secretAlerts       SecretAlert[]
+  proofRules         ProofRule[]
+  proofChecks        ProofCheck[]
 }
 
 /// A project inside an organisation (organisation), e.g. Zedu Web or Zedu Desktop.
@@ -955,6 +958,7 @@ model Project {
   memberships           ProjectMembership[]
   joinRequests          ProjectJoinRequest[]
   repositories          ProjectRepository[]
+  proofRules            ProofRule[]
 
   @@unique([organisationId, slug])
 }
@@ -1089,6 +1093,7 @@ model ProjectArea {
   bugs             Bug[]
   ideas            Idea[]
   agentPreferences AgentAreaPreference[]
+  proofRules       ProofRule[]
 
   @@unique([projectId, slug])
   @@index([projectId])
@@ -2131,6 +2136,9 @@ model TestVerdict {
   /// The changed files the tester looked at (#confirmation-files): [{ path, lines? }].
   /// Hidden from other testers until they have judged too.
   files            Json?
+  /// What this judgement proved (#deeper-testing), lib/proof.ts: { checks }.
+  /// Each entry is { result: pass | fail | na, attachmentId?, shows?, test?, reason? }, on `headSha`.
+  proof            Json?
   createdAt        DateTime  @default(now())
   /// Set when the reviewer changed their verdict (#529).
   changedAt        DateTime?
@@ -2144,6 +2152,41 @@ model TestVerdict {
   @@unique([bugId, agentId])
   @@index([bugId])
   @@index([agentId])
+}
+
+/// What a judgement must prove (#deeper-testing). With no project, a rule of the
+/// organisation: for every issue, or for one issue type. With a project, a rule
+/// for one of its areas. `checks` are built-in check ids (lib/proof.ts) or
+/// `ProofCheck` ids. An organisation with no rules works as before.
+model ProofRule {
+  id             String        @id @default(cuid())
+  organisationId String
+  projectId      String?
+  issueTypeId    String?
+  projectAreaId  String?
+  checks         String[]      @default([])
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+  organisation   Organisation  @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  project        Project?      @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  issueType      IssueType?    @relation(fields: [issueTypeId], references: [id], onDelete: Cascade)
+  projectArea    ProjectArea?  @relation(fields: [projectAreaId], references: [id], onDelete: Cascade)
+
+  @@index([organisationId])
+}
+
+/// A check an organisation's owner wrote (#deeper-testing): what the tester does
+/// and what proof to attach. Guidance (`required` false) never holds a yes back.
+model ProofCheck {
+  id             String       @id @default(cuid())
+  organisationId String
+  name           String       @db.VarChar(40)
+  instructions   String       @db.VarChar(1000)
+  required       Boolean      @default(true)
+  createdAt      DateTime     @default(now())
+  organisation   Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+
+  @@index([organisationId])
 }
 
 /// What a pull request looks like on GitHub (#pr-reports, #github-status).
