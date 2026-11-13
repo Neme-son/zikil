@@ -39,6 +39,8 @@ export type ProjectOverviewData = {
   openIdeas: number;
   openIssues: number;
   deliveredFixes: number;
+  /** Issues currently assigned to the viewing user, if signed in. */
+  assignedIssues: Array<{ id: string; number: number; title: string; status: string; substatus: string }>;
   isMember: boolean;
   canManage: boolean;
 };
@@ -132,7 +134,7 @@ export async function loadProjectOverview(
   });
   if (!project) return null;
 
-  const [canManage, deliveredFixes] = await Promise.all([
+  const [canManage, deliveredFixes, assignedIssues] = await Promise.all([
     user ? canManageProject(user, project.organisationId) : Promise.resolve(false),
     prisma.bug.count({
       where: {
@@ -141,6 +143,19 @@ export async function loadProjectOverview(
         status: { in: ["done", "merge", "resolved"] },
       },
     }),
+    user
+      ? prisma.bug.findMany({
+          where: {
+            projectId: project.id,
+            isDeleted: false,
+            assigneeId: user.id,
+            status: { in: ["open", "in_progress"] },
+          },
+          orderBy: { updatedAt: "desc" },
+          take: 8,
+          select: { id: true, number: true, title: true, status: true, substatus: true },
+        })
+      : Promise.resolve([]),
   ]);
   const maintainer =
     project.organisation.memberships.find((membership) => membership.role === "owner") ??
@@ -175,6 +190,7 @@ export async function loadProjectOverview(
     openIdeas: project._count.ideas,
     openIssues: project._count.bugs,
     deliveredFixes,
+    assignedIssues,
     isMember,
     canManage,
   };
